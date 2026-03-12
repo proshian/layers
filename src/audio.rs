@@ -1,4 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use rack::traits::PluginInstance;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,6 +8,8 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::probe::Hint;
 
 pub const PIXELS_PER_SECOND: f32 = 120.0;
+
+const EFFECT_BLOCK_SIZE: usize = 512;
 
 #[derive(Clone)]
 pub struct AudioClipData {
@@ -17,8 +20,9 @@ pub struct AudioClipData {
 
 pub struct LoadedAudio {
     pub samples: Arc<Vec<f32>>,
+    pub left_samples: Arc<Vec<f32>>,
+    pub right_samples: Arc<Vec<f32>>,
     pub sample_rate: u32,
-    pub peaks: Vec<f32>,
     pub duration_secs: f32,
     pub width: f32,
 }
@@ -28,6 +32,18 @@ struct PlaybackClip {
     source_sample_rate: u32,
     start_time_secs: f64,
     duration_secs: f64,
+    position_y: f32,
+    height: f32,
+    fade_in_secs: f64,
+    fade_out_secs: f64,
+}
+
+pub struct AudioEffectRegion {
+    pub x_start_px: f32,
+    pub x_end_px: f32,
+    pub y_start: f32,
+    pub y_end: f32,
+    pub plugins: Vec<Arc<Mutex<Option<Box<dyn PluginInstance>>>>>,
 }
 
 pub struct AudioEngine {
@@ -35,6 +51,7 @@ pub struct AudioEngine {
     playing: Arc<AtomicBool>,
     position_bits: Arc<AtomicU64>,
     clips: Arc<Mutex<Vec<PlaybackClip>>>,
+    effect_regions: Arc<Mutex<Vec<AudioEffectRegion>>>,
     master_volume: Arc<AtomicU64>,
     rms_peak: Arc<AtomicU64>,
 }
@@ -47,10 +64,45 @@ fn load_f64(atomic: &AtomicU64) -> f64 {
     f64::from_bits(atomic.load(Ordering::Relaxed))
 }
 
+#[inline]
+fn clip_fade_gain(clip_t: f64, duration: f64, fade_in: f64, fade_out: f64) -> f32 {
+    let mut g = 1.0f32;
+    if fade_in > 0.0 && clip_t < fade_in {
+        g = (clip_t / fade_in) as f32;
+    }
+    let from_end = duration - clip_t;
+    if fade_out > 0.0 && from_end < fade_out {
+        g = g.min((from_end / fade_out) as f32);
+    }
+    g.clamp(0.0, 1.0)
+}
+
 impl AudioEngine {
     pub fn new() -> Option<Self> {
+        Self::new_with_device(None)
+    }
+
+    pub fn new_with_device(device_name: Option<&str>) -> Option<Self> {
         let host = cpal::default_host();
-        let device = host.default_output_device()?;
+        let device = match device_name {
+            Some(name) if name != "No Device" => {
+                host.output_devices()
+                    .ok()?
+                    .find(|d| d.name().ok().as_deref() == Some(name))
+                    .or_else(|| {
+                        // Also try all devices as fallback
+                        host.devices().ok()?.find(|d| {
+                            d.name().ok().as_deref() == Some(name)
+                                && d.default_output_config().is_ok()
+                        })
+                    })
+                    .or_else(|| host.default_output_device())
+            }
+            _ => host.default_output_device(),
+        }?;
+        if let Ok(name) = device.name() {
+            println!("  Audio output device: {}", name);
+        }
         let supported = device.default_output_config().ok()?;
         let config: cpal::StreamConfig = supported.into();
 
@@ -62,15 +114,22 @@ impl AudioEngine {
         let playing = Arc::new(AtomicBool::new(false));
         let position_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
         let clips: Arc<Mutex<Vec<PlaybackClip>>> = Arc::new(Mutex::new(Vec::new()));
+        let effect_regions: Arc<Mutex<Vec<AudioEffectRegion>>> = Arc::new(Mutex::new(Vec::new()));
         let master_volume = Arc::new(AtomicU64::new(1.0f64.to_bits()));
         let rms_peak = Arc::new(AtomicU64::new(0.0f64.to_bits()));
 
         let p = playing.clone();
         let pos = position_bits.clone();
         let c = clips.clone();
+        let er = effect_regions.clone();
         let vol = master_volume.clone();
         let rms = rms_peak.clone();
         let sr = sample_rate as f64;
+
+        let mut fx_buf_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
+        let mut fx_buf_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
+        let mut fx_out_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
+        let mut fx_out_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
 
         let stream = device
             .build_output_stream(
@@ -92,23 +151,167 @@ impl AudioEngine {
                         }
                     };
 
+                    let regions_guard = er.try_lock().ok();
+
                     let frames = data.len() / channels;
                     let mut sum_sq = 0.0f64;
+
+                    // Mix all clips per-sample first (dry mix)
+                    let mut dry_mix = vec![0.0f32; frames];
                     for i in 0..frames {
                         let t = current_time + i as f64 / sr;
                         let mut mix = 0.0f32;
-
                         for clip in clips_guard.iter() {
                             let clip_t = t - clip.start_time_secs;
                             if clip_t >= 0.0 && clip_t < clip.duration_secs {
                                 let source_idx = (clip_t * clip.source_sample_rate as f64) as usize;
                                 if source_idx < clip.buffer.len() {
-                                    mix += clip.buffer[source_idx];
+                                    let fg = clip_fade_gain(
+                                        clip_t,
+                                        clip.duration_secs,
+                                        clip.fade_in_secs,
+                                        clip.fade_out_secs,
+                                    );
+                                    mix += clip.buffer[source_idx] * fg;
                                 }
                             }
                         }
+                        dry_mix[i] = mix;
+                    }
 
-                        let mixed = (mix * gain).clamp(-1.0, 1.0);
+                    // Process through effect regions if any are active
+                    if let Some(ref regions) = regions_guard {
+                        if !regions.is_empty() {
+                            for region in regions.iter() {
+                                let region_start_secs =
+                                    region.x_start_px as f64 / PIXELS_PER_SECOND as f64;
+                                let region_end_secs =
+                                    region.x_end_px as f64 / PIXELS_PER_SECOND as f64;
+
+                                let any_overlap = clips_guard.iter().any(|clip| {
+                                    let clip_y_end = clip.position_y + clip.height;
+                                    clip.position_y < region.y_end && clip_y_end > region.y_start
+                                });
+
+                                if !any_overlap || region.plugins.is_empty() {
+                                    continue;
+                                }
+
+                                // Process block-by-block through plugin chain
+                                let mut offset = 0;
+                                while offset < frames {
+                                    let block_len = (frames - offset).min(EFFECT_BLOCK_SIZE);
+                                    let t_start = current_time + offset as f64 / sr;
+                                    let t_end = t_start + block_len as f64 / sr;
+                                    let mid_t = (t_start + t_end) * 0.5;
+
+                                    if mid_t < region_start_secs || mid_t > region_end_secs {
+                                        offset += block_len;
+                                        continue;
+                                    }
+
+                                    // Mix only clips that overlap this region spatially
+                                    for j in 0..block_len {
+                                        let t = current_time + (offset + j) as f64 / sr;
+                                        let mut region_mix = 0.0f32;
+                                        for clip in clips_guard.iter() {
+                                            let clip_y_end = clip.position_y + clip.height;
+                                            if clip.position_y >= region.y_end
+                                                || clip_y_end <= region.y_start
+                                            {
+                                                continue;
+                                            }
+                                            let clip_t = t - clip.start_time_secs;
+                                            if clip_t >= 0.0 && clip_t < clip.duration_secs {
+                                                let source_idx = (clip_t
+                                                    * clip.source_sample_rate as f64)
+                                                    as usize;
+                                                if source_idx < clip.buffer.len() {
+                                                    let fg = clip_fade_gain(
+                                                        clip_t,
+                                                        clip.duration_secs,
+                                                        clip.fade_in_secs,
+                                                        clip.fade_out_secs,
+                                                    );
+                                                    region_mix += clip.buffer[source_idx] * fg;
+                                                }
+                                            }
+                                        }
+                                        fx_buf_l[j] = region_mix;
+                                        fx_buf_r[j] = region_mix;
+                                    }
+
+                                    #[allow(unused_mut)]
+                                    let (mut src_l, mut src_r, mut dst_l, mut dst_r) = (
+                                        &mut fx_buf_l,
+                                        &mut fx_buf_r,
+                                        &mut fx_out_l,
+                                        &mut fx_out_r,
+                                    );
+
+                                    for plugin_mutex in &region.plugins {
+                                        dst_l[..block_len].fill(0.0);
+                                        dst_r[..block_len].fill(0.0);
+                                        if let Ok(mut guard) = plugin_mutex.try_lock() {
+                                            if let Some(ref mut plugin) = *guard {
+                                                let inputs: [&[f32]; 2] =
+                                                    [&src_l[..block_len], &src_r[..block_len]];
+                                                let mut outputs: [&mut [f32]; 2] = [
+                                                    &mut dst_l[..block_len],
+                                                    &mut dst_r[..block_len],
+                                                ];
+                                                let _ = plugin.process(
+                                                    &inputs,
+                                                    &mut outputs,
+                                                    block_len,
+                                                );
+                                            }
+                                        }
+                                        std::mem::swap(src_l, dst_l);
+                                        std::mem::swap(src_r, dst_r);
+                                    }
+
+                                    // Replace dry mix for these frames with wet (mono from stereo)
+                                    for j in 0..block_len {
+                                        let wet = (src_l[j] + src_r[j]) * 0.5;
+                                        let t = current_time + (offset + j) as f64 / sr;
+                                        let mut overlap_dry = 0.0f32;
+                                        for clip in clips_guard.iter() {
+                                            let clip_y_end = clip.position_y + clip.height;
+                                            if clip.position_y >= region.y_end
+                                                || clip_y_end <= region.y_start
+                                            {
+                                                continue;
+                                            }
+                                            let clip_t = t - clip.start_time_secs;
+                                            if clip_t >= 0.0 && clip_t < clip.duration_secs {
+                                                let source_idx = (clip_t
+                                                    * clip.source_sample_rate as f64)
+                                                    as usize;
+                                                if source_idx < clip.buffer.len() {
+                                                    let fg = clip_fade_gain(
+                                                        clip_t,
+                                                        clip.duration_secs,
+                                                        clip.fade_in_secs,
+                                                        clip.fade_out_secs,
+                                                    );
+                                                    overlap_dry += clip.buffer[source_idx] * fg;
+                                                }
+                                            }
+                                        }
+                                        dry_mix[offset + j] =
+                                            dry_mix[offset + j] - overlap_dry + wet;
+                                    }
+
+                                    offset += block_len;
+                                }
+                            }
+                        }
+                    }
+
+                    // Write final output
+                    for i in 0..frames {
+                        let mixed = (dry_mix[i] * gain).clamp(-1.0, 1.0);
                         sum_sq += (mixed as f64) * (mixed as f64);
                         let base = i * channels;
                         for ch in 0..channels {
@@ -136,6 +339,7 @@ impl AudioEngine {
             playing,
             position_bits,
             clips,
+            effect_regions,
             master_volume,
             rms_peak,
         })
@@ -163,17 +367,41 @@ impl AudioEngine {
         load_f64(&self.position_bits)
     }
 
-    pub fn update_clips(&self, waveform_positions: &[[f32; 2]], audio_clips: &[AudioClipData]) {
+    pub fn update_clips(
+        &self,
+        waveform_positions: &[[f32; 2]],
+        waveform_sizes: &[[f32; 2]],
+        audio_clips: &[AudioClipData],
+        fade_ins_px: &[f32],
+        fade_outs_px: &[f32],
+    ) {
         let mut clips = self.clips.lock().unwrap();
         clips.clear();
-        for (pos, clip_data) in waveform_positions.iter().zip(audio_clips.iter()) {
+        for (i, ((pos, size), clip_data)) in waveform_positions
+            .iter()
+            .zip(waveform_sizes.iter())
+            .zip(audio_clips.iter())
+            .enumerate()
+        {
             let start_secs = pos[0] as f64 / PIXELS_PER_SECOND as f64;
+            let fi = fade_ins_px.get(i).copied().unwrap_or(0.0);
+            let fo = fade_outs_px.get(i).copied().unwrap_or(0.0);
             clips.push(PlaybackClip {
                 buffer: clip_data.samples.clone(),
                 source_sample_rate: clip_data.sample_rate,
                 start_time_secs: start_secs,
                 duration_secs: clip_data.duration_secs as f64,
+                position_y: pos[1],
+                height: size[1],
+                fade_in_secs: (fi / PIXELS_PER_SECOND) as f64,
+                fade_out_secs: (fo / PIXELS_PER_SECOND) as f64,
             });
+        }
+    }
+
+    pub fn update_effect_regions(&self, regions: Vec<AudioEffectRegion>) {
+        if let Ok(mut guard) = self.effect_regions.lock() {
+            *guard = regions;
         }
     }
 
@@ -297,29 +525,16 @@ impl AudioRecorder {
         let channels = self.channels;
         let sample_rate = self.sample_rate;
 
-        let mono: Vec<f32> = if channels > 1 {
-            interleaved
-                .chunks(channels)
-                .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
-                .collect()
-        } else {
-            interleaved
-        };
+        let (left, right, mono) = deinterleave_stereo(&interleaved, channels);
 
         let duration_secs = mono.len() as f32 / sample_rate as f32;
         let width = duration_secs * PIXELS_PER_SECOND;
 
-        let num_peaks = (width as usize).clamp(10, 4000);
-        let chunk_size = (mono.len() / num_peaks).max(1);
-        let peaks: Vec<f32> = mono
-            .chunks(chunk_size)
-            .map(|chunk| chunk.iter().map(|s| s.abs()).fold(0.0f32, f32::max))
-            .collect();
-
         Some(LoadedAudio {
             samples: Arc::new(mono),
+            left_samples: Arc::new(left),
+            right_samples: Arc::new(right),
             sample_rate,
-            peaks,
             duration_secs,
             width,
         })
@@ -344,24 +559,10 @@ impl AudioRecorder {
         let channels = self.channels;
         let sample_rate = self.sample_rate;
 
-        let mono: Vec<f32> = if channels > 1 {
-            interleaved
-                .chunks(channels)
-                .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
-                .collect()
-        } else {
-            interleaved
-        };
+        let (left, right, mono) = deinterleave_stereo(&interleaved, channels);
 
         let duration_secs = mono.len() as f32 / sample_rate as f32;
         let width = duration_secs * PIXELS_PER_SECOND;
-
-        let num_peaks = (width as usize).clamp(100, 4000);
-        let chunk_size = (mono.len() / num_peaks).max(1);
-        let peaks: Vec<f32> = mono
-            .chunks(chunk_size)
-            .map(|chunk| chunk.iter().map(|s| s.abs()).fold(0.0f32, f32::max))
-            .collect();
 
         println!(
             "  Recording stopped: {:.1}s, {} samples",
@@ -371,11 +572,35 @@ impl AudioRecorder {
 
         Some(LoadedAudio {
             samples: Arc::new(mono),
+            left_samples: Arc::new(left),
+            right_samples: Arc::new(right),
             sample_rate,
-            peaks,
             duration_secs,
             width,
         })
+    }
+}
+
+fn deinterleave_stereo(interleaved: &[f32], channels: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    if channels >= 2 {
+        let frame_count = interleaved.len() / channels;
+        let mut left = Vec::with_capacity(frame_count);
+        let mut right = Vec::with_capacity(frame_count);
+        let mut mono = Vec::with_capacity(frame_count);
+        for frame in interleaved.chunks(channels) {
+            let l = frame[0];
+            let r = frame[1];
+            left.push(l);
+            right.push(r);
+            mono.push((l + r) * 0.5);
+        }
+        (left, right, mono)
+    } else {
+        (
+            interleaved.to_vec(),
+            interleaved.to_vec(),
+            interleaved.to_vec(),
+        )
     }
 }
 
@@ -412,32 +637,215 @@ pub fn load_audio_file(path: &Path) -> Option<LoadedAudio> {
         return None;
     }
 
-    let mono: Vec<f32> = if channels > 1 {
-        interleaved
-            .chunks(channels)
-            .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
-            .collect()
-    } else {
-        interleaved
-    };
+    let (left, right, mono) = deinterleave_stereo(&interleaved, channels);
 
     let duration_secs = mono.len() as f32 / sample_rate as f32;
     let width = duration_secs * PIXELS_PER_SECOND;
 
-    let num_peaks = (width as usize).clamp(100, 4000);
-    let chunk_size = (mono.len() / num_peaks).max(1);
-    let peaks: Vec<f32> = mono
-        .chunks(chunk_size)
-        .map(|chunk| chunk.iter().map(|s| s.abs()).fold(0.0f32, f32::max))
-        .collect();
-
     Some(LoadedAudio {
         samples: Arc::new(mono),
+        left_samples: Arc::new(left),
+        right_samples: Arc::new(right),
         sample_rate,
-        peaks,
         duration_secs,
         width,
     })
+}
+
+pub struct ExportClip {
+    pub buffer: Arc<Vec<f32>>,
+    pub source_sample_rate: u32,
+    pub start_time_secs: f64,
+    pub duration_secs: f64,
+    pub position_y: f32,
+    pub height: f32,
+    pub fade_in_secs: f64,
+    pub fade_out_secs: f64,
+}
+
+pub fn render_to_wav(
+    path: &std::path::Path,
+    start_secs: f64,
+    end_secs: f64,
+    y_start: f32,
+    y_end: f32,
+    clips: &[ExportClip],
+    effect_regions: &[AudioEffectRegion],
+) -> Result<(), String> {
+    let sample_rate = 48000u32;
+    let sr = sample_rate as f64;
+    let total_frames = ((end_secs - start_secs) * sr) as usize;
+
+    if total_frames == 0 {
+        return Err("Zero-length export region".into());
+    }
+
+    println!(
+        "  Rendering {:.2}s ({} samples) at {} Hz...",
+        end_secs - start_secs,
+        total_frames,
+        sample_rate
+    );
+
+    let mut dry_mix = vec![0.0f32; total_frames];
+
+    for i in 0..total_frames {
+        let t = start_secs + i as f64 / sr;
+        let mut mix = 0.0f32;
+        for clip in clips {
+            let clip_y_end = clip.position_y + clip.height;
+            if clip.position_y >= y_end || clip_y_end <= y_start {
+                continue;
+            }
+            let clip_t = t - clip.start_time_secs;
+            if clip_t >= 0.0 && clip_t < clip.duration_secs {
+                let source_idx = (clip_t * clip.source_sample_rate as f64) as usize;
+                if source_idx < clip.buffer.len() {
+                    let fg = clip_fade_gain(
+                        clip_t,
+                        clip.duration_secs,
+                        clip.fade_in_secs,
+                        clip.fade_out_secs,
+                    );
+                    mix += clip.buffer[source_idx] * fg;
+                }
+            }
+        }
+        dry_mix[i] = mix;
+    }
+
+    let mut fx_buf_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
+    let mut fx_buf_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
+    let mut fx_out_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
+    let mut fx_out_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
+
+    for region in effect_regions {
+        let region_start_secs = region.x_start_px as f64 / PIXELS_PER_SECOND as f64;
+        let region_end_secs = region.x_end_px as f64 / PIXELS_PER_SECOND as f64;
+
+        let any_overlap = clips.iter().any(|clip| {
+            let clip_y_end = clip.position_y + clip.height;
+            clip.position_y < region.y_end && clip_y_end > region.y_start
+        });
+
+        if !any_overlap || region.plugins.is_empty() {
+            continue;
+        }
+
+        let mut offset = 0;
+        while offset < total_frames {
+            let block_len = (total_frames - offset).min(EFFECT_BLOCK_SIZE);
+            let t_start = start_secs + offset as f64 / sr;
+            let t_end = t_start + block_len as f64 / sr;
+            let mid_t = (t_start + t_end) * 0.5;
+
+            if mid_t < region_start_secs || mid_t > region_end_secs {
+                offset += block_len;
+                continue;
+            }
+
+            for j in 0..block_len {
+                let t = start_secs + (offset + j) as f64 / sr;
+                let mut region_mix = 0.0f32;
+                for clip in clips {
+                    let clip_y_end = clip.position_y + clip.height;
+                    if clip.position_y >= region.y_end || clip_y_end <= region.y_start {
+                        continue;
+                    }
+                    let clip_t = t - clip.start_time_secs;
+                    if clip_t >= 0.0 && clip_t < clip.duration_secs {
+                        let source_idx = (clip_t * clip.source_sample_rate as f64) as usize;
+                        if source_idx < clip.buffer.len() {
+                            let fg = clip_fade_gain(
+                                clip_t,
+                                clip.duration_secs,
+                                clip.fade_in_secs,
+                                clip.fade_out_secs,
+                            );
+                            region_mix += clip.buffer[source_idx] * fg;
+                        }
+                    }
+                }
+                fx_buf_l[j] = region_mix;
+                fx_buf_r[j] = region_mix;
+            }
+
+            #[allow(unused_mut)]
+            let (mut src_l, mut src_r, mut dst_l, mut dst_r) =
+                (&mut fx_buf_l, &mut fx_buf_r, &mut fx_out_l, &mut fx_out_r);
+
+            for plugin_mutex in &region.plugins {
+                dst_l[..block_len].fill(0.0);
+                dst_r[..block_len].fill(0.0);
+                if let Ok(mut guard) = plugin_mutex.try_lock() {
+                    if let Some(ref mut plugin) = *guard {
+                        let inputs: [&[f32]; 2] = [&src_l[..block_len], &src_r[..block_len]];
+                        let mut outputs: [&mut [f32]; 2] =
+                            [&mut dst_l[..block_len], &mut dst_r[..block_len]];
+                        let _ = plugin.process(&inputs, &mut outputs, block_len);
+                    }
+                }
+                std::mem::swap(src_l, dst_l);
+                std::mem::swap(src_r, dst_r);
+            }
+
+            for j in 0..block_len {
+                let wet = (src_l[j] + src_r[j]) * 0.5;
+                let t = start_secs + (offset + j) as f64 / sr;
+                let mut overlap_dry = 0.0f32;
+                for clip in clips {
+                    let clip_y_end = clip.position_y + clip.height;
+                    if clip.position_y >= region.y_end || clip_y_end <= region.y_start {
+                        continue;
+                    }
+                    let clip_t = t - clip.start_time_secs;
+                    if clip_t >= 0.0 && clip_t < clip.duration_secs {
+                        let source_idx = (clip_t * clip.source_sample_rate as f64) as usize;
+                        if source_idx < clip.buffer.len() {
+                            let fg = clip_fade_gain(
+                                clip_t,
+                                clip.duration_secs,
+                                clip.fade_in_secs,
+                                clip.fade_out_secs,
+                            );
+                            overlap_dry += clip.buffer[source_idx] * fg;
+                        }
+                    }
+                }
+                dry_mix[offset + j] = dry_mix[offset + j] - overlap_dry + wet;
+            }
+
+            offset += block_len;
+        }
+    }
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+
+    let mut writer = hound::WavWriter::create(path, spec)
+        .map_err(|e| format!("Failed to create WAV file: {}", e))?;
+
+    for &sample in &dry_mix {
+        writer
+            .write_sample(sample.clamp(-1.0, 1.0))
+            .map_err(|e| format!("Failed to write sample: {}", e))?;
+    }
+
+    writer
+        .finalize()
+        .map_err(|e| format!("Failed to finalize WAV: {}", e))?;
+
+    println!(
+        "  WAV export complete: {} frames, {:.2}s",
+        total_frames,
+        total_frames as f64 / sr
+    );
+
+    Ok(())
 }
 
 fn decode_buffer(buffer: &AudioBufferRef, out: &mut Vec<f32>) {

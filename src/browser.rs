@@ -7,7 +7,7 @@ const DEFAULT_BROWSER_WIDTH: f32 = 260.0;
 const MIN_BROWSER_WIDTH: f32 = 150.0;
 const MAX_BROWSER_WIDTH: f32 = 600.0;
 const RESIZE_HANDLE_PX: f32 = 5.0;
-const ITEM_HEIGHT: f32 = 24.0;
+pub const ITEM_HEIGHT: f32 = 24.0;
 pub const HEADER_HEIGHT: f32 = 36.0;
 const INDENT_PX: f32 = 16.0;
 const SCROLLBAR_WIDTH: f32 = 6.0;
@@ -48,6 +48,7 @@ pub struct SampleBrowser {
     cached_scale: f32,
     last_scroll_screen_h: f32,
     last_scroll_scale: f32,
+    pub extra_content_height: f32,
 }
 
 impl SampleBrowser {
@@ -70,6 +71,7 @@ impl SampleBrowser {
             cached_scale: 0.0,
             last_scroll_screen_h: 0.0,
             last_scroll_scale: 0.0,
+            extra_content_height: 0.0,
         }
     }
 
@@ -195,7 +197,7 @@ impl SampleBrowser {
     }
 
     fn content_height(&self, scale: f32) -> f32 {
-        self.entries.len() as f32 * ITEM_HEIGHT * scale
+        self.entries.len() as f32 * ITEM_HEIGHT * scale + self.extra_content_height
     }
 
     fn visible_height(&self, screen_h: f32, scale: f32) -> f32 {
@@ -539,4 +541,242 @@ pub struct BrowserTextEntry {
     pub color: [u8; 4],
     pub weight: u16,
     pub is_header: bool,
+}
+
+const PLUGIN_SECTION_HEADER_HEIGHT: f32 = 28.0;
+const PLUGIN_SECTION_BG: [f32; 4] = [0.12, 0.10, 0.16, 1.0];
+const PLUGIN_SECTION_HEADER_BG: [f32; 4] = [0.14, 0.11, 0.20, 1.0];
+const PLUGIN_FX_BADGE: [f32; 4] = [0.55, 0.28, 0.85, 0.60];
+
+#[derive(Clone)]
+pub struct PluginEntry {
+    pub unique_id: String,
+    pub name: String,
+    pub manufacturer: String,
+}
+
+pub struct PluginBrowserSection {
+    pub plugins: Vec<PluginEntry>,
+    pub hovered_entry: Option<usize>,
+    pub expanded: bool,
+    pub text_dirty: bool,
+    pub cached_text: Vec<BrowserTextEntry>,
+    pub text_generation: u64,
+}
+
+impl PluginBrowserSection {
+    pub fn new() -> Self {
+        Self {
+            plugins: Vec::new(),
+            hovered_entry: None,
+            expanded: true,
+            text_dirty: true,
+            cached_text: Vec::new(),
+            text_generation: 0,
+        }
+    }
+
+    pub fn set_plugins(&mut self, plugins: Vec<PluginEntry>) {
+        self.plugins = plugins;
+        self.text_dirty = true;
+        self.text_generation += 1;
+    }
+
+    pub fn section_height(&self, scale: f32) -> f32 {
+        let header = PLUGIN_SECTION_HEADER_HEIGHT * scale;
+        if !self.expanded {
+            return header;
+        }
+        header + self.plugins.len() as f32 * ITEM_HEIGHT * scale
+    }
+
+    pub fn item_at(&self, local_y: f32, scale: f32) -> Option<usize> {
+        if !self.expanded {
+            return None;
+        }
+        let header = PLUGIN_SECTION_HEADER_HEIGHT * scale;
+        if local_y < header {
+            return None;
+        }
+        let idx = ((local_y - header) / (ITEM_HEIGHT * scale)) as usize;
+        if idx < self.plugins.len() {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    pub fn hit_header(&self, local_y: f32, scale: f32) -> bool {
+        local_y >= 0.0 && local_y < PLUGIN_SECTION_HEADER_HEIGHT * scale
+    }
+
+    pub fn update_hover(&mut self, local_y: f32, scale: f32) {
+        self.hovered_entry = self.item_at(local_y, scale);
+    }
+
+    pub fn build_instances(
+        &self,
+        panel_w: f32,
+        y_offset: f32,
+        screen_h: f32,
+        scale: f32,
+        clip_top: f32,
+    ) -> Vec<InstanceRaw> {
+        let mut out = Vec::new();
+        let header_h = PLUGIN_SECTION_HEADER_HEIGHT * scale;
+        let item_h = ITEM_HEIGHT * scale;
+
+        if y_offset + self.section_height(scale) < clip_top || y_offset > screen_h {
+            return out;
+        }
+
+        // Separator
+        if y_offset >= clip_top {
+            out.push(InstanceRaw {
+                position: [0.0, y_offset],
+                size: [panel_w, 1.0 * scale],
+                color: [1.0, 1.0, 1.0, 0.07],
+                border_radius: 0.0,
+            });
+        }
+
+        // Section background
+        let total_h = self.section_height(scale);
+        let bg_top = y_offset.max(clip_top);
+        let bg_bottom = (y_offset + total_h).min(screen_h);
+        if bg_bottom > bg_top {
+            out.push(InstanceRaw {
+                position: [0.0, bg_top],
+                size: [panel_w, bg_bottom - bg_top],
+                color: PLUGIN_SECTION_BG,
+                border_radius: 0.0,
+            });
+        }
+
+        // Section header
+        if y_offset + header_h > clip_top && y_offset < screen_h {
+            out.push(InstanceRaw {
+                position: [0.0, y_offset.max(clip_top)],
+                size: [panel_w, header_h],
+                color: PLUGIN_SECTION_HEADER_BG,
+                border_radius: 0.0,
+            });
+
+            // FX badge in header
+            if y_offset >= clip_top {
+                let badge_w = 18.0 * scale;
+                let badge_h = 12.0 * scale;
+                let badge_x = 8.0 * scale;
+                let badge_y = y_offset + (header_h - badge_h) * 0.5;
+                out.push(InstanceRaw {
+                    position: [badge_x, badge_y],
+                    size: [badge_w, badge_h],
+                    color: PLUGIN_FX_BADGE,
+                    border_radius: 2.0 * scale,
+                });
+            }
+        }
+
+        if !self.expanded {
+            return out;
+        }
+
+        for i in 0..self.plugins.len() {
+            let y = y_offset + header_h + i as f32 * item_h;
+            if y + item_h < clip_top || y > screen_h {
+                continue;
+            }
+
+            if self.hovered_entry == Some(i) {
+                out.push(InstanceRaw {
+                    position: [0.0, y],
+                    size: [panel_w, item_h],
+                    color: HOVER_COLOR,
+                    border_radius: 0.0,
+                });
+            }
+
+            let dot_sz = 5.0 * scale;
+            let dot_x = 12.0 * scale;
+            let dot_y = y + (item_h - dot_sz) * 0.5;
+            out.push(InstanceRaw {
+                position: [dot_x, dot_y],
+                size: [dot_sz, dot_sz],
+                color: [0.60, 0.35, 0.90, 0.70],
+                border_radius: dot_sz * 0.5,
+            });
+        }
+
+        out
+    }
+
+    pub fn get_text_entries(
+        &mut self,
+        panel_w: f32,
+        y_offset: f32,
+        scale: f32,
+        clip_top: f32,
+        screen_h: f32,
+    ) -> &[BrowserTextEntry] {
+        // Always rebuild since y_offset changes on scroll
+        self.cached_text = self.build_text_entries(panel_w, y_offset, scale, clip_top, screen_h);
+        self.text_dirty = false;
+        self.text_generation += 1;
+        &self.cached_text
+    }
+
+    fn build_text_entries(
+        &self,
+        panel_w: f32,
+        y_offset: f32,
+        scale: f32,
+        clip_top: f32,
+        screen_h: f32,
+    ) -> Vec<BrowserTextEntry> {
+        let mut out = Vec::new();
+        let header_h = PLUGIN_SECTION_HEADER_HEIGHT * scale;
+        let item_h = ITEM_HEIGHT * scale;
+
+        if y_offset >= clip_top && y_offset < screen_h {
+            out.push(BrowserTextEntry {
+                text: "VST PLUGINS".to_string(),
+                x: 30.0 * scale,
+                base_y: y_offset + (header_h - 12.0 * scale) * 0.5,
+                font_size: 10.0 * scale,
+                line_height: 12.0 * scale,
+                max_width: panel_w * 0.6,
+                color: [160, 140, 190, 200],
+                weight: 600,
+                is_header: true,
+            });
+        }
+
+        if !self.expanded {
+            return out;
+        }
+
+        for (i, plugin) in self.plugins.iter().enumerate() {
+            let base_y = y_offset + header_h + i as f32 * item_h;
+            if base_y + item_h < clip_top || base_y > screen_h {
+                continue;
+            }
+            let text_x = 22.0 * scale;
+            let font_sz = 12.0 * scale;
+            let line_h = 16.0 * scale;
+
+            out.push(BrowserTextEntry {
+                text: plugin.name.clone(),
+                x: text_x,
+                base_y: base_y + (item_h - line_h) * 0.5,
+                font_size: font_sz,
+                line_height: line_h,
+                max_width: panel_w - text_x - 12.0 * scale,
+                color: [190, 170, 210, 255],
+                weight: 400,
+                is_header: false,
+            });
+        }
+
+        out
+    }
 }

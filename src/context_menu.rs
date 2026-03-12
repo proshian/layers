@@ -7,6 +7,14 @@ pub const CTX_MENU_SEPARATOR_HEIGHT: f32 = 9.0;
 pub const CTX_MENU_PADDING: f32 = 4.0;
 pub const CTX_MENU_BORDER_RADIUS: f32 = 8.0;
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum MenuContext {
+    Canvas,
+    Selection { has_waveforms: bool, has_effect_region: bool },
+    ComponentDef,
+    ComponentInstance,
+}
+
 pub struct ContextMenuItem {
     pub label: &'static str,
     pub shortcut: &'static str,
@@ -22,22 +30,41 @@ pub struct ContextMenu {
     pub position: [f32; 2],
     pub entries: Vec<ContextMenuEntry>,
     pub hovered_index: Option<usize>,
+    pub context: MenuContext,
 }
 
 impl ContextMenu {
-    pub fn new(pos: [f32; 2]) -> Self {
-        Self {
-            position: pos,
-            entries: vec![
+    pub fn new(pos: [f32; 2], context: MenuContext) -> Self {
+        let entries = match context {
+            MenuContext::ComponentInstance => vec![
+                ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Go to Component",
+                    shortcut: "",
+                    action: CommandAction::GoToComponent,
+                }),
+                ContextMenuEntry::Separator,
                 ContextMenuEntry::Item(ContextMenuItem {
                     label: "Copy",
                     shortcut: "⌘C",
                     action: CommandAction::Copy,
                 }),
                 ContextMenuEntry::Item(ContextMenuItem {
-                    label: "Paste",
-                    shortcut: "⌘V",
-                    action: CommandAction::Paste,
+                    label: "Duplicate",
+                    shortcut: "⌘D",
+                    action: CommandAction::Duplicate,
+                }),
+                ContextMenuEntry::Separator,
+                ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Delete",
+                    shortcut: "⌫",
+                    action: CommandAction::Delete,
+                }),
+            ],
+            MenuContext::ComponentDef => vec![
+                ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Create Instance",
+                    shortcut: "",
+                    action: CommandAction::CreateInstance,
                 }),
                 ContextMenuEntry::Separator,
                 ContextMenuEntry::Item(ContextMenuItem {
@@ -50,6 +77,67 @@ impl ContextMenu {
                     shortcut: "⌫",
                     action: CommandAction::Delete,
                 }),
+            ],
+            MenuContext::Selection { has_waveforms, has_effect_region } => {
+                let mut entries = vec![];
+                if has_effect_region {
+                    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                        label: "Rename",
+                        shortcut: "⌘R",
+                        action: CommandAction::RenameEffectRegion,
+                    }));
+                    entries.push(ContextMenuEntry::Separator);
+                } else if has_waveforms {
+                    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                        label: "Rename",
+                        shortcut: "⌘R",
+                        action: CommandAction::RenameSample,
+                    }));
+                    entries.push(ContextMenuEntry::Separator);
+                }
+                entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Copy",
+                    shortcut: "⌘C",
+                    action: CommandAction::Copy,
+                }));
+                entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Paste",
+                    shortcut: "⌘V",
+                    action: CommandAction::Paste,
+                }));
+                entries.push(ContextMenuEntry::Separator);
+                entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Duplicate",
+                    shortcut: "⌘D",
+                    action: CommandAction::Duplicate,
+                }));
+                entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Delete",
+                    shortcut: "⌫",
+                    action: CommandAction::Delete,
+                }));
+                if has_waveforms {
+                    entries.push(ContextMenuEntry::Separator);
+                    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                        label: "Create Component",
+                        shortcut: "",
+                        action: CommandAction::CreateComponent,
+                    }));
+                }
+                entries.push(ContextMenuEntry::Separator);
+                entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Select All",
+                    shortcut: "⌘A",
+                    action: CommandAction::SelectAll,
+                }));
+                entries
+            }
+            MenuContext::Canvas => vec![
+                ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Paste",
+                    shortcut: "⌘V",
+                    action: CommandAction::Paste,
+                }),
                 ContextMenuEntry::Separator,
                 ContextMenuEntry::Item(ContextMenuItem {
                     label: "Select All",
@@ -57,7 +145,12 @@ impl ContextMenu {
                     action: CommandAction::SelectAll,
                 }),
             ],
+        };
+        Self {
+            position: pos,
+            entries,
             hovered_index: None,
+            context,
         }
     }
 

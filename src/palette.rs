@@ -24,6 +24,12 @@ pub enum CommandAction {
     ToggleBrowser,
     AddFolderToBrowser,
     SetMasterVolume,
+    CreateComponent,
+    CreateInstance,
+    GoToComponent,
+    OpenSettings,
+    RenameEffectRegion,
+    RenameSample,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -124,6 +130,12 @@ pub const COMMANDS: &[CommandDef] = &[
         shortcut: "",
         category: "Audio",
         action: CommandAction::SetMasterVolume,
+    },
+    CommandDef {
+        name: "Open Settings",
+        shortcut: "⌘,",
+        category: "View",
+        action: CommandAction::OpenSettings,
     },
 ];
 
@@ -424,10 +436,7 @@ impl CommandPalette {
                             if cmd_i == self.selected_index {
                                 out.push(InstanceRaw {
                                     position: [pos[0] + margin, y],
-                                    size: [
-                                        size[0] - margin * 2.0,
-                                        PALETTE_ITEM_HEIGHT * scale,
-                                    ],
+                                    size: [size[0] - margin * 2.0, PALETTE_ITEM_HEIGHT * scale],
                                     color: [0.26, 0.26, 0.32, 0.8],
                                     border_radius: 6.0 * scale,
                                 });

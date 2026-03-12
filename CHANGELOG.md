@@ -1,3 +1,31 @@
+- Add native macOS menu bar with File (New/Save/Open Project) and Edit menus using muda crate (11.2k loc)
+- Fix spacebar typing space during sample/effect name editing instead of triggering playback (10.9k loc)
+- Cap sample clip border radius to 6px screen pixels so it shrinks when zooming in (10.9k loc)
+- Display sample filename on clips (trimmed if too wide), editable via Cmd+R or context menu Rename (10.9k loc)
+- 2026-03-12: Make effect regions click-through (borders-only hit test, no fill), add Rename to context menu (10.7k loc)
+- 2026-03-12: Add user-editable name to effect regions (default "effects"), rendered next to FX badge, Cmd+R or context menu Rename to rename when selected (10.7k loc)
+- Transparent macOS title bar with fullsize content view and hidden title (10.6k loc)
+- Alt+drag to duplicate clips in-place and drag the copy, Ableton-style (10.6k loc)
+- Stereo waveform rendering: preserve L/R channels, Ableton-style mirrored display, dedicated GPU waveform shader with AA feathering, zoom-adaptive LOD (peaks when zoomed out, individual samples when zoomed in) (10.5k loc)
+- 2026-03-12: Add plugin name labels above effect regions with clickable parameter editor panel (10.0k loc)
+- Add Audio category to settings with driver type, input device, and output device dropdowns using cpal enumeration (9.4k loc)
+- Add draggable corner handles for resizing effect regions, with hover cursor feedback (9.0k loc)
+- Implement Cmd+C copy, Cmd+V paste (at cursor), Cmd+D duplicate (in-place); no extra spacing on duplicate (9.1k loc)
+- Add "Open Settings" command to the command palette (8.6k loc)
+- Add Figma-style component edit mode: double-click a component to enter, edit individual waveforms inside; click outside or Escape to exit; dimming overlay highlights the editing region; component bounds auto-update (8.6k loc)
+- Fix component instance audio playback: sync audio clips when moving instances/defs and on drag release (8.4k loc)
+- Add draggable corner handles for resizing component definitions, with hover cursor feedback (8.4k loc)
+- Add Figma-style component system: select waveforms and right-click "Create Component" to group them, then "Create Instance" to place linked copies with lock icon; instances mirror the original, right-click "Go to Component" navigates to source; audio playback and persistence included (8.3k loc)
+- Add Ableton-style settings window (Cmd+,) with grid line intensity, brightness, and color intensity sliders persisted to ~/.layers/settings.json (7.6k loc)
+- Cache scanned VST3 plugins to ~/.layers/vst_plugin_cache.json so they aren't rescanned every launch (7.4k loc)
+- 2026-03-11: Export region cursor feedback: diagonal resize on corners, pointer on Render pill, grab on body (6.7k loc)
+- 2026-03-11: Export region shows duration in Render label and corners are now draggable for resizing (6.7k loc)
+- 2026-03-11: Add per-clip fade-in/fade-out handles with draggable controls, visual curve overlay, and audio envelope (6.6k loc)
+- 2026-03-11: Spacebar stops recording when recording is active instead of toggling playback (6.3k loc)
+- 2026-03-11: Add export feature with draggable export region, "Render" button, and offline WAV rendering via hound (6.3k loc)
+- 2026-03-11: Make VST plugins list scroll together with samples in browser panel using shared scroll offset
+- 2026-03-11: Defer VST3 plugin scanning to first browser toggle or plugin interaction for fast startup
+- 2026-03-11: Add VST3 effect plugin support with spatial effect regions, plugin scanning, browser section, drag-and-drop, audio routing through plugin chains, and project persistence
 - 2026-03-11: Extract waveform rendering to `src/waveform.rs`; fix blinking by making bar count adaptive to zoom level
 - 2026-03-11: Add master volume fader command to palette with draggable slider and live RMS metering
 - 2026-03-11: Fix browser panel scroll performance (decouple text reshaping from scroll), add smooth scroll, persist browser visibility and expanded folders across sessions
@@ -5,3 +33,5 @@
 - Add Sample Browser panel: file tree overlay on the left side with folder expand/collapse, scrolling, hover highlights, resizable width, drag-to-canvas for audio files, Cmd+B toggle, Cmd+Shift+A add folder, persistence of root folders and panel width
 - 2026-03-11: Refactor command palette (Cmd+K) business logic into separate `src/palette.rs` module
 - 2026-03-11: Refactor context menu into separate `src/context_menu.rs` module
+- 2026-03-11: Remove demo shapes (dummy rectangles and circles) from default canvas
+default canvas

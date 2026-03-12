@@ -4,7 +4,43 @@ use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
 
-use crate::{CanvasObject, WaveformObject};
+use crate::CanvasObject;
+
+#[derive(Clone, SurrealValue)]
+pub struct StoredWaveform {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub color: [f32; 4],
+    pub border_radius: f32,
+    pub filename: String,
+    pub fade_in_px: f32,
+    pub fade_out_px: f32,
+    pub sample_rate: u32,
+}
+
+#[derive(Clone, SurrealValue)]
+pub struct StoredEffectRegion {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub plugin_ids: Vec<String>,
+    pub plugin_names: Vec<String>,
+    pub name: String,
+}
+
+#[derive(Clone, SurrealValue)]
+pub struct StoredComponent {
+    pub id: u64,
+    pub name: String,
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub waveform_indices: Vec<u64>,
+}
+
+#[derive(Clone, SurrealValue)]
+pub struct StoredComponentInstance {
+    pub component_id: u64,
+    pub position: [f32; 2],
+}
 
 #[derive(SurrealValue)]
 pub struct ProjectState {
@@ -12,11 +48,14 @@ pub struct ProjectState {
     pub camera_position: [f32; 2],
     pub camera_zoom: f32,
     pub objects: Vec<CanvasObject>,
-    pub waveforms: Vec<WaveformObject>,
+    pub waveforms: Vec<StoredWaveform>,
     pub browser_folders: Vec<String>,
     pub browser_width: f32,
     pub browser_visible: bool,
     pub browser_expanded: Vec<String>,
+    pub effect_regions: Vec<StoredEffectRegion>,
+    pub components: Vec<StoredComponent>,
+    pub component_instances: Vec<StoredComponentInstance>,
 }
 
 #[derive(Clone, Debug, SurrealValue)]
