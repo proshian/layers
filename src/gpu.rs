@@ -25,7 +25,7 @@ use crate::ui::toast;
 use crate::ui::waveform;
 use crate::ui::waveform::WaveformVertex;
 use crate::{
-    format_playback_time, ExportRegion, TransportPanel, DEFAULT_BPM, EXPORT_RENDER_PILL_H,
+    format_playback_time, ExportRegion, TransportPanel, EXPORT_RENDER_PILL_H,
     EXPORT_RENDER_PILL_W, TRANSPORT_WIDTH,
 };
 
@@ -627,7 +627,7 @@ impl Gpu {
         is_playing: bool,
         is_recording: bool,
         playback_position: f64,
-        export_region: Option<&ExportRegion>,
+        export_regions: &[ExportRegion],
         effect_regions: &[effects::EffectRegion],
         editing_effect_name: Option<(usize, &str)>,
         waveforms: &[waveform::WaveformView],
@@ -636,6 +636,8 @@ impl Gpu {
         settings_window: Option<&SettingsWindow>,
         settings: &Settings,
         toast_manager: &toast::ToastManager,
+        bpm: f32,
+        editing_bpm: Option<&str>,
     ) {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
@@ -1285,7 +1287,7 @@ impl Gpu {
             context_menu.map(|cm| cm.menu_rect(w, h, scale));
 
         // Export region "Render" label with duration (world-space -> screen-space)
-        if let Some(er) = export_region {
+        for er in export_regions {
             if settings_window.is_none() && command_palette.is_none() {
                 let pill_world_x = er.position[0] + 4.0 / camera.zoom;
                 let pill_world_y = er.position[1] + 4.0 / camera.zoom;
@@ -1626,7 +1628,11 @@ impl Gpu {
         // Transport panel BPM text
         {
             let (tp_pos, tp_size) = TransportPanel::panel_rect(w, h, scale);
-            let bpm_str = format!("{} bpm", DEFAULT_BPM as u32);
+            let bpm_str = if let Some(text) = editing_bpm {
+                format!("{}|", text)
+            } else {
+                format!("{} bpm", bpm as u32)
+            };
             let tfont = 13.0 * scale;
             let tline = 18.0 * scale;
             let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(tfont, tline));
@@ -1639,10 +1645,11 @@ impl Gpu {
             );
             buf.shape_until_scroll(&mut self.font_system, false);
             text_buffers.push(buf);
+            let alpha = if editing_bpm.is_some() { 255 } else { 220 };
             text_meta.push((
                 tp_pos[0] + tp_size[0] - 80.0 * scale,
                 tp_pos[1] + (tp_size[1] - tline) * 0.5,
-                TextColor::rgba(220, 220, 230, 220),
+                TextColor::rgba(220, 220, 230, alpha),
                 full_bounds,
             ));
         }

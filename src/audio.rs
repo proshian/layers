@@ -36,6 +36,8 @@ struct PlaybackClip {
     height: f32,
     fade_in_secs: f64,
     fade_out_secs: f64,
+    fade_in_curve: f32,
+    fade_out_curve: f32,
     volume: f32,
 }
 
@@ -56,6 +58,9 @@ pub struct AudioEngine {
     effect_regions: Arc<Mutex<Vec<AudioEffectRegion>>>,
     master_volume: Arc<AtomicU64>,
     rms_peak: Arc<AtomicU64>,
+    loop_enabled: Arc<AtomicBool>,
+    loop_start_bits: Arc<AtomicU64>,
+    loop_end_bits: Arc<AtomicU64>,
 }
 
 fn store_f64(atomic: &AtomicU64, value: f64) {
@@ -67,14 +72,23 @@ fn load_f64(atomic: &AtomicU64) -> f64 {
 }
 
 #[inline]
-fn clip_fade_gain(clip_t: f64, duration: f64, fade_in: f64, fade_out: f64) -> f32 {
+fn apply_fade_curve_f32(t: f32, curve: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let exponent = 2.0f32.powf(-curve);
+    t.powf(exponent)
+}
+
+#[inline]
+fn clip_fade_gain(clip_t: f64, duration: f64, fade_in: f64, fade_out: f64, fade_in_curve: f32, fade_out_curve: f32) -> f32 {
     let mut g = 1.0f32;
     if fade_in > 0.0 && clip_t < fade_in {
-        g = (clip_t / fade_in) as f32;
+        let t = (clip_t / fade_in) as f32;
+        g = apply_fade_curve_f32(t, fade_in_curve);
     }
     let from_end = duration - clip_t;
     if fade_out > 0.0 && from_end < fade_out {
-        g = g.min((from_end / fade_out) as f32);
+        let t = (from_end / fade_out) as f32;
+        g = g.min(apply_fade_curve_f32(t, fade_out_curve));
     }
     g.clamp(0.0, 1.0)
 }
@@ -124,6 +138,9 @@ impl AudioEngine {
         let effect_regions: Arc<Mutex<Vec<AudioEffectRegion>>> = Arc::new(Mutex::new(Vec::new()));
         let master_volume = Arc::new(AtomicU64::new(1.0f64.to_bits()));
         let rms_peak = Arc::new(AtomicU64::new(0.0f64.to_bits()));
+        let loop_enabled = Arc::new(AtomicBool::new(false));
+        let loop_start_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
+        let loop_end_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
 
         let p = playing.clone();
         let pos = position_bits.clone();
@@ -131,6 +148,9 @@ impl AudioEngine {
         let er = effect_regions.clone();
         let vol = master_volume.clone();
         let rms = rms_peak.clone();
+        let lp_en = loop_enabled.clone();
+        let lp_s = loop_start_bits.clone();
+        let lp_e = loop_end_bits.clone();
         let sr = sample_rate as f64;
 
         let mut fx_buf_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
@@ -178,6 +198,8 @@ impl AudioEngine {
                                         clip.duration_secs,
                                         clip.fade_in_secs,
                                         clip.fade_out_secs,
+                                        clip.fade_in_curve,
+                                        clip.fade_out_curve,
                                     );
                                     mix += clip.buffer[source_idx] * fg * clip.volume;
                                 }
@@ -239,6 +261,8 @@ impl AudioEngine {
                                                         clip.duration_secs,
                                                         clip.fade_in_secs,
                                                         clip.fade_out_secs,
+                                                        clip.fade_in_curve,
+                                                        clip.fade_out_curve,
                                                     );
                                                     region_mix +=
                                                         clip.buffer[source_idx] * fg * clip.volume;
@@ -302,6 +326,8 @@ impl AudioEngine {
                                                         clip.duration_secs,
                                                         clip.fade_in_secs,
                                                         clip.fade_out_secs,
+                                                        clip.fade_in_curve,
+                                                        clip.fade_out_curve,
                                                     );
                                                     overlap_dry +=
                                                         clip.buffer[source_idx] * fg * clip.volume;
@@ -333,7 +359,15 @@ impl AudioEngine {
                         store_f64(&rms, rms_val);
                     }
 
-                    let new_time = current_time + frames as f64 / sr;
+                    let mut new_time = current_time + frames as f64 / sr;
+                    if lp_en.load(Ordering::Relaxed) {
+                        let ls = load_f64(&lp_s);
+                        let le = load_f64(&lp_e);
+                        if le > ls && current_time >= ls && current_time < le && new_time >= le {
+                            let len = le - ls;
+                            new_time = ls + (new_time - le).rem_euclid(len);
+                        }
+                    }
                     store_f64(&pos, new_time);
                 },
                 |err| eprintln!("Audio stream error: {}", err),
@@ -352,6 +386,9 @@ impl AudioEngine {
             effect_regions,
             master_volume,
             rms_peak,
+            loop_enabled,
+            loop_start_bits,
+            loop_end_bits,
         })
     }
 
@@ -384,6 +421,8 @@ impl AudioEngine {
         audio_clips: &[AudioClipData],
         fade_ins_px: &[f32],
         fade_outs_px: &[f32],
+        fade_in_curves: &[f32],
+        fade_out_curves: &[f32],
         volumes: &[f32],
     ) {
         let mut clips = self.clips.lock().unwrap();
@@ -397,6 +436,8 @@ impl AudioEngine {
             let start_secs = pos[0] as f64 / PIXELS_PER_SECOND as f64;
             let fi = fade_ins_px.get(i).copied().unwrap_or(0.0);
             let fo = fade_outs_px.get(i).copied().unwrap_or(0.0);
+            let fi_curve = fade_in_curves.get(i).copied().unwrap_or(0.0);
+            let fo_curve = fade_out_curves.get(i).copied().unwrap_or(0.0);
             let vol = volumes.get(i).copied().unwrap_or(1.0);
             clips.push(PlaybackClip {
                 buffer: clip_data.samples.clone(),
@@ -407,6 +448,8 @@ impl AudioEngine {
                 height: size[1],
                 fade_in_secs: (fi / PIXELS_PER_SECOND) as f64,
                 fade_out_secs: (fo / PIXELS_PER_SECOND) as f64,
+                fade_in_curve: fi_curve,
+                fade_out_curve: fo_curve,
                 volume: vol,
             });
         }
@@ -416,6 +459,15 @@ impl AudioEngine {
         if let Ok(mut guard) = self.effect_regions.lock() {
             *guard = regions;
         }
+    }
+
+    pub fn set_loop_region(&self, start_secs: f64, end_secs: f64) {
+        store_f64(&self.loop_start_bits, start_secs);
+        store_f64(&self.loop_end_bits, end_secs);
+    }
+
+    pub fn set_loop_enabled(&self, enabled: bool) {
+        self.loop_enabled.store(enabled, Ordering::Relaxed);
     }
 
     pub fn set_master_volume(&self, v: f32) {
@@ -678,6 +730,8 @@ pub struct ExportClip {
     pub height: f32,
     pub fade_in_secs: f64,
     pub fade_out_secs: f64,
+    pub fade_in_curve: f32,
+    pub fade_out_curve: f32,
     pub volume: f32,
 }
 
@@ -724,6 +778,8 @@ pub fn render_to_wav(
                         clip.duration_secs,
                         clip.fade_in_secs,
                         clip.fade_out_secs,
+                        clip.fade_in_curve,
+                        clip.fade_out_curve,
                     );
                     mix += clip.buffer[source_idx] * fg * clip.volume;
                 }
@@ -779,6 +835,8 @@ pub fn render_to_wav(
                                 clip.duration_secs,
                                 clip.fade_in_secs,
                                 clip.fade_out_secs,
+                                clip.fade_in_curve,
+                                clip.fade_out_curve,
                             );
                             region_mix += clip.buffer[source_idx] * fg * clip.volume;
                         }
@@ -825,6 +883,8 @@ pub fn render_to_wav(
                                 clip.duration_secs,
                                 clip.fade_in_secs,
                                 clip.fade_out_secs,
+                                clip.fade_in_curve,
+                                clip.fade_out_curve,
                             );
                             overlap_dry += clip.buffer[source_idx] * fg * clip.volume;
                         }

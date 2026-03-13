@@ -19,6 +19,8 @@ pub struct StoredWaveform {
     pub filename: String,
     pub fade_in_px: f32,
     pub fade_out_px: f32,
+    pub fade_in_curve: f32,
+    pub fade_out_curve: f32,
     pub sample_rate: u32,
     pub volume: f32,
     pub disabled: bool,
@@ -31,6 +33,13 @@ pub struct StoredEffectRegion {
     pub plugin_ids: Vec<String>,
     pub plugin_names: Vec<String>,
     pub name: String,
+}
+
+#[derive(Clone, SurrealValue)]
+pub struct StoredLoopRegion {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub enabled: bool,
 }
 
 #[derive(Clone, SurrealValue)]
@@ -60,8 +69,10 @@ pub struct ProjectState {
     pub browser_visible: bool,
     pub browser_expanded: Vec<String>,
     pub effect_regions: Vec<StoredEffectRegion>,
+    pub loop_regions: Vec<StoredLoopRegion>,
     pub components: Vec<StoredComponent>,
     pub component_instances: Vec<StoredComponentInstance>,
+    pub bpm: f32,
 }
 
 // ---------------------------------------------------------------------------

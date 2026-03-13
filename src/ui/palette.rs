@@ -43,6 +43,8 @@ pub enum CommandAction {
     RevealInFinder,
     ReverseSample,
     SetSampleVolume,
+    SplitSample,
+    AddLoopArea,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -178,6 +180,20 @@ pub const COMMANDS: &[CommandDef] = &[
         shortcut: "",
         category: "Audio",
         action: CommandAction::ReverseSample,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Split Sample",
+        shortcut: "⌘E",
+        category: "Audio",
+        action: CommandAction::SplitSample,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Add Loop Area",
+        shortcut: "⌘L",
+        category: "Audio",
+        action: CommandAction::AddLoopArea,
         dev_only: false,
     },
     CommandDef {

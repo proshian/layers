@@ -295,6 +295,12 @@ impl ContextMenu {
                 if has_waveforms {
                     entries.push(ContextMenuEntry::Separator);
                     entries.push(ContextMenuEntry::Item(ContextMenuItem {
+                        label: "Split Here",
+                        shortcut: "⌘E",
+                        action: CommandAction::SplitSample,
+                        checked: false,
+                    }));
+                    entries.push(ContextMenuEntry::Item(ContextMenuItem {
                         label: "Create Component",
                         shortcut: "",
                         action: CommandAction::CreateComponent,

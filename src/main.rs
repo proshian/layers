@@ -52,6 +52,8 @@ pub(crate) enum HitTarget {
     Object(usize),
     Waveform(usize),
     EffectRegion(usize),
+    LoopRegion(usize),
+    ExportRegion(usize),
     ComponentDef(usize),
     ComponentInstance(usize),
 }
@@ -68,29 +70,86 @@ struct EffectRegionSnapshot {
 }
 
 #[derive(Clone)]
+struct LoopRegionSnapshot {
+    position: [f32; 2],
+    size: [f32; 2],
+    enabled: bool,
+}
+
+#[derive(Clone)]
+struct ExportRegionSnapshot {
+    position: [f32; 2],
+    size: [f32; 2],
+}
+
+#[derive(Clone)]
 struct Snapshot {
     objects: Vec<CanvasObject>,
     waveforms: Vec<WaveformView>,
     audio_clips: Vec<AudioClipData>,
     effect_regions: Vec<EffectRegionSnapshot>,
+    loop_regions: Vec<LoopRegionSnapshot>,
+    export_regions: Vec<ExportRegionSnapshot>,
     components: Vec<component::ComponentDef>,
     component_instances: Vec<component::ComponentInstance>,
 }
 
+#[derive(Clone)]
 pub(crate) struct ExportRegion {
     pub(crate) position: [f32; 2],
     pub(crate) size: [f32; 2],
 }
 
+impl ExportRegion {
+    pub fn hit_test_border(&self, world_pos: [f32; 2], camera: &Camera) -> bool {
+        let border_thickness = 6.0 / camera.zoom;
+        let p = self.position;
+        let s = self.size;
+        if !point_in_rect(
+            world_pos,
+            [p[0] - border_thickness, p[1] - border_thickness],
+            [s[0] + border_thickness * 2.0, s[1] + border_thickness * 2.0],
+        ) {
+            return false;
+        }
+        if point_in_rect(world_pos, [p[0], p[1] - border_thickness], [s[0], border_thickness * 2.0]) {
+            return true;
+        }
+        if point_in_rect(world_pos, [p[0], p[1] + s[1] - border_thickness], [s[0], border_thickness * 2.0]) {
+            return true;
+        }
+        if point_in_rect(world_pos, [p[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
+            return true;
+        }
+        if point_in_rect(world_pos, [p[0] + s[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
+            return true;
+        }
+        let pill_w = EXPORT_RENDER_PILL_W / camera.zoom;
+        let pill_h = EXPORT_RENDER_PILL_H / camera.zoom;
+        if point_in_rect(
+            world_pos,
+            [p[0] + 4.0 / camera.zoom, p[1] + 4.0 / camera.zoom],
+            [pill_w, pill_h],
+        ) {
+            return true;
+        }
+        false
+    }
+}
+
+struct SelectArea {
+    position: [f32; 2],
+    size: [f32; 2],
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum ExportHover {
     None,
-    Body,
-    RenderPill,
-    CornerNW,
-    CornerNE,
-    CornerSW,
-    CornerSE,
+    RenderPill(usize),
+    CornerNW(usize),
+    CornerNE(usize),
+    CornerSW(usize),
+    CornerSE(usize),
 }
 
 const EXPORT_REGION_DEFAULT_WIDTH: f32 = 800.0;
@@ -100,6 +159,72 @@ const EXPORT_BORDER_COLOR: [f32; 4] = [0.20, 0.80, 0.60, 0.50];
 const EXPORT_RENDER_PILL_COLOR: [f32; 4] = [0.15, 0.65, 0.50, 0.85];
 pub(crate) const EXPORT_RENDER_PILL_W: f32 = 110.0;
 pub(crate) const EXPORT_RENDER_PILL_H: f32 = 22.0;
+
+#[derive(Clone)]
+pub(crate) struct LoopRegion {
+    pub(crate) position: [f32; 2],
+    pub(crate) size: [f32; 2],
+    pub(crate) enabled: bool,
+}
+
+impl LoopRegion {
+    pub fn hit_test_border(&self, world_pos: [f32; 2], camera: &Camera) -> bool {
+        let border_thickness = 6.0 / camera.zoom;
+        let p = self.position;
+        let s = self.size;
+        if !point_in_rect(
+            world_pos,
+            [p[0] - border_thickness, p[1] - border_thickness],
+            [s[0] + border_thickness * 2.0, s[1] + border_thickness * 2.0],
+        ) {
+            return false;
+        }
+        // Top edge
+        if point_in_rect(world_pos, [p[0], p[1] - border_thickness], [s[0], border_thickness * 2.0]) {
+            return true;
+        }
+        // Bottom edge
+        if point_in_rect(world_pos, [p[0], p[1] + s[1] - border_thickness], [s[0], border_thickness * 2.0]) {
+            return true;
+        }
+        // Left edge
+        if point_in_rect(world_pos, [p[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
+            return true;
+        }
+        // Right edge
+        if point_in_rect(world_pos, [p[0] + s[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
+            return true;
+        }
+        // LOOP badge area
+        let badge_w = LOOP_BADGE_W / camera.zoom;
+        let badge_h = LOOP_BADGE_H / camera.zoom;
+        if point_in_rect(
+            world_pos,
+            [p[0] + 4.0 / camera.zoom, p[1] + 4.0 / camera.zoom],
+            [badge_w, badge_h],
+        ) {
+            return true;
+        }
+        false
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum LoopHover {
+    None,
+    CornerNW(usize),
+    CornerNE(usize),
+    CornerSW(usize),
+    CornerSE(usize),
+}
+
+const LOOP_REGION_DEFAULT_WIDTH: f32 = 800.0;
+const LOOP_REGION_DEFAULT_HEIGHT: f32 = 250.0;
+const LOOP_FILL_COLOR: [f32; 4] = [0.25, 0.55, 0.95, 0.08];
+const LOOP_BORDER_COLOR: [f32; 4] = [0.30, 0.60, 1.0, 0.50];
+const LOOP_BADGE_COLOR: [f32; 4] = [0.20, 0.50, 0.95, 0.85];
+pub(crate) const LOOP_BADGE_W: f32 = 70.0;
+pub(crate) const LOOP_BADGE_H: f32 = 22.0;
 
 enum DragState {
     None,
@@ -122,10 +247,8 @@ enum DragState {
         plugin_name: String,
     },
     ResizingBrowser,
-    MovingExportRegion {
-        offset: [f32; 2],
-    },
     ResizingExportRegion {
+        region_idx: usize,
         anchor: [f32; 2],
         nwse: bool,
     },
@@ -133,12 +256,23 @@ enum DragState {
         waveform_idx: usize,
         is_fade_in: bool,
     },
+    DraggingFadeCurve {
+        waveform_idx: usize,
+        is_fade_in: bool,
+        start_mouse_y: f32,
+        start_curve: f32,
+    },
     ResizingComponentDef {
         comp_idx: usize,
         anchor: [f32; 2],
         nwse: bool,
     },
     ResizingEffectRegion {
+        region_idx: usize,
+        anchor: [f32; 2],
+        nwse: bool,
+    },
+    ResizingLoopRegion {
         region_idx: usize,
         anchor: [f32; 2],
         nwse: bool,
@@ -169,6 +303,8 @@ enum ClipboardItem {
     Object(CanvasObject),
     Waveform(WaveformView, Option<AudioClipData>),
     EffectRegion(effects::EffectRegion),
+    LoopRegion(LoopRegion),
+    ExportRegion(ExportRegion),
     ComponentDef(
         component::ComponentDef,
         Vec<(WaveformView, Option<AudioClipData>)>,
@@ -215,8 +351,8 @@ pub(crate) fn format_playback_time(secs: f64) -> String {
 
 pub(crate) const DEFAULT_BPM: f32 = 120.0;
 
-fn pixels_per_beat() -> f32 {
-    audio::PIXELS_PER_SECOND * 60.0 / DEFAULT_BPM
+fn pixels_per_beat(bpm: f32) -> f32 {
+    audio::PIXELS_PER_SECOND * 60.0 / bpm
 }
 
 /// Musical subdivision levels in beats: 32, 16, 8, 4, 2, 1, 1/2, 1/4, 1/8, 1/16, 1/32
@@ -226,8 +362,8 @@ const BEAT_SUBDIVISIONS: &[f32] = &[
 
 /// Returns (minor_spacing_world, beats_per_bar) for adaptive grid.
 /// Picks the subdivision where screen-px spacing is closest to the target.
-fn musical_grid_spacing(zoom: f32, target_px: f32, triplet: bool) -> f32 {
-    let ppb = pixels_per_beat();
+fn musical_grid_spacing(zoom: f32, target_px: f32, triplet: bool, bpm: f32) -> f32 {
+    let ppb = pixels_per_beat(bpm);
     let triplet_mul = if triplet { 2.0 / 3.0 } else { 1.0 };
     let mut best = BEAT_SUBDIVISIONS[0] * ppb * triplet_mul;
     let mut best_diff = f32::MAX;
@@ -243,13 +379,13 @@ fn musical_grid_spacing(zoom: f32, target_px: f32, triplet: bool) -> f32 {
     best
 }
 
-fn grid_spacing_for_settings(settings: &Settings, zoom: f32) -> f32 {
+fn grid_spacing_for_settings(settings: &Settings, zoom: f32, bpm: f32) -> f32 {
     match settings.grid_mode {
         GridMode::Adaptive(size) => {
-            musical_grid_spacing(zoom, size.target_px(), settings.triplet_grid)
+            musical_grid_spacing(zoom, size.target_px(), settings.triplet_grid, bpm)
         }
         GridMode::Fixed(fg) => {
-            let ppb = pixels_per_beat();
+            let ppb = pixels_per_beat(bpm);
             let triplet_mul = if settings.triplet_grid {
                 2.0 / 3.0
             } else {
@@ -261,11 +397,11 @@ fn grid_spacing_for_settings(settings: &Settings, zoom: f32) -> f32 {
 }
 
 /// Snap a world-X coordinate to the nearest grid line.
-pub(crate) fn snap_to_grid(world_x: f32, settings: &Settings, zoom: f32) -> f32 {
+pub(crate) fn snap_to_grid(world_x: f32, settings: &Settings, zoom: f32, bpm: f32) -> f32 {
     if !settings.grid_enabled || !settings.snap_to_grid {
         return world_x;
     }
-    let spacing = grid_spacing_for_settings(settings, zoom);
+    let spacing = grid_spacing_for_settings(settings, zoom, bpm);
     (world_x / spacing).round() * spacing
 }
 
@@ -315,10 +451,36 @@ fn hit_test_fade_handle(
     None
 }
 
+/// Returns (waveform_index, is_fade_in) if the cursor is near the fade curve midpoint dot.
+fn hit_test_fade_curve_dot(
+    waveforms: &[WaveformView],
+    world_pos: [f32; 2],
+    camera: &Camera,
+) -> Option<(usize, bool)> {
+    let hit_radius = ui::waveform::FADE_HANDLE_SIZE / camera.zoom;
+    for (i, wf) in waveforms.iter().enumerate().rev() {
+        if wf.fade_in_px > 0.0 {
+            let [dx, dy] = ui::waveform::fade_curve_dot_pos(wf, true);
+            if (world_pos[0] - dx).abs() < hit_radius && (world_pos[1] - dy).abs() < hit_radius {
+                return Some((i, true));
+            }
+        }
+        if wf.fade_out_px > 0.0 {
+            let [dx, dy] = ui::waveform::fade_curve_dot_pos(wf, false);
+            if (world_pos[0] - dx).abs() < hit_radius && (world_pos[1] - dy).abs() < hit_radius {
+                return Some((i, false));
+            }
+        }
+    }
+    None
+}
+
 fn hit_test(
     objects: &[CanvasObject],
     waveforms: &[WaveformView],
     effect_regions: &[effects::EffectRegion],
+    loop_regions: &[LoopRegion],
+    export_regions: &[ExportRegion],
     components: &[component::ComponentDef],
     component_instances: &[component::ComponentInstance],
     editing_component: Option<usize>,
@@ -385,6 +547,16 @@ fn hit_test(
             return Some(HitTarget::EffectRegion(i));
         }
     }
+    for (i, lr) in loop_regions.iter().enumerate().rev() {
+        if lr.hit_test_border(world_pos, camera) {
+            return Some(HitTarget::LoopRegion(i));
+        }
+    }
+    for (i, xr) in export_regions.iter().enumerate().rev() {
+        if xr.hit_test_border(world_pos, camera) {
+            return Some(HitTarget::ExportRegion(i));
+        }
+    }
     None
 }
 
@@ -392,6 +564,8 @@ fn targets_in_rect(
     objects: &[CanvasObject],
     waveforms: &[WaveformView],
     effect_regions: &[effects::EffectRegion],
+    loop_regions: &[LoopRegion],
+    export_regions: &[ExportRegion],
     components: &[component::ComponentDef],
     component_instances: &[component::ComponentInstance],
     editing_component: Option<usize>,
@@ -447,6 +621,16 @@ fn targets_in_rect(
             result.push(HitTarget::EffectRegion(i));
         }
     }
+    for (i, lr) in loop_regions.iter().enumerate() {
+        if rects_overlap(rect_pos, rect_size, lr.position, lr.size) {
+            result.push(HitTarget::LoopRegion(i));
+        }
+    }
+    for (i, xr) in export_regions.iter().enumerate() {
+        if rects_overlap(rect_pos, rect_size, xr.position, xr.size) {
+            result.push(HitTarget::ExportRegion(i));
+        }
+    }
     for (i, def) in components.iter().enumerate() {
         if rects_overlap(rect_pos, rect_size, def.position, def.size) {
             result.push(HitTarget::ComponentDef(i));
@@ -477,14 +661,20 @@ struct RenderContext<'a> {
     hovered: Option<HitTarget>,
     selected: &'a HashSet<HitTarget>,
     selection_rect: Option<([f32; 2], [f32; 2])>,
+    select_area: Option<&'a SelectArea>,
     file_hovering: bool,
     playhead_world_x: Option<f32>,
-    export_region: Option<&'a ExportRegion>,
+    export_regions: &'a [ExportRegion],
+    loop_regions: &'a [LoopRegion],
     components: &'a [component::ComponentDef],
     component_instances: &'a [component::ComponentInstance],
     editing_component: Option<usize>,
     settings: &'a Settings,
     component_map: &'a std::collections::HashMap<component::ComponentId, usize>,
+    fade_curve_hovered: Option<(usize, bool)>,
+    fade_curve_dragging: Option<(usize, bool)>,
+    mouse_world: [f32; 2],
+    bpm: f32,
 }
 
 fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
@@ -498,8 +688,8 @@ fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
 
     // --- musical grid ---
     if ctx.settings.grid_enabled {
-        let spacing = grid_spacing_for_settings(ctx.settings, camera.zoom);
-        let ppb = pixels_per_beat();
+        let spacing = grid_spacing_for_settings(ctx.settings, camera.zoom, ctx.bpm);
+        let ppb = pixels_per_beat(ctx.bpm);
         let bar_spacing = ppb * 4.0;
         let line_w = 1.0 / camera.zoom;
         let major_line_w = 2.0 / camera.zoom;
@@ -588,40 +778,48 @@ fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         ));
     }
 
-    // --- export region ---
-    if let Some(er) = ctx.export_region {
+    // --- export regions ---
+    for (i, er) in ctx.export_regions.iter().enumerate() {
+        let p = er.position;
+        let s = er.size;
+        let er_right = p[0] + s[0];
+        let er_bottom = p[1] + s[1];
+        if er_right < world_left || p[0] > world_right || er_bottom < world_top || p[1] > world_bottom {
+            continue;
+        }
+        let is_sel = ctx.selected.contains(&HitTarget::ExportRegion(i));
+        let is_hov = ctx.hovered == Some(HitTarget::ExportRegion(i));
+
         out.push(InstanceRaw {
-            position: er.position,
-            size: er.size,
+            position: p,
+            size: s,
             color: EXPORT_FILL_COLOR,
             border_radius: 6.0 / camera.zoom,
         });
 
-        let bw = 1.5 / camera.zoom;
-        push_border(out, er.position, er.size, bw, EXPORT_BORDER_COLOR);
+        let bw = if is_sel { 2.5 } else if is_hov { 2.0 } else { 1.5 } / camera.zoom;
+        push_border(out, p, s, bw, EXPORT_BORDER_COLOR);
 
-        // Dashed top indicator
         let dash_h = 3.0 / camera.zoom;
         let dash_w = 20.0 / camera.zoom;
         let gap = 10.0 / camera.zoom;
-        let y = er.position[1] - dash_h - 2.0 / camera.zoom;
-        let mut x = er.position[0];
-        while x < er.position[0] + er.size[0] {
-            let w = dash_w.min(er.position[0] + er.size[0] - x);
+        let dy = p[1] - dash_h - 2.0 / camera.zoom;
+        let mut dx = p[0];
+        while dx < er_right {
+            let w = dash_w.min(er_right - dx);
             out.push(InstanceRaw {
-                position: [x, y],
+                position: [dx, dy],
                 size: [w, dash_h],
                 color: EXPORT_BORDER_COLOR,
                 border_radius: 1.0 / camera.zoom,
             });
-            x += dash_w + gap;
+            dx += dash_w + gap;
         }
 
-        // "Render" pill background in top-left corner
         let pill_w = EXPORT_RENDER_PILL_W / camera.zoom;
         let pill_h = EXPORT_RENDER_PILL_H / camera.zoom;
-        let pill_x = er.position[0] + 4.0 / camera.zoom;
-        let pill_y = er.position[1] + 4.0 / camera.zoom;
+        let pill_x = p[0] + 4.0 / camera.zoom;
+        let pill_y = p[1] + 4.0 / camera.zoom;
         out.push(InstanceRaw {
             position: [pill_x, pill_y],
             size: [pill_w, pill_h],
@@ -629,22 +827,86 @@ fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             border_radius: pill_h * 0.5,
         });
 
-        // Resize handles at corners
-        let handle_sz = 8.0 / camera.zoom;
-        for &hx in &[
-            er.position[0] - handle_sz * 0.5,
-            er.position[0] + er.size[0] - handle_sz * 0.5,
-        ] {
-            for &hy in &[
-                er.position[1] - handle_sz * 0.5,
-                er.position[1] + er.size[1] - handle_sz * 0.5,
-            ] {
-                out.push(InstanceRaw {
-                    position: [hx, hy],
-                    size: [handle_sz, handle_sz],
-                    color: [0.20, 0.80, 0.60, 0.9],
-                    border_radius: 2.0 / camera.zoom,
-                });
+        if is_sel {
+            let handle_sz = 8.0 / camera.zoom;
+            for &hx in &[p[0] - handle_sz * 0.5, er_right - handle_sz * 0.5] {
+                for &hy in &[p[1] - handle_sz * 0.5, er_bottom - handle_sz * 0.5] {
+                    out.push(InstanceRaw {
+                        position: [hx, hy],
+                        size: [handle_sz, handle_sz],
+                        color: [0.20, 0.80, 0.60, 0.9],
+                        border_radius: 2.0 / camera.zoom,
+                    });
+                }
+            }
+        }
+    }
+
+    // --- loop regions ---
+    for (i, lr) in ctx.loop_regions.iter().enumerate() {
+        let p = lr.position;
+        let s = lr.size;
+        let lr_right = p[0] + s[0];
+        let lr_bottom = p[1] + s[1];
+        if lr_right < world_left || p[0] > world_right || lr_bottom < world_top || p[1] > world_bottom {
+            continue;
+        }
+        let is_sel = ctx.selected.contains(&HitTarget::LoopRegion(i));
+        let is_hov = ctx.hovered == Some(HitTarget::LoopRegion(i));
+        let alpha_mul = if lr.enabled { 1.0 } else { 0.25 };
+
+        let fill = [LOOP_FILL_COLOR[0], LOOP_FILL_COLOR[1], LOOP_FILL_COLOR[2], LOOP_FILL_COLOR[3] * alpha_mul];
+        let border = [LOOP_BORDER_COLOR[0], LOOP_BORDER_COLOR[1], LOOP_BORDER_COLOR[2], LOOP_BORDER_COLOR[3] * alpha_mul];
+        let badge = [LOOP_BADGE_COLOR[0], LOOP_BADGE_COLOR[1], LOOP_BADGE_COLOR[2], LOOP_BADGE_COLOR[3] * alpha_mul];
+
+        out.push(InstanceRaw {
+            position: p,
+            size: s,
+            color: fill,
+            border_radius: 6.0 / camera.zoom,
+        });
+
+        let bw = if is_sel { 2.5 } else if is_hov { 2.0 } else { 1.5 } / camera.zoom;
+        push_border(out, p, s, bw, border);
+
+        let dash_h = 3.0 / camera.zoom;
+        let dash_w = 20.0 / camera.zoom;
+        let gap = 10.0 / camera.zoom;
+        let dy = p[1] - dash_h - 2.0 / camera.zoom;
+        let mut dx = p[0];
+        while dx < lr_right {
+            let w = dash_w.min(lr_right - dx);
+            out.push(InstanceRaw {
+                position: [dx, dy],
+                size: [w, dash_h],
+                color: border,
+                border_radius: 1.0 / camera.zoom,
+            });
+            dx += dash_w + gap;
+        }
+
+        let pill_w = LOOP_BADGE_W / camera.zoom;
+        let pill_h = LOOP_BADGE_H / camera.zoom;
+        let pill_x = p[0] + 4.0 / camera.zoom;
+        let pill_y = p[1] + 4.0 / camera.zoom;
+        out.push(InstanceRaw {
+            position: [pill_x, pill_y],
+            size: [pill_w, pill_h],
+            color: badge,
+            border_radius: pill_h * 0.5,
+        });
+
+        if is_sel {
+            let handle_sz = 8.0 / camera.zoom;
+            for &hx in &[p[0] - handle_sz * 0.5, lr_right - handle_sz * 0.5] {
+                for &hy in &[p[1] - handle_sz * 0.5, lr_bottom - handle_sz * 0.5] {
+                    out.push(InstanceRaw {
+                        position: [hx, hy],
+                        size: [handle_sz, handle_sz],
+                        color: [0.30, 0.60, 1.0, 0.9 * alpha_mul],
+                        border_radius: 2.0 / camera.zoom,
+                    });
+                }
             }
         }
     }
@@ -803,6 +1065,8 @@ fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             ctx.objects,
             ctx.waveforms,
             ctx.effect_regions,
+            ctx.loop_regions,
+            ctx.export_regions,
             ctx.components,
             ctx.component_instances,
             ctx.component_map,
@@ -822,7 +1086,7 @@ fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         }
     }
 
-    // --- selection rectangle ---
+    // --- selection rectangle (transient, during drag) ---
     if let Some((start, current)) = ctx.selection_rect {
         let (rp, rs) = canonical_rect(start, current);
         out.push(InstanceRaw {
@@ -833,6 +1097,15 @@ fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         });
         let bw = 1.0 / camera.zoom;
         push_border(out, rp, rs, bw, [0.35, 0.65, 1.0, 0.5]);
+    } else if let Some(sa) = ctx.select_area {
+        out.push(InstanceRaw {
+            position: sa.position,
+            size: sa.size,
+            color: [0.30, 0.55, 1.0, 0.10],
+            border_radius: 0.0,
+        });
+        let bw = 1.0 / camera.zoom;
+        push_border(out, sa.position, sa.size, bw, [0.35, 0.65, 1.0, 0.5]);
     }
 
     // --- playback cursor ---
@@ -899,6 +1172,21 @@ fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &RenderContext)
             is_hov,
             is_sel,
         ));
+        // Fade curve lines as smooth triangles (line only when cursor is near)
+        let mx = ctx.mouse_world[0];
+        let my = ctx.mouse_world[1];
+        let in_wf_y = my >= wf.position[1] && my <= wf.position[1] + wf.size[1];
+        let mouse_in_fi = wf.fade_in_px > 0.0 && in_wf_y
+            && mx >= wf.position[0] && mx <= wf.position[0] + wf.fade_in_px;
+        let mouse_in_fo = wf.fade_out_px > 0.0 && in_wf_y
+            && mx >= wf.position[0] + wf.size[0] - wf.fade_out_px && mx <= wf.position[0] + wf.size[0];
+        let show_fi_line = mouse_in_fi
+            || matches!(ctx.fade_curve_hovered, Some((idx, true)) if idx == i)
+            || matches!(ctx.fade_curve_dragging, Some((idx, true)) if idx == i);
+        let show_fo_line = mouse_in_fo
+            || matches!(ctx.fade_curve_hovered, Some((idx, false)) if idx == i)
+            || matches!(ctx.fade_curve_dragging, Some((idx, false)) if idx == i);
+        verts.extend(ui::waveform::build_fade_curve_triangles(wf, camera, show_fi_line, show_fo_line));
     }
 }
 
@@ -906,6 +1194,8 @@ fn target_rect(
     objects: &[CanvasObject],
     waveforms: &[WaveformView],
     effect_regions: &[effects::EffectRegion],
+    loop_regions: &[LoopRegion],
+    export_regions: &[ExportRegion],
     components: &[component::ComponentDef],
     component_instances: &[component::ComponentInstance],
     component_map: &std::collections::HashMap<component::ComponentId, usize>,
@@ -915,6 +1205,8 @@ fn target_rect(
         HitTarget::Object(i) => (objects[*i].position, objects[*i].size),
         HitTarget::Waveform(i) => (waveforms[*i].position, waveforms[*i].size),
         HitTarget::EffectRegion(i) => (effect_regions[*i].position, effect_regions[*i].size),
+        HitTarget::LoopRegion(i) => (loop_regions[*i].position, loop_regions[*i].size),
+        HitTarget::ExportRegion(i) => (export_regions[*i].position, export_regions[*i].size),
         HitTarget::ComponentDef(i) => (components[*i].position, components[*i].size),
         HitTarget::ComponentInstance(i) => {
             let inst = &component_instances[*i];
@@ -962,6 +1254,7 @@ struct App {
     mouse_pos: [f32; 2],
     hovered: Option<HitTarget>,
     fade_handle_hovered: Option<(usize, bool)>,
+    fade_curve_hovered: Option<(usize, bool)>,
     file_hovering: bool,
     modifiers: ModifiersState,
     command_palette: Option<CommandPalette>,
@@ -980,13 +1273,19 @@ struct App {
     next_component_id: component::ComponentId,
     plugin_registry: effects::PluginRegistry,
     plugin_browser: browser::PluginBrowserSection,
-    export_region: Option<ExportRegion>,
+    export_regions: Vec<ExportRegion>,
     export_hover: ExportHover,
+    loop_regions: Vec<LoopRegion>,
+    loop_hover: LoopHover,
+    select_area: Option<SelectArea>,
     component_def_hover: ComponentDefHover,
     effect_region_hover: EffectRegionHover,
     editing_component: Option<usize>,
     editing_effect_name: Option<(usize, String)>,
     editing_waveform_name: Option<(usize, String)>,
+    bpm: f32,
+    editing_bpm: Option<String>,
+    dragging_bpm: Option<(f32, f32)>,
     last_click_time: std::time::Instant,
     last_click_world: [f32; 2],
     clipboard: Clipboard,
@@ -1059,9 +1358,11 @@ impl App {
             browser_visible,
             browser_expanded,
             stored_effect_regions,
+            stored_loop_regions,
             stored_components,
             stored_component_instances,
             audio_clips,
+            loaded_bpm,
         ) = match loaded {
             Some(state) => {
                 println!(
@@ -1110,6 +1411,8 @@ impl App {
                         border_radius: sw.border_radius,
                         fade_in_px: sw.fade_in_px,
                         fade_out_px: sw.fade_out_px,
+                        fade_in_curve: sw.fade_in_curve,
+                        fade_out_curve: sw.fade_out_curve,
                         volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
                         disabled: sw.disabled,
                     })
@@ -1172,9 +1475,11 @@ impl App {
                     state.browser_visible,
                     Some(expanded),
                     state.effect_regions,
+                    state.loop_regions,
                     state.components,
                     state.component_instances,
                     audio_clips,
+                    if state.bpm > 0.0 { state.bpm } else { DEFAULT_BPM },
                 )
             }
             None => {
@@ -1192,6 +1497,8 @@ impl App {
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
+                    Vec::new(),
+                    DEFAULT_BPM,
                 )
             }
         };
@@ -1253,6 +1560,15 @@ impl App {
 
         let plugin_browser = browser::PluginBrowserSection::new();
 
+        let restored_loop_regions: Vec<LoopRegion> = stored_loop_regions
+            .into_iter()
+            .map(|slr| LoopRegion {
+                position: slr.position,
+                size: slr.size,
+                enabled: slr.enabled,
+            })
+            .collect();
+
         let restored_components: Vec<component::ComponentDef> = stored_components
             .into_iter()
             .map(|sc| component::ComponentDef {
@@ -1287,6 +1603,7 @@ impl App {
             mouse_pos: [0.0; 2],
             hovered: None,
             fade_handle_hovered: None,
+            fade_curve_hovered: None,
             file_hovering: false,
             modifiers: ModifiersState::empty(),
             command_palette: None,
@@ -1305,13 +1622,19 @@ impl App {
             next_component_id,
             plugin_registry,
             plugin_browser,
-            export_region: None,
+            export_regions: Vec::new(),
             export_hover: ExportHover::None,
+            loop_regions: restored_loop_regions,
+            loop_hover: LoopHover::None,
+            select_area: None,
             component_def_hover: ComponentDefHover::None,
             effect_region_hover: EffectRegionHover::None,
             editing_component: None,
             editing_effect_name: None,
             editing_waveform_name: None,
+            bpm: loaded_bpm,
+            editing_bpm: None,
+            dragging_bpm: None,
             last_click_time: std::time::Instant::now(),
             last_click_world: [0.0; 2],
             clipboard: Clipboard::new(),
@@ -1376,6 +1699,8 @@ impl App {
                     filename: wf.audio.filename.clone(),
                     fade_in_px: wf.fade_in_px,
                     fade_out_px: wf.fade_out_px,
+                    fade_in_curve: wf.fade_in_curve,
+                    fade_out_curve: wf.fade_out_curve,
                     sample_rate: wf.audio.sample_rate,
                     volume: wf.volume,
                     disabled: wf.disabled,
@@ -1403,8 +1728,18 @@ impl App {
                     .map(|p| p.to_string_lossy().to_string())
                     .collect(),
                 effect_regions: stored_regions,
+                loop_regions: self
+                    .loop_regions
+                    .iter()
+                    .map(|lr| storage::StoredLoopRegion {
+                        position: lr.position,
+                        size: lr.size,
+                        enabled: lr.enabled,
+                    })
+                    .collect(),
                 components: stored_components,
                 component_instances: stored_instances,
+                bpm: self.bpm,
             };
             storage.save_project_state(state);
 
@@ -1534,10 +1869,13 @@ impl App {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.camera = Camera::new();
-        self.export_region = None;
+        self.export_regions.clear();
+        self.loop_regions.clear();
         self.editing_component = None;
         self.editing_effect_name = None;
         self.editing_waveform_name = None;
+        self.editing_bpm = None;
+        self.dragging_bpm = None;
         self.command_palette = None;
         self.context_menu = None;
 
@@ -1614,6 +1952,8 @@ impl App {
                 border_radius: sw.border_radius,
                 fade_in_px: sw.fade_in_px,
                 fade_out_px: sw.fade_out_px,
+                fade_in_curve: sw.fade_in_curve,
+                fade_out_curve: sw.fade_out_curve,
                 volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
                 disabled: sw.disabled,
             })
@@ -1703,6 +2043,7 @@ impl App {
             })
             .collect();
         self.next_component_id = self.components.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        self.bpm = if state.bpm > 0.0 { state.bpm } else { DEFAULT_BPM };
 
         self.sample_browser = if !state.browser_expanded.is_empty() {
             let folders: Vec<PathBuf> = state.browser_folders.iter().map(PathBuf::from).collect();
@@ -1726,10 +2067,13 @@ impl App {
         self.selected.clear();
         self.undo_stack.clear();
         self.redo_stack.clear();
-        self.export_region = None;
+        self.export_regions.clear();
+        self.loop_regions.clear();
         self.editing_component = None;
         self.editing_effect_name = None;
         self.editing_waveform_name = None;
+        self.editing_bpm = None;
+        self.dragging_bpm = None;
         self.command_palette = None;
         self.context_menu = None;
 
@@ -1777,6 +2121,23 @@ impl App {
                     name: er.name.clone(),
                 })
                 .collect(),
+            loop_regions: self
+                .loop_regions
+                .iter()
+                .map(|lr| LoopRegionSnapshot {
+                    position: lr.position,
+                    size: lr.size,
+                    enabled: lr.enabled,
+                })
+                .collect(),
+            export_regions: self
+                .export_regions
+                .iter()
+                .map(|xr| ExportRegionSnapshot {
+                    position: xr.position,
+                    size: xr.size,
+                })
+                .collect(),
             components: self.components.clone(),
             component_instances: self.component_instances.clone(),
         }
@@ -1798,11 +2159,14 @@ impl App {
             self.waveforms = prev.waveforms;
             self.audio_clips = prev.audio_clips;
             self.restore_effect_regions(prev.effect_regions);
+            self.restore_loop_regions(prev.loop_regions);
+            self.restore_export_regions(prev.export_regions);
             self.components = prev.components;
             self.component_instances = prev.component_instances;
             self.selected.clear();
             self.mark_dirty();
             self.sync_audio_clips();
+            self.sync_loop_region();
             self.request_redraw();
         }
     }
@@ -1814,11 +2178,14 @@ impl App {
             self.waveforms = next.waveforms;
             self.audio_clips = next.audio_clips;
             self.restore_effect_regions(next.effect_regions);
+            self.restore_loop_regions(next.loop_regions);
+            self.restore_export_regions(next.export_regions);
             self.components = next.components;
             self.component_instances = next.component_instances;
             self.selected.clear();
             self.mark_dirty();
             self.sync_audio_clips();
+            self.sync_loop_region();
             self.request_redraw();
         }
     }
@@ -1848,6 +2215,27 @@ impl App {
             .collect();
     }
 
+    fn restore_loop_regions(&mut self, snapshots: Vec<LoopRegionSnapshot>) {
+        self.loop_regions = snapshots
+            .into_iter()
+            .map(|snap| LoopRegion {
+                position: snap.position,
+                size: snap.size,
+                enabled: snap.enabled,
+            })
+            .collect();
+    }
+
+    fn restore_export_regions(&mut self, snapshots: Vec<ExportRegionSnapshot>) {
+        self.export_regions = snapshots
+            .into_iter()
+            .map(|snap| ExportRegion {
+                position: snap.position,
+                size: snap.size,
+            })
+            .collect();
+    }
+
     fn update_component_bounds(&mut self, comp_idx: usize) {
         if comp_idx >= self.components.len() {
             return;
@@ -1868,6 +2256,8 @@ impl App {
             let mut clips: Vec<&AudioClipData> = Vec::new();
             let mut fade_ins: Vec<f32> = Vec::new();
             let mut fade_outs: Vec<f32> = Vec::new();
+            let mut fade_in_curves: Vec<f32> = Vec::new();
+            let mut fade_out_curves: Vec<f32> = Vec::new();
             let mut volumes: Vec<f32> = Vec::new();
 
             for (i, wf) in self.waveforms.iter().enumerate() {
@@ -1879,6 +2269,8 @@ impl App {
                 clips.push(&self.audio_clips[i]);
                 fade_ins.push(wf.fade_in_px);
                 fade_outs.push(wf.fade_out_px);
+                fade_in_curves.push(wf.fade_in_curve);
+                fade_out_curves.push(wf.fade_out_curve);
                 volumes.push(wf.volume);
             }
 
@@ -1907,6 +2299,8 @@ impl App {
                             clips.push(&self.audio_clips[wf_idx]);
                             fade_ins.push(wf.fade_in_px);
                             fade_outs.push(wf.fade_out_px);
+                            fade_in_curves.push(wf.fade_in_curve);
+                            fade_out_curves.push(wf.fade_out_curve);
                             volumes.push(wf.volume);
                         }
                     }
@@ -1914,7 +2308,7 @@ impl App {
             }
 
             let owned_clips: Vec<AudioClipData> = clips.iter().map(|c| (*c).clone()).collect();
-            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &volumes);
+            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes);
 
             let regions: Vec<audio::AudioEffectRegion> = self
                 .effect_regions
@@ -1928,6 +2322,53 @@ impl App {
                 })
                 .collect();
             engine.update_effect_regions(regions);
+        }
+    }
+
+    fn add_loop_area(&mut self) {
+        self.push_undo();
+        let (pos, size) = if let Some(sa) = self.select_area.take() {
+            let x0 = snap_to_grid(sa.position[0], &self.settings, self.camera.zoom, self.bpm);
+            let x1 = snap_to_grid(sa.position[0] + sa.size[0], &self.settings, self.camera.zoom, self.bpm);
+            ([x0, sa.position[1]], [x1 - x0, sa.size[1]])
+        } else {
+            let (sw, sh, _) = self.screen_info();
+            let center = self.camera.screen_to_world([sw * 0.5, sh * 0.5]);
+            let w = LOOP_REGION_DEFAULT_WIDTH;
+            let h = LOOP_REGION_DEFAULT_HEIGHT;
+            ([center[0] - w * 0.5, center[1] - h * 0.5], [w, h])
+        };
+        self.loop_regions.push(LoopRegion {
+            position: pos,
+            size,
+            enabled: true,
+        });
+        let idx = self.loop_regions.len() - 1;
+        self.selected.clear();
+        self.selected.push(HitTarget::LoopRegion(idx));
+        self.sync_loop_region();
+        self.mark_dirty();
+        self.request_redraw();
+    }
+
+    fn sync_loop_region(&self) {
+        if let Some(engine) = &self.audio_engine {
+            let regions: Vec<(f64, f64)> = self
+                .loop_regions
+                .iter()
+                .filter(|lr| lr.enabled)
+                .map(|lr| {
+                    let start = lr.position[0] as f64 / audio::PIXELS_PER_SECOND as f64;
+                    let end = (lr.position[0] + lr.size[0]) as f64 / audio::PIXELS_PER_SECOND as f64;
+                    (start, end)
+                })
+                .collect();
+            if let Some(&(start, end)) = regions.first() {
+                engine.set_loop_region(start, end);
+                engine.set_loop_enabled(true);
+            } else {
+                engine.set_loop_enabled(false);
+            }
         }
     }
 
@@ -1995,6 +2436,8 @@ impl App {
                 border_radius: 8.0,
                 fade_in_px: 0.0,
                 fade_out_px: 0.0,
+                fade_in_curve: 0.0,
+                fade_out_curve: 0.0,
                 volume: 1.0,
                 disabled: false,
             });
@@ -2038,7 +2481,7 @@ impl App {
     }
 
     fn trigger_export_render(&mut self) {
-        let er = match &self.export_region {
+        let er = match self.export_regions.first() {
             Some(er) => er,
             None => return,
         };
@@ -2077,6 +2520,8 @@ impl App {
                 height: wf.size[1],
                 fade_in_secs: (wf.fade_in_px / audio::PIXELS_PER_SECOND) as f64,
                 fade_out_secs: (wf.fade_out_px / audio::PIXELS_PER_SECOND) as f64,
+                fade_in_curve: wf.fade_in_curve,
+                fade_out_curve: wf.fade_out_curve,
                 volume: wf.volume,
             })
             .collect();
@@ -2123,7 +2568,6 @@ impl App {
                     DragState::DraggingFromBrowser { .. } => CursorIcon::Grabbing,
                     DragState::DraggingPlugin { .. } => CursorIcon::Grabbing,
                     DragState::ResizingBrowser => CursorIcon::EwResize,
-                    DragState::MovingExportRegion { .. } => CursorIcon::Grabbing,
                     DragState::ResizingExportRegion { nwse, .. } => {
                         if *nwse {
                             CursorIcon::NwseResize
@@ -2132,6 +2576,7 @@ impl App {
                         }
                     }
                     DragState::DraggingFade { .. } => CursorIcon::EwResize,
+                    DragState::DraggingFadeCurve { .. } => CursorIcon::NsResize,
                     DragState::ResizingComponentDef { nwse, .. } => {
                         if *nwse {
                             CursorIcon::NwseResize
@@ -2146,12 +2591,26 @@ impl App {
                             CursorIcon::NeswResize
                         }
                     }
+                    DragState::ResizingLoopRegion { nwse, .. } => {
+                        if *nwse {
+                            CursorIcon::NwseResize
+                        } else {
+                            CursorIcon::NeswResize
+                        }
+                    }
                     DragState::None => {
                         if self.sample_browser.visible && self.sample_browser.resize_hovered {
                             CursorIcon::EwResize
                         } else if self.fade_handle_hovered.is_some() {
                             CursorIcon::EwResize
+                        } else if self.fade_curve_hovered.is_some() {
+                            CursorIcon::NsResize
                         } else if self.command_palette.is_some() {
+                            CursorIcon::Default
+                        } else if {
+                            let (sw, sh, sc) = self.screen_info();
+                            TransportPanel::hit_bpm(self.mouse_pos, sw, sh, sc)
+                        } {
                             CursorIcon::Default
                         } else {
                             match self.component_def_hover {
@@ -2168,21 +2627,28 @@ impl App {
                                     | EffectRegionHover::CornerSW(_) => CursorIcon::NeswResize,
                                     EffectRegionHover::PluginLabel(_, _) => CursorIcon::Pointer,
                                     EffectRegionHover::None => match self.export_hover {
-                                        ExportHover::CornerNW | ExportHover::CornerSE => {
+                                        ExportHover::CornerNW(_) | ExportHover::CornerSE(_) => {
                                             CursorIcon::NwseResize
                                         }
-                                        ExportHover::CornerNE | ExportHover::CornerSW => {
+                                        ExportHover::CornerNE(_) | ExportHover::CornerSW(_) => {
                                             CursorIcon::NeswResize
                                         }
-                                        ExportHover::RenderPill => CursorIcon::Pointer,
-                                        ExportHover::Body => CursorIcon::Grab,
-                                        ExportHover::None => {
-                                            if self.hovered.is_some() {
-                                                CursorIcon::Grab
-                                            } else {
-                                                CursorIcon::Default
+                                        ExportHover::RenderPill(_) => CursorIcon::Pointer,
+                                        ExportHover::None => match self.loop_hover {
+                                            LoopHover::CornerNW(_) | LoopHover::CornerSE(_) => {
+                                                CursorIcon::NwseResize
                                             }
-                                        }
+                                            LoopHover::CornerNE(_) | LoopHover::CornerSW(_) => {
+                                                CursorIcon::NeswResize
+                                            }
+                                            LoopHover::None => {
+                                                if self.hovered.is_some() {
+                                                    CursorIcon::Grab
+                                                } else {
+                                                    CursorIcon::Default
+                                                }
+                                            }
+                                        },
                                     },
                                 },
                             }
@@ -2202,10 +2668,17 @@ impl App {
         }
         let world = self.camera.screen_to_world(self.mouse_pos);
         self.fade_handle_hovered = hit_test_fade_handle(&self.waveforms, world, &self.camera);
+        self.fade_curve_hovered = if self.fade_handle_hovered.is_none() {
+            hit_test_fade_curve_dot(&self.waveforms, world, &self.camera)
+        } else {
+            None
+        };
         self.hovered = hit_test(
             &self.objects,
             &self.waveforms,
             &self.effect_regions,
+            &self.loop_regions,
+            &self.export_regions,
             &self.components,
             &self.component_instances,
             self.editing_component,
@@ -2273,34 +2746,61 @@ impl App {
         }
 
         self.export_hover = ExportHover::None;
-        if let Some(ref er) = self.export_region {
+        for (i, er) in self.export_regions.iter().enumerate() {
             let handle_sz = 12.0 / self.camera.zoom;
             let hs = handle_sz * 0.5;
             let p = er.position;
             let s = er.size;
 
             if point_in_rect(world, [p[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
-                self.export_hover = ExportHover::CornerNW;
+                self.export_hover = ExportHover::CornerNW(i);
+                break;
             } else if point_in_rect(world, [p[0] + s[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
-                self.export_hover = ExportHover::CornerNE;
+                self.export_hover = ExportHover::CornerNE(i);
+                break;
             } else if point_in_rect(world, [p[0] - hs, p[1] + s[1] - hs], [handle_sz, handle_sz]) {
-                self.export_hover = ExportHover::CornerSW;
+                self.export_hover = ExportHover::CornerSW(i);
+                break;
             } else if point_in_rect(
                 world,
                 [p[0] + s[0] - hs, p[1] + s[1] - hs],
                 [handle_sz, handle_sz],
             ) {
-                self.export_hover = ExportHover::CornerSE;
+                self.export_hover = ExportHover::CornerSE(i);
+                break;
             } else {
                 let pill_w = EXPORT_RENDER_PILL_W / self.camera.zoom;
                 let pill_h = EXPORT_RENDER_PILL_H / self.camera.zoom;
                 let pill_x = p[0] + 4.0 / self.camera.zoom;
                 let pill_y = p[1] + 4.0 / self.camera.zoom;
                 if point_in_rect(world, [pill_x, pill_y], [pill_w, pill_h]) {
-                    self.export_hover = ExportHover::RenderPill;
-                } else if point_in_rect(world, p, s) {
-                    self.export_hover = ExportHover::Body;
+                    self.export_hover = ExportHover::RenderPill(i);
+                    break;
                 }
+            }
+        }
+
+        self.loop_hover = LoopHover::None;
+        for (i, lr) in self.loop_regions.iter().enumerate() {
+            if !lr.enabled {
+                continue;
+            }
+            let handle_sz = 12.0 / self.camera.zoom;
+            let hs = handle_sz * 0.5;
+            let p = lr.position;
+            let s = lr.size;
+            if point_in_rect(world, [p[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
+                self.loop_hover = LoopHover::CornerNW(i);
+                break;
+            } else if point_in_rect(world, [p[0] + s[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
+                self.loop_hover = LoopHover::CornerNE(i);
+                break;
+            } else if point_in_rect(world, [p[0] - hs, p[1] + s[1] - hs], [handle_sz, handle_sz]) {
+                self.loop_hover = LoopHover::CornerSW(i);
+                break;
+            } else if point_in_rect(world, [p[0] + s[0] - hs, p[1] + s[1] - hs], [handle_sz, handle_sz]) {
+                self.loop_hover = LoopHover::CornerSE(i);
+                break;
             }
         }
 
@@ -2323,12 +2823,13 @@ impl App {
             HitTarget::Object(i) => self.objects[*i].position = pos,
             HitTarget::Waveform(i) => self.waveforms[*i].position = pos,
             HitTarget::EffectRegion(i) => self.effect_regions[*i].position = pos,
+            HitTarget::LoopRegion(i) => self.loop_regions[*i].position = pos,
+            HitTarget::ExportRegion(i) => self.export_regions[*i].position = pos,
             HitTarget::ComponentDef(i) => {
                 let old_pos = self.components[*i].position;
                 let dx = pos[0] - old_pos[0];
                 let dy = pos[1] - old_pos[1];
                 self.components[*i].position = pos;
-                // Move all waveforms that belong to this component
                 for &wf_idx in &self.components[*i].waveform_indices.clone() {
                     if wf_idx < self.waveforms.len() {
                         self.waveforms[wf_idx].position[0] += dx;
@@ -2345,6 +2846,8 @@ impl App {
             HitTarget::Object(i) => self.objects[*i].position,
             HitTarget::Waveform(i) => self.waveforms[*i].position,
             HitTarget::EffectRegion(i) => self.effect_regions[*i].position,
+            HitTarget::LoopRegion(i) => self.loop_regions[*i].position,
+            HitTarget::ExportRegion(i) => self.export_regions[*i].position,
             HitTarget::ComponentDef(i) => self.components[*i].position,
             HitTarget::ComponentInstance(i) => self.component_instances[*i].position,
         }
@@ -2382,6 +2885,22 @@ impl App {
                             self.effect_regions.push(er);
                             new_selected
                                 .push(HitTarget::EffectRegion(self.effect_regions.len() - 1));
+                        }
+                    }
+                    HitTarget::LoopRegion(i) => {
+                        if i < self.loop_regions.len() {
+                            let lr = self.loop_regions[i].clone();
+                            self.loop_regions.push(lr);
+                            new_selected
+                                .push(HitTarget::LoopRegion(self.loop_regions.len() - 1));
+                        }
+                    }
+                    HitTarget::ExportRegion(i) => {
+                        if i < self.export_regions.len() {
+                            let xr = self.export_regions[i].clone();
+                            self.export_regions.push(xr);
+                            new_selected
+                                .push(HitTarget::ExportRegion(self.export_regions.len() - 1));
                         }
                     }
                     HitTarget::ComponentInstance(i) => {
@@ -2472,6 +2991,9 @@ impl App {
                 }
                 for i in 0..self.effect_regions.len() {
                     self.selected.push(HitTarget::EffectRegion(i));
+                }
+                for i in 0..self.loop_regions.len() {
+                    self.selected.push(HitTarget::LoopRegion(i));
                 }
                 for i in 0..self.components.len() {
                     self.selected.push(HitTarget::ComponentDef(i));
@@ -2681,8 +3203,169 @@ impl App {
                     }
                 }
             }
+            CommandAction::SplitSample => {
+                self.split_sample_at_cursor();
+            }
+            CommandAction::AddLoopArea => {
+                self.add_loop_area();
+            }
         }
         self.request_redraw();
+    }
+
+    fn split_sample_at_cursor(&mut self) {
+        let world = self.camera.screen_to_world(self.mouse_pos);
+        let hit = hit_test(
+            &self.objects,
+            &self.waveforms,
+            &self.effect_regions,
+            &self.loop_regions,
+            &self.export_regions,
+            &self.components,
+            &self.component_instances,
+            self.editing_component,
+            world,
+            &self.camera,
+        );
+        let wf_idx = match hit {
+            Some(HitTarget::Waveform(i)) => i,
+            _ => return,
+        };
+        if wf_idx >= self.waveforms.len() || wf_idx >= self.audio_clips.len() {
+            return;
+        }
+
+        let pos = self.waveforms[wf_idx].position;
+        let size = self.waveforms[wf_idx].size;
+        let split_x = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
+        let t = ((split_x - pos[0]) / size[0]).clamp(0.01, 0.99);
+
+        let audio = Arc::clone(&self.waveforms[wf_idx].audio);
+        let mono_samples = Arc::clone(&self.audio_clips[wf_idx].samples);
+        let total_mono = mono_samples.len();
+        if total_mono == 0 {
+            return;
+        }
+
+        let split_mono = (t * total_mono as f32) as usize;
+        let split_left = (t * audio.left_samples.len() as f32) as usize;
+        let split_right = (t * audio.right_samples.len() as f32) as usize;
+
+        let orig_color = self.waveforms[wf_idx].color;
+        let orig_border_radius = self.waveforms[wf_idx].border_radius;
+        let orig_fade_in = self.waveforms[wf_idx].fade_in_px;
+        let orig_fade_out = self.waveforms[wf_idx].fade_out_px;
+        let orig_fade_in_curve = self.waveforms[wf_idx].fade_in_curve;
+        let orig_fade_out_curve = self.waveforms[wf_idx].fade_out_curve;
+        let orig_volume = self.waveforms[wf_idx].volume;
+
+        self.push_undo();
+
+        let sample_rate = audio.sample_rate;
+        let filename = audio.filename.clone();
+
+        let left_mono: Vec<f32> = mono_samples[..split_mono].to_vec();
+        let right_mono: Vec<f32> = mono_samples[split_mono..].to_vec();
+        let left_l: Vec<f32> = audio.left_samples[..split_left].to_vec();
+        let left_r: Vec<f32> = audio.right_samples[..split_right].to_vec();
+        let right_l: Vec<f32> = audio.left_samples[split_left..].to_vec();
+        let right_r: Vec<f32> = audio.right_samples[split_right..].to_vec();
+
+        let left_duration = left_mono.len() as f32 / sample_rate as f32;
+        let right_duration = right_mono.len() as f32 / sample_rate as f32;
+        let left_width = left_duration * PIXELS_PER_SECOND;
+        let right_width = right_duration * PIXELS_PER_SECOND;
+
+        let left_clip = AudioClipData {
+            samples: Arc::new(left_mono.clone()),
+            sample_rate,
+            duration_secs: left_duration,
+        };
+        let left_audio = Arc::new(AudioData {
+            left_peaks: Arc::new(WaveformPeaks::build(&left_l)),
+            right_peaks: Arc::new(WaveformPeaks::build(&left_r)),
+            left_samples: Arc::new(left_l),
+            right_samples: Arc::new(left_r),
+            sample_rate,
+            filename: filename.clone(),
+        });
+        let left_waveform = WaveformView {
+            audio: left_audio,
+            position: pos,
+            size: [left_width, size[1]],
+            color: orig_color,
+            border_radius: orig_border_radius,
+            fade_in_px: orig_fade_in,
+            fade_out_px: 0.0,
+            fade_in_curve: orig_fade_in_curve,
+            fade_out_curve: 0.0,
+            volume: orig_volume,
+            disabled: false,
+        };
+
+        let right_clip = AudioClipData {
+            samples: Arc::new(right_mono.clone()),
+            sample_rate,
+            duration_secs: right_duration,
+        };
+        let right_audio = Arc::new(AudioData {
+            left_peaks: Arc::new(WaveformPeaks::build(&right_l)),
+            right_peaks: Arc::new(WaveformPeaks::build(&right_r)),
+            left_samples: Arc::new(right_l),
+            right_samples: Arc::new(right_r),
+            sample_rate,
+            filename,
+        });
+        let right_waveform = WaveformView {
+            audio: right_audio,
+            position: [pos[0] + left_width, pos[1]],
+            size: [right_width, size[1]],
+            color: orig_color,
+            border_radius: orig_border_radius,
+            fade_in_px: 0.0,
+            fade_out_px: orig_fade_out,
+            fade_in_curve: 0.0,
+            fade_out_curve: orig_fade_out_curve,
+            volume: orig_volume,
+            disabled: false,
+        };
+
+        self.waveforms[wf_idx] = left_waveform;
+        self.audio_clips[wf_idx] = left_clip;
+        self.waveforms.insert(wf_idx + 1, right_waveform);
+        self.audio_clips.insert(wf_idx + 1, right_clip);
+
+        // Fix up indices in component waveform_indices
+        for comp in &mut self.components {
+            let mut new_indices = Vec::new();
+            for &wi in &comp.waveform_indices {
+                if wi == wf_idx {
+                    new_indices.push(wi);
+                    new_indices.push(wi + 1);
+                } else if wi > wf_idx {
+                    new_indices.push(wi + 1);
+                } else {
+                    new_indices.push(wi);
+                }
+            }
+            comp.waveform_indices = new_indices;
+        }
+
+        // Fix up selected indices
+        let mut new_selected: Vec<HitTarget> = Vec::new();
+        for t in &self.selected {
+            match t {
+                HitTarget::Waveform(i) if *i > wf_idx => {
+                    new_selected.push(HitTarget::Waveform(i + 1));
+                }
+                other => new_selected.push(*other),
+            }
+        }
+        new_selected.push(HitTarget::Waveform(wf_idx + 1));
+        self.selected = new_selected;
+
+        self.sync_audio_clips();
+        self.mark_dirty();
     }
 
     fn create_component_from_selection(&mut self) {
@@ -2883,6 +3566,22 @@ impl App {
                         new_selected.push(HitTarget::EffectRegion(self.effect_regions.len() - 1));
                     }
                 }
+                HitTarget::LoopRegion(i) => {
+                    if i < self.loop_regions.len() {
+                        let mut lr = self.loop_regions[i].clone();
+                        lr.position[0] += lr.size[0];
+                        self.loop_regions.push(lr);
+                        new_selected.push(HitTarget::LoopRegion(self.loop_regions.len() - 1));
+                    }
+                }
+                HitTarget::ExportRegion(i) => {
+                    if i < self.export_regions.len() {
+                        let mut xr = self.export_regions[i].clone();
+                        xr.position[0] += xr.size[0];
+                        self.export_regions.push(xr);
+                        new_selected.push(HitTarget::ExportRegion(self.export_regions.len() - 1));
+                    }
+                }
                 HitTarget::Object(i) => {
                     if i < self.objects.len() {
                         let mut obj = self.objects[i].clone();
@@ -2926,6 +3625,20 @@ impl App {
                         self.clipboard
                             .items
                             .push(ClipboardItem::EffectRegion(self.effect_regions[*i].clone()));
+                    }
+                }
+                HitTarget::LoopRegion(i) => {
+                    if *i < self.loop_regions.len() {
+                        self.clipboard
+                            .items
+                            .push(ClipboardItem::LoopRegion(self.loop_regions[*i].clone()));
+                    }
+                }
+                HitTarget::ExportRegion(i) => {
+                    if *i < self.export_regions.len() {
+                        self.clipboard
+                            .items
+                            .push(ClipboardItem::ExportRegion(self.export_regions[*i].clone()));
                     }
                 }
                 HitTarget::ComponentDef(i) => {
@@ -2977,6 +3690,8 @@ impl App {
                 ClipboardItem::Object(o) => o.position,
                 ClipboardItem::Waveform(w, _) => w.position,
                 ClipboardItem::EffectRegion(e) => e.position,
+                ClipboardItem::LoopRegion(l) => l.position,
+                ClipboardItem::ExportRegion(x) => x.position,
                 ClipboardItem::ComponentDef(d, _) => d.position,
                 ClipboardItem::ComponentInstance(ci) => ci.position,
             };
@@ -3022,6 +3737,18 @@ impl App {
                     e.position[1] += dy;
                     self.effect_regions.push(e);
                     new_selected.push(HitTarget::EffectRegion(self.effect_regions.len() - 1));
+                }
+                ClipboardItem::LoopRegion(mut l) => {
+                    l.position[0] += dx;
+                    l.position[1] += dy;
+                    self.loop_regions.push(l);
+                    new_selected.push(HitTarget::LoopRegion(self.loop_regions.len() - 1));
+                }
+                ClipboardItem::ExportRegion(mut x) => {
+                    x.position[0] += dx;
+                    x.position[1] += dy;
+                    self.export_regions.push(x);
+                    new_selected.push(HitTarget::ExportRegion(self.export_regions.len() - 1));
                 }
                 ClipboardItem::ComponentDef(mut d, wfs) => {
                     let new_id = self.next_component_id;
@@ -3096,6 +3823,22 @@ impl App {
                 _ => None,
             })
             .collect();
+        let mut lr_indices: Vec<usize> = self
+            .selected
+            .iter()
+            .filter_map(|t| match t {
+                HitTarget::LoopRegion(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
+        let mut xr_indices: Vec<usize> = self
+            .selected
+            .iter()
+            .filter_map(|t| match t {
+                HitTarget::ExportRegion(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
         let mut comp_indices: Vec<usize> = self
             .selected
             .iter()
@@ -3116,6 +3859,8 @@ impl App {
         obj_indices.sort_unstable_by(|a, b| b.cmp(a));
         wf_indices.sort_unstable_by(|a, b| b.cmp(a));
         er_indices.sort_unstable_by(|a, b| b.cmp(a));
+        lr_indices.sort_unstable_by(|a, b| b.cmp(a));
+        xr_indices.sort_unstable_by(|a, b| b.cmp(a));
         comp_indices.sort_unstable_by(|a, b| b.cmp(a));
         inst_indices.sort_unstable_by(|a, b| b.cmp(a));
 
@@ -3175,9 +3920,20 @@ impl App {
                 self.effect_regions.remove(i);
             }
         }
+        for &i in &lr_indices {
+            if i < self.loop_regions.len() {
+                self.loop_regions.remove(i);
+            }
+        }
+        for &i in &xr_indices {
+            if i < self.export_regions.len() {
+                self.export_regions.remove(i);
+            }
+        }
 
         self.selected.clear();
         self.sync_audio_clips();
+        self.sync_loop_region();
         println!("Deleted selected items");
     }
 
@@ -3225,6 +3981,8 @@ impl App {
                 border_radius: 8.0,
                 fade_in_px: 0.0,
                 fade_out_px: 0.0,
+                fade_in_curve: 0.0,
+                fade_out_curve: 0.0,
                 volume: 1.0,
                 disabled: false,
             });
@@ -3485,6 +4243,8 @@ impl ApplicationHandler for App {
                             border_radius: 8.0,
                             fade_in_px: 0.0,
                             fade_out_px: 0.0,
+                            fade_in_curve: 0.0,
+                            fade_out_curve: 0.0,
                             volume: 1.0,
                             disabled: false,
                         });
@@ -3572,6 +4332,15 @@ impl ApplicationHandler for App {
                             sw.update_hover(pos, scr_w, scr_h, scale);
                         }
                     }
+                }
+
+                if let Some((initial_bpm, initial_y)) = self.dragging_bpm {
+                    let dy = initial_y - self.mouse_pos[1];
+                    let new_bpm = (initial_bpm + dy * 0.5).clamp(20.0, 999.0);
+                    self.bpm = new_bpm;
+                    self.mark_dirty();
+                    self.request_redraw();
+                    return;
                 }
 
                 if self.context_menu.is_some() {
@@ -3679,16 +4448,18 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing export region
-                if let DragState::ResizingExportRegion { anchor, .. } = self.drag {
+                if let DragState::ResizingExportRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if let Some(ref mut er) = self.export_region {
+                    if region_idx < self.export_regions.len() {
                         let min_size = 40.0;
-                        let x0 = anchor[0].min(world[0]);
+                        let snapped_wx = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
+                        let snapped_ax = snap_to_grid(anchor[0], &self.settings, self.camera.zoom, self.bpm);
+                        let x0 = snapped_ax.min(snapped_wx);
                         let y0 = anchor[1].min(world[1]);
-                        let x1 = anchor[0].max(world[0]);
+                        let x1 = snapped_ax.max(snapped_wx);
                         let y1 = anchor[1].max(world[1]);
-                        er.position = [x0, y0];
-                        er.size = [(x1 - x0).max(min_size), (y1 - y0).max(min_size)];
+                        self.export_regions[region_idx].position = [x0, y0];
+                        self.export_regions[region_idx].size = [(x1 - x0).max(min_size), (y1 - y0).max(min_size)];
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -3716,12 +4487,21 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Moving export region
-                if let DragState::MovingExportRegion { offset } = self.drag {
+                // Resizing loop region
+                if let DragState::ResizingLoopRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if let Some(ref mut er) = self.export_region {
-                        er.position = [world[0] - offset[0], world[1] - offset[1]];
+                    if region_idx < self.loop_regions.len() {
+                        let min_size = 40.0;
+                        let snapped_wx = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
+                        let snapped_ax = snap_to_grid(anchor[0], &self.settings, self.camera.zoom, self.bpm);
+                        let x0 = snapped_ax.min(snapped_wx);
+                        let y0 = anchor[1].min(world[1]);
+                        let x1 = snapped_ax.max(snapped_wx);
+                        let y1 = anchor[1].max(world[1]);
+                        self.loop_regions[region_idx].position = [x0, y0];
+                        self.loop_regions[region_idx].size = [(x1 - x0).max(min_size), (y1 - y0).max(min_size)];
                     }
+                    self.sync_loop_region();
                     self.mark_dirty();
                     self.request_redraw();
                     return;
@@ -3743,6 +4523,30 @@ impl ApplicationHandler for App {
                             let new_val =
                                 (wf.position[0] + wf.size[0] - world[0]).clamp(0.0, max_fade);
                             wf.fade_out_px = new_val;
+                        }
+                    }
+                    self.mark_dirty();
+                    self.sync_audio_clips();
+                    self.request_redraw();
+                    return;
+                }
+
+                // Dragging fade curve shape
+                if let DragState::DraggingFadeCurve {
+                    waveform_idx,
+                    is_fade_in,
+                    start_mouse_y,
+                    start_curve,
+                } = self.drag
+                {
+                    let dy = self.mouse_pos[1] - start_mouse_y;
+                    let sensitivity = 0.005;
+                    let new_curve = (start_curve - dy * sensitivity).clamp(-1.0, 1.0);
+                    if let Some(wf) = self.waveforms.get_mut(waveform_idx) {
+                        if is_fade_in {
+                            wf.fade_in_curve = new_curve;
+                        } else {
+                            wf.fade_out_curve = new_curve;
                         }
                     }
                     self.mark_dirty();
@@ -3779,12 +4583,14 @@ impl ApplicationHandler for App {
                         let mut needs_sync = false;
                         for (target, offset) in &offsets {
                             let raw_x = world[0] - offset[0];
-                            let snapped_x = snap_to_grid(raw_x, &self.settings, self.camera.zoom);
+                            let snapped_x = snap_to_grid(raw_x, &self.settings, self.camera.zoom, self.bpm);
                             self.set_target_pos(target, [snapped_x, world[1] - offset[1]]);
                             if matches!(
                                 target,
                                 HitTarget::Waveform(_)
                                     | HitTarget::EffectRegion(_)
+                                    | HitTarget::LoopRegion(_)
+                                    | HitTarget::ExportRegion(_)
                                     | HitTarget::ComponentDef(_)
                                     | HitTarget::ComponentInstance(_)
                             ) {
@@ -3796,6 +4602,7 @@ impl ApplicationHandler for App {
                         }
                         if needs_sync {
                             self.sync_audio_clips();
+                            self.sync_loop_region();
                         }
                         self.mark_dirty();
                     }
@@ -3810,6 +4617,8 @@ impl ApplicationHandler for App {
                                     &self.objects,
                                     &self.waveforms,
                                     &self.effect_regions,
+                                    &self.loop_regions,
+                                    &self.export_regions,
                                     &self.components,
                                     &self.component_instances,
                                     self.editing_component,
@@ -3872,6 +4681,8 @@ impl ApplicationHandler for App {
                             &self.objects,
                             &self.waveforms,
                             &self.effect_regions,
+                            &self.loop_regions,
+                            &self.export_regions,
                             &self.components,
                             &self.component_instances,
                             self.editing_component,
@@ -3924,6 +4735,14 @@ impl ApplicationHandler for App {
 
                 MouseButton::Left => match state {
                     ElementState::Pressed => {
+                        if self.editing_bpm.is_some() {
+                            let (sw, sh, scale) = self.screen_info();
+                            if !TransportPanel::hit_bpm(self.mouse_pos, sw, sh, scale) {
+                                self.editing_bpm = None;
+                                self.request_redraw();
+                            }
+                        }
+
                         // Plugin editor click
                         if self.plugin_editor.is_some() {
                             let (scr_w, scr_h, scale) = self.screen_info();
@@ -4247,7 +5066,7 @@ impl ApplicationHandler for App {
                             let (sw, sh, scale) = self.screen_info();
                             if TransportPanel::hit_export_button(self.mouse_pos, sw, sh, scale) {
                                 let center = self.camera.screen_to_world([sw * 0.5, sh * 0.5]);
-                                self.export_region = Some(ExportRegion {
+                                self.export_regions.push(ExportRegion {
                                     position: [
                                         center[0] - EXPORT_REGION_DEFAULT_WIDTH * 0.5,
                                         center[1] - EXPORT_REGION_DEFAULT_HEIGHT * 0.5,
@@ -4291,6 +5110,18 @@ impl ApplicationHandler for App {
                                 if TransportPanel::hit_record_button(self.mouse_pos, sw, sh, scale)
                                 {
                                     self.toggle_recording();
+                                } else if TransportPanel::hit_bpm(self.mouse_pos, sw, sh, scale) {
+                                    let now = std::time::Instant::now();
+                                    let elapsed = now.duration_since(self.last_click_time);
+                                    let is_dbl = elapsed.as_millis() < 400;
+                                    self.last_click_time = now;
+                                    if is_dbl {
+                                        self.editing_bpm = Some(String::new());
+                                        self.dragging_bpm = None;
+                                    } else {
+                                        self.dragging_bpm = Some((self.bpm, self.mouse_pos[1]));
+                                        self.editing_bpm = None;
+                                    }
                                 } else if let Some(engine) = &self.audio_engine {
                                     engine.toggle_playback();
                                 }
@@ -4416,51 +5247,46 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        // --- export region interaction ---
-                        if let Some(ref er) = self.export_region {
+                        // --- export region corner resize ---
+                        {
                             let handle_sz = 12.0 / self.camera.zoom;
-                            // (corner_center, anchor = opposite corner, nwse diagonal?)
-                            let corners: [([f32; 2], [f32; 2], bool); 4] = [
-                                (
-                                    [er.position[0], er.position[1]],
-                                    [er.position[0] + er.size[0], er.position[1] + er.size[1]],
-                                    true,
-                                ),
-                                (
-                                    [er.position[0] + er.size[0], er.position[1]],
-                                    [er.position[0], er.position[1] + er.size[1]],
-                                    false,
-                                ),
-                                (
-                                    [er.position[0], er.position[1] + er.size[1]],
-                                    [er.position[0] + er.size[0], er.position[1]],
-                                    false,
-                                ),
-                                (
-                                    [er.position[0] + er.size[0], er.position[1] + er.size[1]],
-                                    [er.position[0], er.position[1]],
-                                    true,
-                                ),
-                            ];
-                            let mut hit_corner = false;
-                            for (corner, anchor, is_nwse) in &corners {
-                                let hx = corner[0] - handle_sz * 0.5;
-                                let hy = corner[1] - handle_sz * 0.5;
-                                if point_in_rect(world, [hx, hy], [handle_sz, handle_sz]) {
-                                    self.drag = DragState::ResizingExportRegion {
-                                        anchor: *anchor,
-                                        nwse: *is_nwse,
-                                    };
-                                    self.update_cursor();
-                                    self.request_redraw();
-                                    hit_corner = true;
+                            let mut corner_hit: Option<(usize, [f32; 2], bool)> = None;
+                            for (i, er) in self.export_regions.iter().enumerate() {
+                                let p = er.position;
+                                let s = er.size;
+                                let corners: [([f32; 2], [f32; 2], bool); 4] = [
+                                    ([p[0], p[1]], [p[0] + s[0], p[1] + s[1]], true),
+                                    ([p[0] + s[0], p[1]], [p[0], p[1] + s[1]], false),
+                                    ([p[0], p[1] + s[1]], [p[0] + s[0], p[1]], false),
+                                    ([p[0] + s[0], p[1] + s[1]], [p[0], p[1]], true),
+                                ];
+                                for (corner, anchor, is_nwse) in &corners {
+                                    let hx = corner[0] - handle_sz * 0.5;
+                                    let hy = corner[1] - handle_sz * 0.5;
+                                    if point_in_rect(world, [hx, hy], [handle_sz, handle_sz]) {
+                                        corner_hit = Some((i, *anchor, *is_nwse));
+                                        break;
+                                    }
+                                }
+                                if corner_hit.is_some() {
                                     break;
                                 }
                             }
-                            if hit_corner {
+                            if let Some((idx, anchor, nwse)) = corner_hit {
+                                self.push_undo();
+                                self.drag = DragState::ResizingExportRegion {
+                                    region_idx: idx,
+                                    anchor,
+                                    nwse,
+                                };
+                                self.update_cursor();
+                                self.request_redraw();
                                 return;
                             }
+                        }
 
+                        // --- export region render pill click ---
+                        for er in &self.export_regions {
                             let pill_w = EXPORT_RENDER_PILL_W / self.camera.zoom;
                             let pill_h = EXPORT_RENDER_PILL_H / self.camera.zoom;
                             let pill_x = er.position[0] + 4.0 / self.camera.zoom;
@@ -4470,9 +5296,44 @@ impl ApplicationHandler for App {
                                 self.request_redraw();
                                 return;
                             }
-                            if point_in_rect(world, er.position, er.size) {
-                                let offset = [world[0] - er.position[0], world[1] - er.position[1]];
-                                self.drag = DragState::MovingExportRegion { offset };
+                        }
+
+                        // --- loop region corner resize ---
+                        {
+                            let handle_sz = 12.0 / self.camera.zoom;
+                            let mut corner_hit: Option<(usize, [f32; 2], bool)> = None;
+                            for (i, lr) in self.loop_regions.iter().enumerate() {
+                                if !lr.enabled {
+                                    continue;
+                                }
+                                let p = lr.position;
+                                let s = lr.size;
+                                let corners: [([f32; 2], [f32; 2], bool); 4] = [
+                                    ([p[0], p[1]], [p[0] + s[0], p[1] + s[1]], true),
+                                    ([p[0] + s[0], p[1]], [p[0], p[1] + s[1]], false),
+                                    ([p[0], p[1] + s[1]], [p[0] + s[0], p[1]], false),
+                                    ([p[0] + s[0], p[1] + s[1]], [p[0], p[1]], true),
+                                ];
+                                for (corner, anchor, is_nwse) in &corners {
+                                    let hx = corner[0] - handle_sz * 0.5;
+                                    let hy = corner[1] - handle_sz * 0.5;
+                                    if point_in_rect(world, [hx, hy], [handle_sz, handle_sz]) {
+                                        corner_hit = Some((i, *anchor, *is_nwse));
+                                        break;
+                                    }
+                                }
+                                if corner_hit.is_some() {
+                                    break;
+                                }
+                            }
+                            if let Some((idx, anchor, nwse)) = corner_hit {
+                                self.push_undo();
+                                self.drag = DragState::ResizingLoopRegion {
+                                    region_idx: idx,
+                                    anchor,
+                                    nwse,
+                                };
+                                self.update_cursor();
                                 self.request_redraw();
                                 return;
                             }
@@ -4492,10 +5353,30 @@ impl ApplicationHandler for App {
                             return;
                         }
 
+                        // --- fade curve shape drag ---
+                        if let Some((wf_idx, is_fade_in)) =
+                            hit_test_fade_curve_dot(&self.waveforms, world, &self.camera)
+                        {
+                            let wf = &self.waveforms[wf_idx];
+                            let start_curve = if is_fade_in { wf.fade_in_curve } else { wf.fade_out_curve };
+                            self.push_undo();
+                            self.drag = DragState::DraggingFadeCurve {
+                                waveform_idx: wf_idx,
+                                is_fade_in,
+                                start_mouse_y: self.mouse_pos[1],
+                                start_curve,
+                            };
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
                         let hit = hit_test(
                             &self.objects,
                             &self.waveforms,
                             &self.effect_regions,
+                            &self.loop_regions,
+                            &self.export_regions,
                             &self.components,
                             &self.component_instances,
                             self.editing_component,
@@ -4539,6 +5420,8 @@ impl ApplicationHandler for App {
                                         &self.objects,
                                         &self.waveforms,
                                         &self.effect_regions,
+                                        &self.loop_regions,
+                                        &self.export_regions,
                                         &self.components,
                                         &self.component_instances,
                                         None,
@@ -4560,6 +5443,7 @@ impl ApplicationHandler for App {
 
                         match hit {
                             Some(target) => {
+                                self.select_area = None;
                                 if self.selected.contains(&target) {
                                     // Already selected -> drag whole selection
                                 } else {
@@ -4595,6 +5479,14 @@ impl ApplicationHandler for App {
                                 self.request_redraw();
                                 return;
                             }
+                        }
+
+                        if self.dragging_bpm.is_some() {
+                            self.dragging_bpm = None;
+                            self.bpm = self.bpm.round();
+                            self.mark_dirty();
+                            self.request_redraw();
+                            return;
                         }
 
                         if let Some(p) = &mut self.command_palette {
@@ -4634,13 +5526,20 @@ impl ApplicationHandler for App {
                             return;
                         }
 
-                        // --- finish moving/resizing export region ---
-                        if matches!(
-                            self.drag,
-                            DragState::MovingExportRegion { .. }
-                                | DragState::ResizingExportRegion { .. }
-                        ) {
+                        // --- finish resizing export region ---
+                        if matches!(self.drag, DragState::ResizingExportRegion { .. }) {
                             self.drag = DragState::None;
+                            self.update_hover();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // --- finish resizing loop region ---
+                        if matches!(self.drag, DragState::ResizingLoopRegion { .. }) {
+                            self.drag = DragState::None;
+                            self.sync_loop_region();
+                            self.update_hover();
                             self.update_cursor();
                             self.request_redraw();
                             return;
@@ -4648,6 +5547,16 @@ impl ApplicationHandler for App {
 
                         // --- finish fade handle drag ---
                         if matches!(self.drag, DragState::DraggingFade { .. }) {
+                            self.drag = DragState::None;
+                            self.sync_audio_clips();
+                            self.update_hover();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // --- finish fade curve drag ---
+                        if matches!(self.drag, DragState::DraggingFadeCurve { .. }) {
                             self.drag = DragState::None;
                             self.sync_audio_clips();
                             self.update_hover();
@@ -4722,21 +5631,38 @@ impl ApplicationHandler for App {
                             let min_sz = 5.0 / self.camera.zoom;
                             if rs[0] < min_sz && rs[1] < min_sz {
                                 self.selected.clear();
+                                let snapped_x = if self.settings.grid_enabled && self.settings.snap_to_grid {
+                                    let bar_spacing = pixels_per_beat(self.bpm) * 4.0;
+                                    (current[0] / bar_spacing).round() * bar_spacing
+                                } else {
+                                    current[0]
+                                };
                                 if let Some(engine) = &self.audio_engine {
-                                    let secs = current[0] as f64 / PIXELS_PER_SECOND as f64;
+                                    let secs = snapped_x as f64 / PIXELS_PER_SECOND as f64;
                                     engine.seek_to_seconds(secs);
                                 }
+                                let (_, sh, _) = self.screen_info();
+                                let world_top = self.camera.screen_to_world([0.0, 0.0])[1];
+                                let world_bottom = self.camera.screen_to_world([0.0, sh])[1];
+                                let line_w = 2.0 / self.camera.zoom;
+                                self.select_area = Some(SelectArea {
+                                    position: [snapped_x, world_top],
+                                    size: [line_w, world_bottom - world_top],
+                                });
                             } else {
                                 self.selected = targets_in_rect(
                                     &self.objects,
                                     &self.waveforms,
                                     &self.effect_regions,
+                                    &self.loop_regions,
+                                    &self.export_regions,
                                     &self.components,
                                     &self.component_instances,
                                     self.editing_component,
                                     rp,
                                     rs,
                                 );
+                                self.select_area = Some(SelectArea { position: rp, size: rs });
                             }
                         }
 
@@ -4791,6 +5717,45 @@ impl ApplicationHandler for App {
                             println!("Exited component edit mode");
                             self.request_redraw();
                             return;
+                        }
+                    }
+
+                    // --- BPM editing input ---
+                    if self.editing_bpm.is_some() {
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.editing_bpm = None;
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                if let Some(text) = self.editing_bpm.take() {
+                                    if let Ok(val) = text.parse::<f32>() {
+                                        self.bpm = val.clamp(20.0, 999.0);
+                                        self.mark_dirty();
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                if let Some(ref mut text) = self.editing_bpm {
+                                    text.pop();
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Character(ch) if !self.modifiers.super_key() => {
+                                let s = ch.as_ref();
+                                if s.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                                    if let Some(ref mut text) = self.editing_bpm {
+                                        text.push_str(s);
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            _ => {}
                         }
                     }
 
@@ -5000,11 +5965,22 @@ impl ApplicationHandler for App {
 
                     // --- global shortcuts ---
                     match &event.logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            self.selected.clear();
+                            self.select_area = None;
+                            self.request_redraw();
+                        }
                         Key::Named(NamedKey::Space) => {
                             if self.is_recording() {
                                 self.toggle_recording();
                                 self.request_redraw();
                             } else if let Some(engine) = &self.audio_engine {
+                                if !engine.is_playing() {
+                                    if let Some(sa) = &self.select_area {
+                                        let secs = sa.position[0] as f64 / PIXELS_PER_SECOND as f64;
+                                        engine.seek_to_seconds(secs);
+                                    }
+                                }
                                 engine.toggle_playback();
                                 self.request_redraw();
                             }
@@ -5024,14 +6000,33 @@ impl ApplicationHandler for App {
                                         if let HitTarget::Waveform(i) = t { Some(*i) } else { None }
                                     })
                                     .collect();
-                                if !wf_indices.is_empty() {
+                                let lr_indices: Vec<usize> = self
+                                    .selected
+                                    .iter()
+                                    .filter_map(|t| {
+                                        if let HitTarget::LoopRegion(i) = t { Some(*i) } else { None }
+                                    })
+                                    .collect();
+                                if !wf_indices.is_empty() || !lr_indices.is_empty() {
                                     self.push_undo();
-                                    let any_enabled = wf_indices.iter().any(|&i| i < self.waveforms.len() && !self.waveforms[i].disabled);
-                                    let new_disabled = any_enabled;
-                                    for &i in &wf_indices {
-                                        if i < self.waveforms.len() {
-                                            self.waveforms[i].disabled = new_disabled;
+                                    if !wf_indices.is_empty() {
+                                        let any_enabled = wf_indices.iter().any(|&i| i < self.waveforms.len() && !self.waveforms[i].disabled);
+                                        let new_disabled = any_enabled;
+                                        for &i in &wf_indices {
+                                            if i < self.waveforms.len() {
+                                                self.waveforms[i].disabled = new_disabled;
+                                            }
                                         }
+                                    }
+                                    if !lr_indices.is_empty() {
+                                        let any_enabled = lr_indices.iter().any(|&i| i < self.loop_regions.len() && self.loop_regions[i].enabled);
+                                        let new_enabled = !any_enabled;
+                                        for &i in &lr_indices {
+                                            if i < self.loop_regions.len() {
+                                                self.loop_regions[i].enabled = new_enabled;
+                                            }
+                                        }
+                                        self.sync_loop_region();
                                     }
                                     self.sync_audio_clips();
                                     self.request_redraw();
@@ -5099,6 +6094,12 @@ impl ApplicationHandler for App {
                             "d" => {
                                 self.duplicate_selected();
                                 self.request_redraw();
+                            }
+                            "e" => {
+                                self.execute_command(CommandAction::SplitSample);
+                            }
+                            "l" => {
+                                self.execute_command(CommandAction::AddLoopArea);
                             }
                             "s" => self.save_project(),
                             "z" => {
@@ -5243,14 +6244,24 @@ impl ApplicationHandler for App {
                             hovered: self.hovered,
                             selected: &selected_set,
                             selection_rect: sel_rect,
+                            select_area: self.select_area.as_ref(),
                             file_hovering: self.file_hovering,
                             playhead_world_x,
-                            export_region: self.export_region.as_ref(),
+                            export_regions: &self.export_regions,
+                            loop_regions: &self.loop_regions,
                             components: &self.components,
                             component_instances: &self.component_instances,
                             editing_component: self.editing_component,
                             settings: &self.settings,
                             component_map: &component_map,
+                            fade_curve_hovered: self.fade_curve_hovered,
+                            fade_curve_dragging: if let DragState::DraggingFadeCurve { waveform_idx, is_fade_in, .. } = self.drag {
+                                Some((waveform_idx, is_fade_in))
+                            } else {
+                                None
+                            },
+                            mouse_world: self.camera.screen_to_world(self.mouse_pos),
+                            bpm: self.bpm,
                         };
                         build_instances(&mut self.cached_instances, &render_ctx);
                         build_waveform_vertices(&mut self.cached_wf_verts, &render_ctx);
@@ -5315,7 +6326,7 @@ impl ApplicationHandler for App {
                         is_playing,
                         is_recording,
                         playback_pos,
-                        self.export_region.as_ref(),
+                        &self.export_regions,
                         &self.effect_regions,
                         self.editing_effect_name
                             .as_ref()
@@ -5328,6 +6339,8 @@ impl ApplicationHandler for App {
                         self.settings_window.as_ref(),
                         &self.settings,
                         &self.toast_manager,
+                        self.bpm,
+                        self.editing_bpm.as_deref(),
                     );
                 }
                 if self.toast_manager.has_active() {

@@ -200,6 +200,19 @@ impl TransportPanel {
         point_in_rect(pos, rp, rs)
     }
 
+    pub(crate) fn bpm_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (tp_pos, tp_size) = Self::panel_rect(screen_w, screen_h, scale);
+        let (rbtn_pos, _) = Self::record_button_rect(screen_w, screen_h, scale);
+        let x = tp_pos[0] + tp_size[0] - 80.0 * scale;
+        let w = rbtn_pos[0] - x;
+        ([x, tp_pos[1]], [w, tp_size[1]])
+    }
+
+    pub(crate) fn hit_bpm(pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        let (rp, rs) = Self::bpm_rect(screen_w, screen_h, scale);
+        point_in_rect(pos, rp, rs)
+    }
+
     pub(crate) fn export_button_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let (tp_pos, tp_size) = Self::panel_rect(screen_w, screen_h, scale);
         let w = EXPORT_BUTTON_WIDTH * scale;

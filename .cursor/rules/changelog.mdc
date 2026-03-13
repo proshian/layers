@@ -5,4 +5,4 @@ alwaysApply: true
 
 # Changelog Rule
 
-After completing each task, append a short entry to `CHANGELOG.md` in the project root describing what was done. Each entry should include today's date and a brief description. Format: `- YYYY-MM-DD: description`. keep it really simple. like one line not more. also add codebase length to the end. example (14.3k loc). do not type date everytime. only when changed and it's another day
+After completing each task, prepend a short entry to the top of `CHANGELOG.md` in the project root describing what was done. Each entry should include today's date and a brief description. Format: `- YYYY-MM-DD: description`. keep it really simple. like one line not more. also add codebase length to the end. example (14.3k loc). do not type date everytime. only when changed and it's another day

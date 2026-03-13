@@ -77,6 +77,8 @@ pub struct WaveformView {
     pub border_radius: f32,
     pub fade_in_px: f32,
     pub fade_out_px: f32,
+    pub fade_in_curve: f32,
+    pub fade_out_curve: f32,
     pub volume: f32,
     pub disabled: bool,
 }
@@ -95,14 +97,22 @@ pub const FADE_HANDLE_SIZE: f32 = 8.0;
 
 const SAMPLES_PER_PX_THRESHOLD: f32 = 4.0;
 
-fn fade_gain_at(x_in_clip: f32, clip_width: f32, fade_in_px: f32, fade_out_px: f32) -> f32 {
+fn apply_fade_curve(t: f32, curve: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let exponent = 2.0f32.powf(-curve);
+    t.powf(exponent)
+}
+
+fn fade_gain_at(x_in_clip: f32, clip_width: f32, fade_in_px: f32, fade_out_px: f32, fade_in_curve: f32, fade_out_curve: f32) -> f32 {
     let mut g = 1.0f32;
     if fade_in_px > 0.0 && x_in_clip < fade_in_px {
-        g = (x_in_clip / fade_in_px).clamp(0.0, 1.0);
+        let t = (x_in_clip / fade_in_px).clamp(0.0, 1.0);
+        g = apply_fade_curve(t, fade_in_curve);
     }
     let x_from_end = clip_width - x_in_clip;
     if fade_out_px > 0.0 && x_from_end < fade_out_px {
-        g = g.min((x_from_end / fade_out_px).clamp(0.0, 1.0));
+        let t = (x_from_end / fade_out_px).clamp(0.0, 1.0);
+        g = g.min(apply_fade_curve(t, fade_out_curve));
     }
     g
 }
@@ -149,75 +159,7 @@ pub fn build_waveform_instances(
         border_radius: 0.0,
     });
 
-    let has_fade_in = wf.fade_in_px > 0.0;
-    let has_fade_out = wf.fade_out_px > 0.0;
-
-    if has_fade_in {
-        out.push(InstanceRaw {
-            position: wf.position,
-            size: [wf.fade_in_px, wf.size[1]],
-            color: [0.0, 0.0, 0.0, 0.25],
-            border_radius: 0.0,
-        });
-    }
-
-    if has_fade_out {
-        let fo_x = wf.position[0] + wf.size[0] - wf.fade_out_px;
-        out.push(InstanceRaw {
-            position: [fo_x, wf.position[1]],
-            size: [wf.fade_out_px, wf.size[1]],
-            color: [0.0, 0.0, 0.0, 0.25],
-            border_radius: 0.0,
-        });
-    }
-
-    // Fade curve lines
-    let line_w = 1.5 / camera.zoom;
-    let curve_color = [wf.color[0], wf.color[1], wf.color[2], 0.8 * alpha_mul];
-
-    if has_fade_in {
-        let x0 = wf.position[0];
-        let y_bot = wf.position[1] + wf.size[1];
-        let x1 = wf.position[0] + wf.fade_in_px;
-        let y_top = wf.position[1];
-        for seg in 0..FADE_CURVE_SEGMENTS {
-            let t0 = seg as f32 / FADE_CURVE_SEGMENTS as f32;
-            let t1 = (seg + 1) as f32 / FADE_CURVE_SEGMENTS as f32;
-            let sx = x0 + (x1 - x0) * t0;
-            let sy = y_bot + (y_top - y_bot) * t0;
-            let ex = x0 + (x1 - x0) * t1;
-            let ey = y_bot + (y_top - y_bot) * t1;
-            let seg_len = ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
-            out.push(InstanceRaw {
-                position: [sx, sy.min(ey)],
-                size: [seg_len.max(line_w), (ey - sy).abs().max(line_w)],
-                color: curve_color,
-                border_radius: 0.0,
-            });
-        }
-    }
-
-    if has_fade_out {
-        let x0 = wf.position[0] + wf.size[0] - wf.fade_out_px;
-        let y_top = wf.position[1];
-        let x1 = wf.position[0] + wf.size[0];
-        let y_bot = wf.position[1] + wf.size[1];
-        for seg in 0..FADE_CURVE_SEGMENTS {
-            let t0 = seg as f32 / FADE_CURVE_SEGMENTS as f32;
-            let t1 = (seg + 1) as f32 / FADE_CURVE_SEGMENTS as f32;
-            let sx = x0 + (x1 - x0) * t0;
-            let sy = y_top + (y_bot - y_top) * t0;
-            let ex = x0 + (x1 - x0) * t1;
-            let ey = y_top + (y_bot - y_top) * t1;
-            let seg_len = ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
-            out.push(InstanceRaw {
-                position: [sx, sy.min(ey)],
-                size: [seg_len.max(line_w), (ey - sy).abs().max(line_w)],
-                color: curve_color,
-                border_radius: 0.0,
-            });
-        }
-    }
+    // Fade dark overlays and curve lines are rendered as triangles via build_fade_curve_triangles()
 
     if is_hovered || is_selected {
         let handle_sz = FADE_HANDLE_SIZE / camera.zoom;
@@ -241,9 +183,205 @@ pub fn build_waveform_instances(
             color: handle_color,
             border_radius: handle_br,
         });
+
+        // Fade curve midpoint dots (diamond handles)
+        let dot_sz = FADE_HANDLE_SIZE * 0.75 / camera.zoom;
+        let dot_br = dot_sz * 0.5; // fully rounded = diamond-like
+        let dot_color = [1.0, 1.0, 1.0, 0.85];
+
+        if wf.fade_in_px > 0.0 {
+            let [dx, dy] = fade_curve_dot_pos(wf, true);
+            out.push(InstanceRaw {
+                position: [dx - dot_sz * 0.5, dy - dot_sz * 0.5],
+                size: [dot_sz, dot_sz],
+                color: dot_color,
+                border_radius: dot_br,
+            });
+        }
+
+        if wf.fade_out_px > 0.0 {
+            let [dx, dy] = fade_curve_dot_pos(wf, false);
+            out.push(InstanceRaw {
+                position: [dx - dot_sz * 0.5, dy - dot_sz * 0.5],
+                size: [dot_sz, dot_sz],
+                color: dot_color,
+                border_radius: dot_br,
+            });
+        }
     }
 
     out
+}
+
+/// Returns the world-space position of the fade curve midpoint dot.
+pub fn fade_curve_dot_pos(wf: &WaveformView, is_fade_in: bool) -> [f32; 2] {
+    let y_top = wf.position[1];
+    let y_bot = wf.position[1] + wf.size[1];
+    let t = 0.5;
+    if is_fade_in {
+        let x0 = wf.position[0];
+        let x1 = wf.position[0] + wf.fade_in_px;
+        let curved_t = apply_fade_curve(t, wf.fade_in_curve);
+        let cx = x0 + (x1 - x0) * t;
+        let cy = y_bot + (y_top - y_bot) * curved_t;
+        [cx, cy]
+    } else {
+        let x0 = wf.position[0] + wf.size[0] - wf.fade_out_px;
+        let x1 = wf.position[0] + wf.size[0];
+        let curved_t = 1.0 - apply_fade_curve(1.0 - t, wf.fade_out_curve);
+        let cx = x0 + (x1 - x0) * t;
+        let cy = y_top + (y_bot - y_top) * curved_t;
+        [cx, cy]
+    }
+}
+
+pub fn build_fade_curve_triangles(
+    wf: &WaveformView,
+    camera: &Camera,
+    show_fade_in_line: bool,
+    show_fade_out_line: bool,
+) -> Vec<WaveformVertex> {
+    let mut verts = Vec::new();
+    let alpha_mul = if wf.disabled { 0.25 } else { 1.0 };
+    let dark_color = [0.0, 0.0, 0.0, 0.25 * alpha_mul];
+    let curve_color = [wf.color[0], wf.color[1], wf.color[2], 0.8 * alpha_mul];
+    let line_half_w = 1.0 / camera.zoom;
+    let feather = 0.5 / camera.zoom;
+
+    let y_top = wf.position[1];
+    let y_bot = wf.position[1] + wf.size[1];
+
+    // Fade-in: curve goes from bottom-left (silence) to top-right (full volume)
+    // Dark area is above the curve (between curve and top edge)
+    if wf.fade_in_px > 0.0 {
+        let x0 = wf.position[0];
+        let x1 = wf.position[0] + wf.fade_in_px;
+
+        let mut prev_x = x0;
+        let mut prev_curve_y = y_bot; // curve starts at bottom (gain=0)
+        for seg in 1..=FADE_CURVE_SEGMENTS {
+            let t = seg as f32 / FADE_CURVE_SEGMENTS as f32;
+            let curved_t = apply_fade_curve(t, wf.fade_in_curve);
+            let cx = x0 + (x1 - x0) * t;
+            let curve_y = y_bot + (y_top - y_bot) * curved_t;
+
+            // Dark fill: quad from top edge down to curve
+            let v_tl = WaveformVertex { position: [prev_x, y_top], color: dark_color, edge: 0.0 };
+            let v_tr = WaveformVertex { position: [cx, y_top], color: dark_color, edge: 0.0 };
+            let v_bl = WaveformVertex { position: [prev_x, prev_curve_y], color: dark_color, edge: 0.0 };
+            let v_br = WaveformVertex { position: [cx, curve_y], color: dark_color, edge: 0.0 };
+            verts.push(v_tl);
+            verts.push(v_bl);
+            verts.push(v_tr);
+            verts.push(v_tr);
+            verts.push(v_bl);
+            verts.push(v_br);
+
+            // Curve line (only when hovered)
+            if show_fade_in_line {
+                push_line_quad(&mut verts, prev_x, prev_curve_y, cx, curve_y, line_half_w, feather, curve_color);
+            }
+
+            prev_x = cx;
+            prev_curve_y = curve_y;
+        }
+    }
+
+    // Fade-out: curve goes from top-left (full volume) to bottom-right (silence)
+    // Dark area is above the curve (between curve and top edge)
+    if wf.fade_out_px > 0.0 {
+        let x0 = wf.position[0] + wf.size[0] - wf.fade_out_px;
+        let x1 = wf.position[0] + wf.size[0];
+
+        let mut prev_x = x0;
+        let mut prev_curve_y = y_top; // curve starts at top (gain=1)
+        for seg in 1..=FADE_CURVE_SEGMENTS {
+            let t = seg as f32 / FADE_CURVE_SEGMENTS as f32;
+            let curved_t = 1.0 - apply_fade_curve(1.0 - t, wf.fade_out_curve);
+            let cx = x0 + (x1 - x0) * t;
+            let curve_y = y_top + (y_bot - y_top) * curved_t;
+
+            // Dark fill: quad from top edge down to curve
+            let v_tl = WaveformVertex { position: [prev_x, y_top], color: dark_color, edge: 0.0 };
+            let v_tr = WaveformVertex { position: [cx, y_top], color: dark_color, edge: 0.0 };
+            let v_bl = WaveformVertex { position: [prev_x, prev_curve_y], color: dark_color, edge: 0.0 };
+            let v_br = WaveformVertex { position: [cx, curve_y], color: dark_color, edge: 0.0 };
+            verts.push(v_tl);
+            verts.push(v_bl);
+            verts.push(v_tr);
+            verts.push(v_tr);
+            verts.push(v_bl);
+            verts.push(v_br);
+
+            // Curve line (only when hovered)
+            if show_fade_out_line {
+                push_line_quad(&mut verts, prev_x, prev_curve_y, cx, curve_y, line_half_w, feather, curve_color);
+            }
+
+            prev_x = cx;
+            prev_curve_y = curve_y;
+        }
+    }
+
+    verts
+}
+
+fn push_line_quad(
+    verts: &mut Vec<WaveformVertex>,
+    x0: f32, y0: f32,
+    x1: f32, y1: f32,
+    half_w: f32,
+    feather: f32,
+    color: [f32; 4],
+) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-6 {
+        return;
+    }
+    // Normal perpendicular to segment direction
+    let nx = -dy / len * half_w;
+    let ny = dx / len * half_w;
+
+    let v0a = WaveformVertex { position: [x0 + nx, y0 + ny], color, edge: 0.0 };
+    let v0b = WaveformVertex { position: [x0 - nx, y0 - ny], color, edge: 0.0 };
+    let v1a = WaveformVertex { position: [x1 + nx, y1 + ny], color, edge: 0.0 };
+    let v1b = WaveformVertex { position: [x1 - nx, y1 - ny], color, edge: 0.0 };
+
+    // Core quad
+    verts.push(v0a);
+    verts.push(v0b);
+    verts.push(v1a);
+    verts.push(v1a);
+    verts.push(v0b);
+    verts.push(v1b);
+
+    // Feather edges for anti-aliasing
+    let feather_color = [color[0], color[1], color[2], 0.0];
+    let fnx = -dy / len * (half_w + feather);
+    let fny = dx / len * (half_w + feather);
+
+    let f0a = WaveformVertex { position: [x0 + fnx, y0 + fny], color: feather_color, edge: 1.0 };
+    let f0b = WaveformVertex { position: [x0 - fnx, y0 - fny], color: feather_color, edge: 1.0 };
+    let f1a = WaveformVertex { position: [x1 + fnx, y1 + fny], color: feather_color, edge: 1.0 };
+    let f1b = WaveformVertex { position: [x1 - fnx, y1 - fny], color: feather_color, edge: 1.0 };
+
+    // Top feather
+    verts.push(v0a);
+    verts.push(f0a);
+    verts.push(v1a);
+    verts.push(v1a);
+    verts.push(f0a);
+    verts.push(f1a);
+
+    // Bottom feather
+    verts.push(f0b);
+    verts.push(v0b);
+    verts.push(f1b);
+    verts.push(f1b);
+    verts.push(v0b);
+    verts.push(v1b);
 }
 
 fn channel_triangles(
@@ -261,6 +399,8 @@ fn channel_triangles(
     world_right: f32,
     fade_in_px: f32,
     fade_out_px: f32,
+    fade_in_curve: f32,
+    fade_out_curve: f32,
     volume: f32,
 ) -> Vec<WaveformVertex> {
     let mut verts = Vec::new();
@@ -303,7 +443,7 @@ fn channel_triangles(
             let peak = peaks.peak_in_range(s_start, s_end);
 
             let x_in_clip = wx - wf_pos[0];
-            let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px);
+            let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px, fade_in_curve, fade_out_curve);
             let amp = peak * fg * volume;
 
             if first {
@@ -339,13 +479,13 @@ fn channel_triangles(
 
         let mut prev_x = wf_pos[0] + vis_start_sample as f32 * world_per_sample;
         let x_in_clip = prev_x - wf_pos[0];
-        let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px);
+        let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px, fade_in_curve, fade_out_curve);
         let mut prev_val = samples[vis_start_sample] * fg * volume;
 
         for si in (vis_start_sample + 1)..vis_end_sample {
             let wx = wf_pos[0] + si as f32 * world_per_sample;
             let x_in_clip = wx - wf_pos[0];
-            let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px);
+            let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px, fade_in_curve, fade_out_curve);
             let val = samples[si] * fg * volume;
 
             push_wave_quad(
@@ -571,6 +711,8 @@ pub fn build_waveform_triangles(
         world_right,
         wf.fade_in_px,
         wf.fade_out_px,
+        wf.fade_in_curve,
+        wf.fade_out_curve,
         wf.volume,
     ));
 
@@ -589,6 +731,8 @@ pub fn build_waveform_triangles(
         world_right,
         wf.fade_in_px,
         wf.fade_out_px,
+        wf.fade_in_curve,
+        wf.fade_out_curve,
         wf.volume,
     ));
 
