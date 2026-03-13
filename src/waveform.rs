@@ -5,6 +5,55 @@ use bytemuck::{Pod, Zeroable};
 use crate::audio::PIXELS_PER_SECOND;
 use crate::{push_border, Camera, InstanceRaw};
 
+const PEAK_BLOCK_SIZE: usize = 256;
+
+#[derive(Clone)]
+pub struct WaveformPeaks {
+    pub block_size: usize,
+    pub peaks: Vec<f32>,
+}
+
+impl WaveformPeaks {
+    pub fn build(samples: &[f32]) -> Self {
+        let block_size = PEAK_BLOCK_SIZE;
+        let num_blocks = (samples.len() + block_size - 1) / block_size;
+        let mut peaks = Vec::with_capacity(num_blocks);
+        for i in 0..num_blocks {
+            let start = i * block_size;
+            let end = (start + block_size).min(samples.len());
+            let peak = samples[start..end]
+                .iter()
+                .map(|s| s.abs())
+                .fold(0.0f32, f32::max);
+            peaks.push(peak);
+        }
+        WaveformPeaks { block_size, peaks }
+    }
+
+    pub fn empty() -> Self {
+        WaveformPeaks {
+            block_size: PEAK_BLOCK_SIZE,
+            peaks: Vec::new(),
+        }
+    }
+
+    pub fn peak_in_range(&self, sample_start: usize, sample_end: usize) -> f32 {
+        if self.peaks.is_empty() || sample_start >= sample_end {
+            return 0.0;
+        }
+        let block_start = sample_start / self.block_size;
+        let block_end = (sample_end + self.block_size - 1) / self.block_size;
+        let block_end = block_end.min(self.peaks.len());
+        if block_start >= block_end {
+            return 0.0;
+        }
+        self.peaks[block_start..block_end]
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+    }
+}
+
 #[derive(Clone)]
 pub struct WaveformObject {
     pub position: [f32; 2],
@@ -13,6 +62,8 @@ pub struct WaveformObject {
     pub border_radius: f32,
     pub left_samples: Arc<Vec<f32>>,
     pub right_samples: Arc<Vec<f32>>,
+    pub left_peaks: Arc<WaveformPeaks>,
+    pub right_peaks: Arc<WaveformPeaks>,
     pub sample_rate: u32,
     pub filename: String,
     pub fade_in_px: f32,
@@ -184,12 +235,13 @@ pub fn build_waveform_instances(
 
 fn channel_triangles(
     samples: &[f32],
+    peaks: &WaveformPeaks,
     sample_rate: u32,
     wf_pos: [f32; 2],
     wf_size: [f32; 2],
     center_y: f32,
     half_h: f32,
-    direction: f32, // +1.0 = downward (right ch), -1.0 = upward (left ch)
+    direction: f32,
     color: [f32; 4],
     camera: &Camera,
     world_left: f32,
@@ -234,14 +286,7 @@ fn channel_triangles(
             let s_start = sample_center.saturating_sub(half_window).min(samples.len());
             let s_end = (sample_center + half_window).min(samples.len());
 
-            let peak = if s_start < s_end {
-                samples[s_start..s_end]
-                    .iter()
-                    .map(|s| s.abs())
-                    .fold(0.0f32, f32::max)
-            } else {
-                0.0
-            };
+            let peak = peaks.peak_in_range(s_start, s_end);
 
             let x_in_clip = wx - wf_pos[0];
             let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px);
@@ -494,9 +539,9 @@ pub fn build_waveform_triangles(
 
     let mut all_verts = Vec::new();
 
-    // Left channel: extends upward (direction = -1.0)
     all_verts.extend(channel_triangles(
         &wf.left_samples,
+        &wf.left_peaks,
         wf.sample_rate,
         wf.position,
         wf.size,
@@ -511,9 +556,9 @@ pub fn build_waveform_triangles(
         wf.fade_out_px,
     ));
 
-    // Right channel: extends downward (direction = +1.0)
     all_verts.extend(channel_triangles(
         &wf.right_samples,
+        &wf.right_peaks,
         wf.sample_rate,
         wf.position,
         wf.size,

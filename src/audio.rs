@@ -48,6 +48,7 @@ pub struct AudioEffectRegion {
 
 pub struct AudioEngine {
     _stream: cpal::Stream,
+    device_name: String,
     playing: Arc<AtomicBool>,
     position_bits: Arc<AtomicU64>,
     clips: Arc<Mutex<Vec<PlaybackClip>>>,
@@ -86,23 +87,24 @@ impl AudioEngine {
         let host = cpal::default_host();
         let device = match device_name {
             Some(name) if name != "No Device" => {
-                host.output_devices()
+                let found = host.output_devices()
                     .ok()?
                     .find(|d| d.name().ok().as_deref() == Some(name))
                     .or_else(|| {
-                        // Also try all devices as fallback
                         host.devices().ok()?.find(|d| {
                             d.name().ok().as_deref() == Some(name)
                                 && d.default_output_config().is_ok()
                         })
-                    })
-                    .or_else(|| host.default_output_device())
+                    });
+                if found.is_none() {
+                    println!("  Audio device '{}' not available as output, falling back to default", name);
+                }
+                found.or_else(|| host.default_output_device())
             }
             _ => host.default_output_device(),
         }?;
-        if let Ok(name) = device.name() {
-            println!("  Audio output device: {}", name);
-        }
+        let actual_device_name = device.name().unwrap_or_else(|_| "Unknown".into());
+        println!("  Audio output device: {}", actual_device_name);
         let supported = device.default_output_config().ok()?;
         let config: cpal::StreamConfig = supported.into();
 
@@ -336,6 +338,7 @@ impl AudioEngine {
 
         Some(Self {
             _stream: stream,
+            device_name: actual_device_name,
             playing,
             position_bits,
             clips,
@@ -411,6 +414,10 @@ impl AudioEngine {
 
     pub fn master_volume(&self) -> f32 {
         load_f64(&self.master_volume) as f32
+    }
+
+    pub fn device_name(&self) -> &str {
+        &self.device_name
     }
 
     pub fn rms_peak(&self) -> f32 {

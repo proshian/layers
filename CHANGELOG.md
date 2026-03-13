@@ -1,3 +1,8 @@
+- Add Ableton-style grid settings context menu: right-click canvas for adaptive/fixed musical grid, snap-to-grid, triplet mode, Cmd+1/2/3/4 shortcuts, grid enable/disable (11.8k loc)
+- Fix effect region name label not rendering: correct text buffer height and position to match waveform name pattern (11.4k loc)
+- Fix waveform zoom-out lag: precomputed peak mipmap (256-sample blocks) replaces per-frame raw sample scanning (11.4k loc)
+- Fix play icon in transport panel: scale-adaptive sub-pixel triangle strips with rounded tips (11.3k loc)
+- Fix audio output device switching: recreate AudioEngine on device change, detect unavailable devices and auto-correct stale settings (11.3k loc)
 - Add native macOS menu bar with File (New/Save/Open Project) and Edit menus using muda crate (11.2k loc)
 - Fix spacebar typing space during sample/effect name editing instead of triggering playback (10.9k loc)
 - Cap sample clip border radius to 6px screen pixels so it shrinks when zooming in (10.9k loc)

@@ -8,6 +8,8 @@ pub const PALETTE_MAX_VISIBLE_ROWS: usize = 14;
 pub const PALETTE_PADDING: f32 = 6.0;
 pub const PALETTE_BORDER_RADIUS: f32 = 12.0;
 
+use crate::settings::{AdaptiveGridSize, FixedGrid};
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum CommandAction {
     Copy,
@@ -30,6 +32,13 @@ pub enum CommandAction {
     OpenSettings,
     RenameEffectRegion,
     RenameSample,
+    ToggleSnapToGrid,
+    ToggleGrid,
+    SetGridAdaptive(AdaptiveGridSize),
+    SetGridFixed(FixedGrid),
+    NarrowGrid,
+    WidenGrid,
+    ToggleTripletGrid,
 }
 
 #[derive(Clone, Copy, PartialEq)]

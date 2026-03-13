@@ -4,8 +4,151 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
+// Grid types
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdaptiveGridSize {
+    Widest,
+    Wide,
+    Medium,
+    Narrow,
+    Narrowest,
+}
+
+impl AdaptiveGridSize {
+    pub fn target_px(self) -> f32 {
+        match self {
+            Self::Widest => 200.0,
+            Self::Wide => 140.0,
+            Self::Medium => 100.0,
+            Self::Narrow => 60.0,
+            Self::Narrowest => 35.0,
+        }
+    }
+
+    pub fn narrower(self) -> Self {
+        match self {
+            Self::Widest => Self::Wide,
+            Self::Wide => Self::Medium,
+            Self::Medium => Self::Narrow,
+            Self::Narrow => Self::Narrowest,
+            Self::Narrowest => Self::Narrowest,
+        }
+    }
+
+    pub fn wider(self) -> Self {
+        match self {
+            Self::Widest => Self::Widest,
+            Self::Wide => Self::Widest,
+            Self::Medium => Self::Wide,
+            Self::Narrow => Self::Medium,
+            Self::Narrowest => Self::Narrow,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Widest => "Widest",
+            Self::Wide => "Wide",
+            Self::Medium => "Medium",
+            Self::Narrow => "Narrow",
+            Self::Narrowest => "Narrowest",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FixedGrid {
+    Bars8,
+    Bars4,
+    Bars2,
+    Bar1,
+    Half,
+    Quarter,
+    Eighth,
+    Sixteenth,
+    ThirtySecond,
+}
+
+impl FixedGrid {
+    pub fn beats(self) -> f32 {
+        match self {
+            Self::Bars8 => 32.0,
+            Self::Bars4 => 16.0,
+            Self::Bars2 => 8.0,
+            Self::Bar1 => 4.0,
+            Self::Half => 2.0,
+            Self::Quarter => 1.0,
+            Self::Eighth => 0.5,
+            Self::Sixteenth => 0.25,
+            Self::ThirtySecond => 0.125,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bars8 => "8 Bars",
+            Self::Bars4 => "4 Bars",
+            Self::Bars2 => "2 Bars",
+            Self::Bar1 => "1 Bar",
+            Self::Half => "1/2",
+            Self::Quarter => "1/4",
+            Self::Eighth => "1/8",
+            Self::Sixteenth => "1/16",
+            Self::ThirtySecond => "1/32",
+        }
+    }
+
+    pub fn finer(self) -> Self {
+        match self {
+            Self::Bars8 => Self::Bars4,
+            Self::Bars4 => Self::Bars2,
+            Self::Bars2 => Self::Bar1,
+            Self::Bar1 => Self::Half,
+            Self::Half => Self::Quarter,
+            Self::Quarter => Self::Eighth,
+            Self::Eighth => Self::Sixteenth,
+            Self::Sixteenth => Self::ThirtySecond,
+            Self::ThirtySecond => Self::ThirtySecond,
+        }
+    }
+
+    pub fn coarser(self) -> Self {
+        match self {
+            Self::Bars8 => Self::Bars8,
+            Self::Bars4 => Self::Bars8,
+            Self::Bars2 => Self::Bars4,
+            Self::Bar1 => Self::Bars2,
+            Self::Half => Self::Bar1,
+            Self::Quarter => Self::Half,
+            Self::Eighth => Self::Quarter,
+            Self::Sixteenth => Self::Eighth,
+            Self::ThirtySecond => Self::Sixteenth,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum GridMode {
+    Adaptive(AdaptiveGridSize),
+    Fixed(FixedGrid),
+}
+
+impl Default for GridMode {
+    fn default() -> Self {
+        Self::Adaptive(AdaptiveGridSize::Narrow)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Persisted settings
 // ---------------------------------------------------------------------------
+
+fn default_grid_enabled() -> bool { true }
+fn default_snap_to_grid() -> bool { true }
+fn default_grid_mode() -> GridMode { GridMode::default() }
+fn default_triplet_grid() -> bool { false }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -18,6 +161,14 @@ pub struct Settings {
     pub audio_input_device: String,
     #[serde(default = "default_output_device")]
     pub audio_output_device: String,
+    #[serde(default = "default_grid_enabled")]
+    pub grid_enabled: bool,
+    #[serde(default = "default_snap_to_grid")]
+    pub snap_to_grid: bool,
+    #[serde(default = "default_grid_mode")]
+    pub grid_mode: GridMode,
+    #[serde(default = "default_triplet_grid")]
+    pub triplet_grid: bool,
 }
 
 fn default_driver_type() -> String {
@@ -51,6 +202,10 @@ impl Default for Settings {
             audio_driver_type: default_driver_type(),
             audio_input_device: default_input_device(),
             audio_output_device: default_output_device(),
+            grid_enabled: true,
+            snap_to_grid: true,
+            grid_mode: GridMode::default(),
+            triplet_grid: false,
         }
     }
 }

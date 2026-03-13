@@ -130,11 +130,16 @@ impl EffectRegion {
 
     pub fn hit_test_border(&self, world_pos: [f32; 2], camera: &Camera) -> bool {
         let border_thickness = 6.0 / camera.zoom;
+        let name_area_h = 20.0 / camera.zoom;
         let p = self.position;
         let s = self.size;
-        if !point_in_rect(world_pos, [p[0] - border_thickness, p[1] - border_thickness],
-            [s[0] + border_thickness * 2.0, s[1] + border_thickness * 2.0]) {
+        if !point_in_rect(world_pos, [p[0] - border_thickness, p[1] - border_thickness - name_area_h],
+            [s[0] + border_thickness * 2.0, s[1] + border_thickness * 2.0 + name_area_h]) {
             return false;
+        }
+        // Name label area above the region
+        if point_in_rect(world_pos, [p[0], p[1] - name_area_h], [s[0], name_area_h]) {
+            return true;
         }
         // Top edge
         if point_in_rect(world_pos, [p[0], p[1] - border_thickness], [s[0], border_thickness * 2.0]) {

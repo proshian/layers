@@ -15,11 +15,12 @@ use std::sync::Arc;
 
 use audio::{load_audio_file, AudioClipData, AudioEngine, AudioRecorder, PIXELS_PER_SECOND};
 pub(crate) use waveform::WaveformObject;
-use waveform::WaveformVertex;
+use waveform::{WaveformPeaks, WaveformVertex};
 use context_menu::{
     ContextMenu, ContextMenuEntry, MenuContext, CTX_MENU_ITEM_HEIGHT, CTX_MENU_PADDING,
-    CTX_MENU_SEPARATOR_HEIGHT, CTX_MENU_WIDTH,
+    CTX_MENU_SECTION_HEIGHT, CTX_MENU_SEPARATOR_HEIGHT, CTX_MENU_WIDTH,
 };
+use settings::GridMode;
 use palette::{
     CommandAction, CommandPalette, PaletteMode, PaletteRow, COMMANDS, PALETTE_INPUT_HEIGHT,
     PALETTE_ITEM_HEIGHT, PALETTE_PADDING, PALETTE_SECTION_HEIGHT, PALETTE_WIDTH,
@@ -485,22 +486,20 @@ impl TransportPanel {
                 border_radius: 1.0 * scale,
             });
         } else {
-            let tri_w = 11.0 * scale;
-            let tri_h = 13.0 * scale;
-            let steps = 5;
+            let tri_w = 10.0 * scale;
+            let tri_h = 12.0 * scale;
+            let steps = (tri_h * 3.0).ceil() as usize;
             let step_h = tri_h / steps as f32;
+            let min_w = 1.5 * scale;
             for i in 0..steps {
-                let t_top = i as f32 / steps as f32;
-                let t_bot = (i + 1) as f32 / steps as f32;
-                let w_top = tri_w * (1.0 - (2.0 * t_top - 1.0).abs());
-                let w_bot = tri_w * (1.0 - (2.0 * t_bot - 1.0).abs());
-                let w = w_top.max(w_bot);
+                let t = (i as f32 + 0.5) / steps as f32;
+                let w = (tri_w * (1.0 - (2.0 * t - 1.0).abs())).max(min_w);
                 let sy = icon_cy - tri_h * 0.5 + i as f32 * step_h;
                 out.push(InstanceRaw {
                     position: [icon_x, sy],
-                    size: [w, step_h],
+                    size: [w, step_h + 0.5],
                     color: [1.0, 1.0, 1.0, 0.9],
-                    border_radius: 0.0,
+                    border_radius: min_w * 0.5,
                 });
             }
         }
@@ -679,20 +678,54 @@ fn format_playback_time(secs: f64) -> String {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn grid_spacing(zoom: f32) -> f32 {
-    let target_px = 80.0;
-    let world = target_px / zoom;
-    let mag = 10f32.powf(world.log10().floor());
-    let norm = world / mag;
-    if norm <= 1.0 {
-        mag
-    } else if norm <= 2.0 {
-        2.0 * mag
-    } else if norm <= 5.0 {
-        5.0 * mag
-    } else {
-        10.0 * mag
+const DEFAULT_BPM: f32 = 120.0;
+
+fn pixels_per_beat() -> f32 {
+    audio::PIXELS_PER_SECOND * 60.0 / DEFAULT_BPM
+}
+
+/// Musical subdivision levels in beats: 32, 16, 8, 4, 2, 1, 1/2, 1/4, 1/8, 1/16, 1/32
+const BEAT_SUBDIVISIONS: &[f32] = &[32.0, 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125];
+
+/// Returns (minor_spacing_world, beats_per_bar) for adaptive grid.
+/// Picks the subdivision where screen-px spacing is closest to the target.
+fn musical_grid_spacing(zoom: f32, target_px: f32, triplet: bool) -> f32 {
+    let ppb = pixels_per_beat();
+    let triplet_mul = if triplet { 2.0 / 3.0 } else { 1.0 };
+    let mut best = BEAT_SUBDIVISIONS[0] * ppb * triplet_mul;
+    let mut best_diff = f32::MAX;
+    for &subdiv in BEAT_SUBDIVISIONS {
+        let world_spacing = subdiv * ppb * triplet_mul;
+        let screen_spacing = world_spacing * zoom;
+        let diff = (screen_spacing - target_px).abs();
+        if diff < best_diff {
+            best_diff = diff;
+            best = world_spacing;
+        }
     }
+    best
+}
+
+fn grid_spacing_for_settings(settings: &Settings, zoom: f32) -> f32 {
+    match settings.grid_mode {
+        GridMode::Adaptive(size) => {
+            musical_grid_spacing(zoom, size.target_px(), settings.triplet_grid)
+        }
+        GridMode::Fixed(fg) => {
+            let ppb = pixels_per_beat();
+            let triplet_mul = if settings.triplet_grid { 2.0 / 3.0 } else { 1.0 };
+            fg.beats() * ppb * triplet_mul
+        }
+    }
+}
+
+/// Snap a world-X coordinate to the nearest grid line.
+pub(crate) fn snap_to_grid(world_x: f32, settings: &Settings, zoom: f32) -> f32 {
+    if !settings.grid_enabled || !settings.snap_to_grid {
+        return world_x;
+    }
+    let spacing = grid_spacing_for_settings(settings, zoom);
+    (world_x / spacing).round() * spacing
 }
 
 pub(crate) fn point_in_rect(pos: [f32; 2], rect_pos: [f32; 2], rect_size: [f32; 2]) -> bool {
@@ -892,42 +925,56 @@ fn build_instances(ctx: &RenderContext) -> Vec<InstanceRaw> {
     let world_right = world_left + ctx.screen_w / camera.zoom;
     let world_bottom = world_top + ctx.screen_h / camera.zoom;
 
-    // --- adaptive grid ---
-    let spacing = grid_spacing(camera.zoom);
-    let line_w = 1.0 / camera.zoom;
-    let major_line_w = 2.0 / camera.zoom;
-    let grid_i = ctx.settings.grid_line_intensity;
-    let minor_color = [1.0, 1.0, 1.0, grid_i * 0.23];
-    let major_color = [1.0, 1.0, 1.0, grid_i * 0.54];
+    // --- musical grid ---
+    if ctx.settings.grid_enabled {
+        let spacing = grid_spacing_for_settings(ctx.settings, camera.zoom);
+        let ppb = pixels_per_beat();
+        let bar_spacing = ppb * 4.0;
+        let line_w = 1.0 / camera.zoom;
+        let major_line_w = 2.0 / camera.zoom;
+        let bar_line_w = 2.5 / camera.zoom;
+        let grid_i = ctx.settings.grid_line_intensity;
+        let minor_color = [1.0, 1.0, 1.0, grid_i * 0.20];
+        let beat_color = [1.0, 1.0, 1.0, grid_i * 0.38];
+        let bar_color = [1.0, 1.0, 1.0, grid_i * 0.60];
 
-    let first_xi = (world_left / spacing).floor() as i64;
-    let last_xi = (world_right / spacing).ceil() as i64;
-    for i in first_xi..=last_xi {
-        let x = i as f32 * spacing;
-        let is_major = i % 5 == 0;
-        let w = if is_major { major_line_w } else { line_w };
-        let c = if is_major { major_color } else { minor_color };
-        out.push(InstanceRaw {
-            position: [x - w * 0.5, world_top],
-            size: [w, world_bottom - world_top],
-            color: c,
-            border_radius: 0.0,
-        });
-    }
+        let first_xi = (world_left / spacing).floor() as i64;
+        let last_xi = (world_right / spacing).ceil() as i64;
+        for i in first_xi..=last_xi {
+            let x = i as f32 * spacing;
+            let on_bar = (x / bar_spacing).round() * bar_spacing;
+            let on_beat = (x / ppb).round() * ppb;
+            let is_bar = (x - on_bar).abs() < 0.01;
+            let is_beat = !is_bar && (x - on_beat).abs() < 0.01;
+            let (w, c) = if is_bar {
+                (bar_line_w, bar_color)
+            } else if is_beat {
+                (major_line_w, beat_color)
+            } else {
+                (line_w, minor_color)
+            };
+            out.push(InstanceRaw {
+                position: [x - w * 0.5, world_top],
+                size: [w, world_bottom - world_top],
+                color: c,
+                border_radius: 0.0,
+            });
+        }
 
-    let first_yi = (world_top / spacing).floor() as i64;
-    let last_yi = (world_bottom / spacing).ceil() as i64;
-    for i in first_yi..=last_yi {
-        let y = i as f32 * spacing;
-        let is_major = i % 5 == 0;
-        let w = if is_major { major_line_w } else { line_w };
-        let c = if is_major { major_color } else { minor_color };
-        out.push(InstanceRaw {
-            position: [world_left, y - w * 0.5],
-            size: [world_right - world_left, w],
-            color: c,
-            border_radius: 0.0,
-        });
+        let first_yi = (world_top / spacing).floor() as i64;
+        let last_yi = (world_bottom / spacing).ceil() as i64;
+        for i in first_yi..=last_yi {
+            let y = i as f32 * spacing;
+            let is_major = i % 4 == 0;
+            let w = if is_major { major_line_w } else { line_w };
+            let c = if is_major { beat_color } else { minor_color };
+            out.push(InstanceRaw {
+                position: [world_left, y - w * 0.5],
+                size: [world_right - world_left, w],
+                color: c,
+                border_radius: 0.0,
+            });
+        }
     }
 
     // --- origin axes ---
@@ -2039,6 +2086,10 @@ impl Gpu {
             let label_line = 18.0 * scale;
             let shortcut_font = 12.0 * scale;
             let shortcut_line = 17.0 * scale;
+            let section_font = 11.0 * scale;
+            let section_line = 15.0 * scale;
+            let has_any_checked = cm.entries.iter().any(|e| matches!(e, ContextMenuEntry::Item(it) if it.checked));
+            let check_indent = if has_any_checked { 16.0 * scale } else { 0.0 };
 
             let mut y = mpos[1] + pad;
             for entry in &cm.entries {
@@ -2050,7 +2101,7 @@ impl Gpu {
                         );
                         buf.set_size(
                             &mut self.font_system,
-                            Some(CTX_MENU_WIDTH * scale * 0.65),
+                            Some(CTX_MENU_WIDTH * scale * 0.55),
                             Some(CTX_MENU_ITEM_HEIGHT * scale),
                         );
                         buf.set_text(
@@ -2062,7 +2113,7 @@ impl Gpu {
                         buf.shape_until_scroll(&mut self.font_system, false);
                         text_buffers.push(buf);
                         text_meta.push((
-                            mpos[0] + pad + 10.0 * scale,
+                            mpos[0] + pad + 10.0 * scale + check_indent,
                             y + (CTX_MENU_ITEM_HEIGHT * scale - label_line) * 0.5,
                             TextColor::rgb(220, 220, 228),
                             full_bounds,
@@ -2098,6 +2149,32 @@ impl Gpu {
                     }
                     ContextMenuEntry::Separator => {
                         y += CTX_MENU_SEPARATOR_HEIGHT * scale;
+                    }
+                    ContextMenuEntry::SectionHeader(label) => {
+                        let mut buf = TextBuffer::new(
+                            &mut self.font_system,
+                            Metrics::new(section_font, section_line),
+                        );
+                        buf.set_size(
+                            &mut self.font_system,
+                            Some(CTX_MENU_WIDTH * scale * 0.8),
+                            Some(CTX_MENU_SECTION_HEIGHT * scale),
+                        );
+                        buf.set_text(
+                            &mut self.font_system,
+                            label,
+                            Attrs::new().family(Family::SansSerif),
+                            Shaping::Advanced,
+                        );
+                        buf.shape_until_scroll(&mut self.font_system, false);
+                        text_buffers.push(buf);
+                        text_meta.push((
+                            mpos[0] + pad + 10.0 * scale,
+                            y + (CTX_MENU_SECTION_HEIGHT * scale - section_line) * 0.5,
+                            TextColor::rgba(150, 150, 160, 200),
+                            full_bounds,
+                        ));
+                        y += CTX_MENU_SECTION_HEIGHT * scale;
                     }
                 }
             }
@@ -2193,15 +2270,16 @@ impl Gpu {
 
         // Effect region name labels (world-space -> screen-space)
         for (er_idx, er) in effect_regions.iter().enumerate() {
-            let badge_x_world = er.position[0] + 4.0 / camera.zoom;
-            let badge_y_world = er.position[1] + 4.0 / camera.zoom;
-            let badge_w_world = 28.0 / camera.zoom;
-            let badge_h_world = 16.0 / camera.zoom;
+            let region_screen_w = er.size[0] * camera.zoom;
+            if region_screen_w < 30.0 {
+                continue;
+            }
 
-            let name_x_world = badge_x_world + badge_w_world + 4.0 / camera.zoom;
+            let pad = 6.0 / camera.zoom;
+            let name_x_world = er.position[0] + pad;
+            let name_y_world = er.position[1] - 18.0 / camera.zoom;
             let name_screen_x = (name_x_world - camera.position[0]) * camera.zoom;
-            let name_screen_y = (badge_y_world - camera.position[1]) * camera.zoom;
-            let badge_h_screen = badge_h_world * camera.zoom;
+            let name_screen_y = (name_y_world - camera.position[1]) * camera.zoom;
 
             let display_name = if let Some((idx, ref text)) = editing_effect_name {
                 if idx == er_idx { format!("{}|", text) } else { er.name.clone() }
@@ -2215,13 +2293,14 @@ impl Gpu {
                 &mut self.font_system,
                 Metrics::new(name_font, name_line),
             );
+            let max_text_w = (region_screen_w - 12.0 * scale).max(20.0);
             buf.set_size(
                 &mut self.font_system,
-                Some(200.0 * scale),
-                Some(badge_h_screen),
+                Some(max_text_w),
+                Some(name_line),
             );
             let is_editing = editing_effect_name.map_or(false, |(idx, _)| idx == er_idx);
-            let alpha = if is_editing { 255 } else { 160 };
+            let alpha = if is_editing { 255 } else { 180 };
             let attrs = Attrs::new()
                 .family(Family::Name(".AppleSystemUIFont"))
                 .weight(glyphon::Weight(500));
@@ -2230,7 +2309,7 @@ impl Gpu {
             text_buffers.push(buf);
             text_meta.push((
                 name_screen_x,
-                name_screen_y + (badge_h_screen - name_line) * 0.5,
+                name_screen_y,
                 TextColor::rgba(255, 255, 255, alpha),
                 full_bounds,
             ));
@@ -2341,6 +2420,30 @@ impl Gpu {
             text_buffers.push(buf);
             text_meta.push((
                 tp_pos[0] + 38.0 * scale,
+                tp_pos[1] + (tp_size[1] - tline) * 0.5,
+                TextColor::rgba(220, 220, 230, 220),
+                full_bounds,
+            ));
+        }
+
+        // Transport panel BPM text
+        {
+            let (tp_pos, tp_size) = TransportPanel::panel_rect(w, h, scale);
+            let bpm_str = format!("{} bpm", DEFAULT_BPM as u32);
+            let tfont = 13.0 * scale;
+            let tline = 18.0 * scale;
+            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(tfont, tline));
+            buf.set_size(&mut self.font_system, Some(80.0 * scale), Some(tline));
+            buf.set_text(
+                &mut self.font_system,
+                &bpm_str,
+                Attrs::new().family(Family::SansSerif),
+                Shaping::Advanced,
+            );
+            buf.shape_until_scroll(&mut self.font_system, false);
+            text_buffers.push(buf);
+            text_meta.push((
+                tp_pos[0] + tp_size[0] - 80.0 * scale,
                 tp_pos[1] + (tp_size[1] - tline) * 0.5,
                 TextColor::rgba(220, 220, 230, 220),
                 full_bounds,
@@ -2631,6 +2734,8 @@ impl App {
                         border_radius: sw.border_radius,
                         left_samples: Arc::new(Vec::new()),
                         right_samples: Arc::new(Vec::new()),
+                        left_peaks: Arc::new(WaveformPeaks::empty()),
+                        right_peaks: Arc::new(WaveformPeaks::empty()),
                         sample_rate: sw.sample_rate,
                         filename: sw.filename,
                         fade_in_px: sw.fade_in_px,
@@ -2676,7 +2781,7 @@ impl App {
         };
         sample_browser.width = browser_width;
 
-        let settings = Settings::load();
+        let mut settings = Settings::load();
 
         let device_name = if settings.audio_output_device == "No Device" {
             None
@@ -2684,7 +2789,14 @@ impl App {
             Some(settings.audio_output_device.as_str())
         };
         let audio_engine = AudioEngine::new_with_device(device_name);
-        if audio_engine.is_none() {
+        if let Some(ref engine) = audio_engine {
+            let actual = engine.device_name();
+            if settings.audio_output_device != actual {
+                println!("  Correcting stale output device setting: '{}' -> '{}'", settings.audio_output_device, actual);
+                settings.audio_output_device = actual.to_string();
+                settings.save();
+            }
+        } else {
             println!("  Warning: no audio output device found");
         }
 
@@ -2958,6 +3070,8 @@ impl App {
                 border_radius: sw.border_radius,
                 left_samples: Arc::new(Vec::new()),
                 right_samples: Arc::new(Vec::new()),
+                left_peaks: Arc::new(WaveformPeaks::empty()),
+                right_peaks: Arc::new(WaveformPeaks::empty()),
                 sample_rate: sw.sample_rate,
                 filename: sw.filename,
                 fade_in_px: sw.fade_in_px,
@@ -3211,6 +3325,8 @@ impl App {
                 if let Some(idx) = self.recording_waveform_idx.take() {
                     if idx < self.waveforms.len() {
                         self.waveforms[idx].size[0] = loaded.width;
+                        self.waveforms[idx].left_peaks = Arc::new(WaveformPeaks::build(&loaded.left_samples));
+                        self.waveforms[idx].right_peaks = Arc::new(WaveformPeaks::build(&loaded.right_samples));
                         self.waveforms[idx].left_samples = loaded.left_samples.clone();
                         self.waveforms[idx].right_samples = loaded.right_samples.clone();
                         self.waveforms[idx].sample_rate = loaded.sample_rate;
@@ -3249,6 +3365,8 @@ impl App {
                 border_radius: 8.0,
                 left_samples: Arc::new(Vec::new()),
                 right_samples: Arc::new(Vec::new()),
+                left_peaks: Arc::new(WaveformPeaks::empty()),
+                right_peaks: Arc::new(WaveformPeaks::empty()),
                 sample_rate,
                 filename: "Recording".to_string(),
                 fade_in_px: 0.0,
@@ -3273,6 +3391,8 @@ impl App {
         if let Some(loaded) = snapshot {
             if idx < self.waveforms.len() {
                 self.waveforms[idx].size[0] = loaded.width;
+                self.waveforms[idx].left_peaks = Arc::new(WaveformPeaks::build(&loaded.left_samples));
+                self.waveforms[idx].right_peaks = Arc::new(WaveformPeaks::build(&loaded.right_samples));
                 self.waveforms[idx].left_samples = loaded.left_samples;
                 self.waveforms[idx].right_samples = loaded.right_samples;
                 self.waveforms[idx].sample_rate = loaded.sample_rate;
@@ -3747,6 +3867,48 @@ impl App {
                         self.editing_waveform_name = Some((idx, current));
                     }
                 }
+            }
+            CommandAction::ToggleSnapToGrid => {
+                self.settings.snap_to_grid = !self.settings.snap_to_grid;
+                self.settings.save();
+            }
+            CommandAction::ToggleGrid => {
+                self.settings.grid_enabled = !self.settings.grid_enabled;
+                self.settings.save();
+            }
+            CommandAction::SetGridAdaptive(size) => {
+                self.settings.grid_mode = GridMode::Adaptive(size);
+                self.settings.save();
+            }
+            CommandAction::SetGridFixed(fg) => {
+                self.settings.grid_mode = GridMode::Fixed(fg);
+                self.settings.save();
+            }
+            CommandAction::NarrowGrid => {
+                match self.settings.grid_mode {
+                    GridMode::Adaptive(s) => {
+                        self.settings.grid_mode = GridMode::Adaptive(s.narrower());
+                    }
+                    GridMode::Fixed(f) => {
+                        self.settings.grid_mode = GridMode::Fixed(f.finer());
+                    }
+                }
+                self.settings.save();
+            }
+            CommandAction::WidenGrid => {
+                match self.settings.grid_mode {
+                    GridMode::Adaptive(s) => {
+                        self.settings.grid_mode = GridMode::Adaptive(s.wider());
+                    }
+                    GridMode::Fixed(f) => {
+                        self.settings.grid_mode = GridMode::Fixed(f.coarser());
+                    }
+                }
+                self.settings.save();
+            }
+            CommandAction::ToggleTripletGrid => {
+                self.settings.triplet_grid = !self.settings.triplet_grid;
+                self.settings.save();
             }
         }
         self.request_redraw();
@@ -4231,6 +4393,8 @@ impl App {
                 loaded.sample_rate,
                 loaded.left_samples.len(),
             );
+            let left_peaks = Arc::new(WaveformPeaks::build(&loaded.left_samples));
+            let right_peaks = Arc::new(WaveformPeaks::build(&loaded.right_samples));
             self.waveforms.push(WaveformObject {
                 position: [world[0] - loaded.width * 0.5, world[1] - height * 0.5],
                 size: [loaded.width, height],
@@ -4238,6 +4402,8 @@ impl App {
                 border_radius: 8.0,
                 left_samples: loaded.left_samples,
                 right_samples: loaded.right_samples,
+                left_peaks,
+                right_peaks,
                 sample_rate: loaded.sample_rate,
                 filename,
                 fade_in_px: 0.0,
@@ -4419,6 +4585,8 @@ impl ApplicationHandler for App {
                             loaded.sample_rate,
                             loaded.left_samples.len(),
                         );
+                        let left_peaks = Arc::new(WaveformPeaks::build(&loaded.left_samples));
+                        let right_peaks = Arc::new(WaveformPeaks::build(&loaded.right_samples));
                         self.waveforms.push(WaveformObject {
                             position: [world[0] - loaded.width * 0.5, world[1] - height * 0.5],
                             size: [loaded.width, height],
@@ -4426,6 +4594,8 @@ impl ApplicationHandler for App {
                             border_radius: 8.0,
                             left_samples: loaded.left_samples,
                             right_samples: loaded.right_samples,
+                            left_peaks,
+                            right_peaks,
                             sample_rate: loaded.sample_rate,
                             filename,
                             fade_in_px: 0.0,
@@ -4666,15 +4836,16 @@ impl ApplicationHandler for App {
                         let world = self.camera.screen_to_world(self.mouse_pos);
                         let mut needs_sync = false;
                         for (target, offset) in &offsets {
+                            let raw_x = world[0] - offset[0];
+                            let snapped_x = snap_to_grid(raw_x, &self.settings, self.camera.zoom);
                             self.set_target_pos(
                                 target,
-                                [world[0] - offset[0], world[1] - offset[1]],
+                                [snapped_x, world[1] - offset[1]],
                             );
                             if matches!(target, HitTarget::Waveform(_) | HitTarget::EffectRegion(_) | HitTarget::ComponentDef(_) | HitTarget::ComponentInstance(_)) {
                                 needs_sync = true;
                             }
                         }
-                        // Update component bounds if editing waveforms inside a component
                         if let Some(ec_idx) = self.editing_component {
                             self.update_component_bounds(ec_idx);
                         }
@@ -4739,7 +4910,7 @@ impl ApplicationHandler for App {
                             }
                             None => {
                                 if self.selected.is_empty() {
-                                    MenuContext::Canvas
+                                    MenuContext::Grid
                                 } else {
                                     let has_waveforms = self.selected.iter().any(|t| matches!(t, HitTarget::Waveform(_)));
                                     let has_effect_region = self.selected.iter().any(|t| matches!(t, HitTarget::EffectRegion(_)));
@@ -4747,7 +4918,7 @@ impl ApplicationHandler for App {
                                 }
                             }
                         };
-                        self.context_menu = Some(ContextMenu::new(self.mouse_pos, menu_ctx));
+                        self.context_menu = Some(ContextMenu::new(self.mouse_pos, menu_ctx, &self.settings));
                         self.request_redraw();
                     }
                 }
@@ -4797,6 +4968,7 @@ impl ApplicationHandler for App {
                                 .map_or(false, |sw| sw.contains(self.mouse_pos, scr_w, scr_h, scale));
                             if inside {
                                 // Try audio dropdown interaction first
+                                let prev_output_device = self.settings.audio_output_device.clone();
                                 let audio_consumed = self
                                     .settings_window
                                     .as_mut()
@@ -4805,6 +4977,46 @@ impl ApplicationHandler for App {
                                     });
                                 if audio_consumed {
                                     self.settings.save();
+
+                                    if self.settings.audio_output_device != prev_output_device {
+                                        println!("[audio] Output device changed: '{}' -> '{}'", prev_output_device, self.settings.audio_output_device);
+
+                                        let old_pos = self.audio_engine.as_ref().map(|e| e.position_seconds());
+                                        let old_vol = self.audio_engine.as_ref().map(|e| e.master_volume());
+                                        let was_playing = self.audio_engine.as_ref().map_or(false, |e| e.is_playing());
+
+                                        let device_name = if self.settings.audio_output_device == "No Device" {
+                                            None
+                                        } else {
+                                            Some(self.settings.audio_output_device.as_str())
+                                        };
+                                        self.audio_engine = AudioEngine::new_with_device(device_name);
+
+                                        if let Some(ref engine) = self.audio_engine {
+                                            let actual = engine.device_name().to_string();
+                                            if self.settings.audio_output_device != actual {
+                                                println!("[audio] Device '{}' not available, using '{}'", self.settings.audio_output_device, actual);
+                                                self.settings.audio_output_device = actual;
+                                                self.settings.save();
+                                            }
+                                            if let Some(pos) = old_pos {
+                                                engine.seek_to_seconds(pos);
+                                            }
+                                            if let Some(vol) = old_vol {
+                                                engine.set_master_volume(vol);
+                                            }
+                                        } else {
+                                            println!("[audio] Warning: failed to create audio engine for device");
+                                        }
+
+                                        self.sync_audio_clips();
+                                        if was_playing {
+                                            if let Some(engine) = &self.audio_engine {
+                                                engine.toggle_playback();
+                                            }
+                                        }
+                                    }
+
                                     self.request_redraw();
                                     return;
                                 }
@@ -5734,6 +5946,18 @@ impl ApplicationHandler for App {
                                 } else {
                                     self.undo();
                                 }
+                            }
+                            "1" => {
+                                self.execute_command(CommandAction::NarrowGrid);
+                            }
+                            "2" => {
+                                self.execute_command(CommandAction::WidenGrid);
+                            }
+                            "3" => {
+                                self.execute_command(CommandAction::ToggleTripletGrid);
+                            }
+                            "4" => {
+                                self.execute_command(CommandAction::ToggleSnapToGrid);
                             }
                             _ => {}
                         },
