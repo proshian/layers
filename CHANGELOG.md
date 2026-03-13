@@ -1,3 +1,4 @@
+- Refactor area corner-resize into shared helpers; component resize now snaps to grid (15.8k loc)
 - Add scroll support for command palette rows (keyboard and mouse wheel) (15.7k loc)
 - Add close "x" button on plugin label pills to remove plugins from effect chain (15.6k loc)
 - Expanded sample color palette to 16 Logic-Pro-inspired colors in two rows (15.5k loc)

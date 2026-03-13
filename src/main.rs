@@ -432,6 +432,55 @@ pub(crate) fn rects_overlap(a_pos: [f32; 2], a_size: [f32; 2], b_pos: [f32; 2], 
         && a_pos[1] + a_size[1] > b_pos[1]
 }
 
+fn hit_test_corner_resize(
+    position: [f32; 2],
+    size: [f32; 2],
+    world_pos: [f32; 2],
+    zoom: f32,
+) -> Option<([f32; 2], bool)> {
+    let handle_sz = 24.0 / zoom;
+    let p = position;
+    let s = size;
+    let corners: [([f32; 2], [f32; 2], bool); 4] = [
+        ([p[0], p[1]], [p[0] + s[0], p[1] + s[1]], true),
+        ([p[0] + s[0], p[1]], [p[0], p[1] + s[1]], false),
+        ([p[0], p[1] + s[1]], [p[0] + s[0], p[1]], false),
+        ([p[0] + s[0], p[1] + s[1]], [p[0], p[1]], true),
+    ];
+    for (corner, anchor, is_nwse) in &corners {
+        let hx = corner[0] - handle_sz * 0.5;
+        let hy = corner[1] - handle_sz * 0.5;
+        if point_in_rect(world_pos, [hx, hy], [handle_sz, handle_sz]) {
+            return Some((*anchor, *is_nwse));
+        }
+    }
+    None
+}
+
+fn compute_resize(
+    anchor: [f32; 2],
+    world: [f32; 2],
+    min_size: f32,
+    snap_x: bool,
+    settings: &Settings,
+    zoom: f32,
+    bpm: f32,
+) -> ([f32; 2], [f32; 2]) {
+    let (wx, ax) = if snap_x {
+        (
+            snap_to_grid(world[0], settings, zoom, bpm),
+            snap_to_grid(anchor[0], settings, zoom, bpm),
+        )
+    } else {
+        (world[0], anchor[0])
+    };
+    let x0 = ax.min(wx);
+    let y0 = anchor[1].min(world[1]);
+    let x1 = ax.max(wx);
+    let y1 = anchor[1].max(world[1]);
+    ([x0, y0], [(x1 - x0).max(min_size), (y1 - y0).max(min_size)])
+}
+
 fn canonical_rect(a: [f32; 2], b: [f32; 2]) -> ([f32; 2], [f32; 2]) {
     let x = a[0].min(b[0]);
     let y = a[1].min(b[1]);
@@ -1617,6 +1666,14 @@ impl App {
                 pb.size = spb.size;
                 pb.color = spb.color;
                 pb.bypass = spb.bypass;
+                if !spb.state.is_empty() {
+                    pb.pending_state = Some(spb.state);
+                }
+                if !spb.params.is_empty() && spb.params.len() % 8 == 0 {
+                    pb.pending_params = Some(spb.params.chunks_exact(8)
+                        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+                        .collect());
+                }
                 pb
             })
             .collect();
@@ -1776,6 +1833,17 @@ impl App {
                     plugin_id: pb.plugin_id.clone(),
                     plugin_name: pb.plugin_name.clone(),
                     bypass: pb.bypass,
+                    state: pb.gui.lock().ok()
+                        .and_then(|g| g.as_ref().and_then(|gui| gui.get_state()))
+                        .or_else(|| pb.instance.lock().ok()
+                            .and_then(|g| g.as_ref().and_then(|inst| inst.get_state().ok())))
+                        .unwrap_or_default(),
+                    params: {
+                        let vals = pb.gui.lock().ok()
+                            .and_then(|g| g.as_ref().map(|gui| gui.get_all_parameters()))
+                            .unwrap_or_default();
+                        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+                    },
                 })
                 .collect();
 
@@ -2140,6 +2208,14 @@ impl App {
                 pb.size = spb.size;
                 pb.color = spb.color;
                 pb.bypass = spb.bypass;
+                if !spb.state.is_empty() {
+                    pb.pending_state = Some(spb.state);
+                }
+                if !spb.params.is_empty() && spb.params.len() % 8 == 0 {
+                    pb.pending_params = Some(spb.params.chunks_exact(8)
+                        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+                        .collect());
+                }
                 pb
             })
             .collect();
@@ -2197,6 +2273,36 @@ impl App {
         self.dragging_bpm = None;
         self.command_palette = None;
         self.context_menu = None;
+
+        // If plugins are already scanned, load instances for restored plugin blocks now
+        if self.plugin_registry.is_scanned() {
+            for pb in &mut self.plugin_blocks {
+                let has_instance = pb.instance.lock().ok().map_or(false, |g| g.is_some());
+                if !has_instance {
+                    if let Some(instance) =
+                        self.plugin_registry
+                            .load_plugin(&pb.plugin_id, 48000.0, 512)
+                    {
+                        {
+                            let mut g = pb.instance.lock().unwrap();
+                            *g = Some(instance);
+                            if let Some(state) = &pb.pending_state {
+                                if let Some(inst) = g.as_mut() {
+                                    match inst.set_state(state) {
+                                        Ok(()) => println!("  Restored plugin state ({} bytes)", state.len()),
+                                        Err(e) => println!("  Failed to restore rack state: {} (will restore via GUI)", e),
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
+                            pb.plugin_path = entry.info.path.clone();
+                        }
+                        println!("  Loaded plugin '{}', path='{}'", pb.plugin_name, pb.plugin_path.display());
+                    }
+                }
+            }
+        }
 
         self.sync_audio_clips();
         println!("Project '{}' loaded", self.current_project_name);
@@ -2354,6 +2460,8 @@ impl App {
                     bypass: snap.bypass,
                     instance: Arc::new(std::sync::Mutex::new(instance)),
                     gui: Arc::new(std::sync::Mutex::new(None)),
+                    pending_state: None,
+                    pending_params: None,
                 }
             })
             .collect();
@@ -4314,7 +4422,19 @@ impl App {
                     self.plugin_registry
                         .load_plugin(&pb.plugin_id, 48000.0, 512)
                 {
-                    *pb.instance.lock().unwrap() = Some(instance);
+                    {
+                        let mut g = pb.instance.lock().unwrap();
+                        *g = Some(instance);
+                        // Try to restore rack instance state (keep pending_state for GUI)
+                        if let Some(state) = &pb.pending_state {
+                            if let Some(inst) = g.as_mut() {
+                                match inst.set_state(state) {
+                                    Ok(()) => println!("  Restored plugin state ({} bytes)", state.len()),
+                                    Err(e) => println!("  Failed to restore rack state: {} (will restore via GUI)", e),
+                                }
+                            }
+                        }
+                    }
                     // Also update plugin_path from registry
                     if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
                         pb.plugin_path = entry.info.path.clone();
@@ -4378,24 +4498,79 @@ impl App {
         if idx >= self.plugin_blocks.len() {
             return;
         }
+
+        // Ensure plugin is loaded and path is resolved before opening GUI
+        self.ensure_plugins_scanned();
+        {
+            let pb = &mut self.plugin_blocks[idx];
+            if pb.plugin_path.as_os_str().is_empty() {
+                if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
+                    pb.plugin_path = entry.info.path.clone();
+                }
+            }
+            let has_instance = pb.instance.lock().ok().map_or(false, |g| g.is_some());
+            if !has_instance {
+                if let Some(instance) = self.plugin_registry.load_plugin(&pb.plugin_id, 48000.0, 512) {
+                    let mut g = pb.instance.lock().unwrap();
+                    *g = Some(instance);
+                    // Try to restore rack instance state (may fail for some plugins, that's ok —
+                    // the GUI will get state directly from pending_state)
+                    if let Some(state) = &pb.pending_state {
+                        if let Some(inst) = g.as_mut() {
+                            let _ = inst.set_state(state);
+                        }
+                    }
+                }
+            }
+        }
+
+        let saved_state = self.plugin_blocks[idx].pending_state.take();
+        let saved_params = self.plugin_blocks[idx].pending_params.take();
         let pb = &self.plugin_blocks[idx];
         let path = pb.plugin_path.to_string_lossy().to_string();
         let uid = pb.plugin_id.clone();
         let name = pb.plugin_name.clone();
 
         if !path.is_empty() {
-            let already_open = pb.gui.lock()
-                .ok()
-                .map_or(false, |g| g.as_ref().map_or(false, |gui| gui.is_open()));
-            if !already_open {
-                if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &uid, &name) {
-                    println!("  Opened native GUI for '{}'", name);
-                    if let Ok(mut g) = pb.gui.lock() {
-                        *g = Some(gui);
+            // Check if we already have a GUI handle (open or hidden)
+            let has_gui = pb.gui.lock().ok().map_or(false, |g| g.is_some());
+            if has_gui {
+                let is_visible = pb.gui.lock()
+                    .ok()
+                    .map_or(false, |g| g.as_ref().map_or(false, |gui| gui.is_open()));
+                if !is_visible {
+                    // GUI exists but hidden — just show it again
+                    if let Ok(g) = pb.gui.lock() {
+                        if let Some(gui) = g.as_ref() {
+                            gui.show();
+                            println!("  Re-showed native GUI for '{}'", name);
+                        }
                     }
-                    return;
                 }
-            } else {
+                // Already visible or just shown — done
+                return;
+            }
+
+            // No GUI yet — create one
+            if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &uid, &name) {
+                // Restore saved state blob first (handles preset name, etc.)
+                let state_to_restore = saved_state
+                    .or_else(|| pb.instance.lock().ok()
+                        .and_then(|g| g.as_ref().and_then(|inst| inst.get_state().ok())));
+                if let Some(state) = state_to_restore {
+                    if !state.is_empty() {
+                        gui.set_state(&state);
+                    }
+                }
+                // Then restore individual parameter values (more reliable for some plugins)
+                if let Some(params) = saved_params {
+                    gui.set_all_parameters(&params);
+                    println!("  Restored {} GUI parameters", params.len());
+                }
+                println!("  Opened native GUI for '{}'", name);
+                if let Ok(mut g) = pb.gui.lock() {
+                    *g = Some(gui);
+                }
                 return;
             }
         }
@@ -4470,6 +4645,9 @@ impl ApplicationHandler for App {
         if let Ok(event) = muda::MenuEvent::receiver().try_recv() {
             self.handle_menu_event(event.id);
         }
+
+        // GUI handles are kept alive (just hidden when user closes window).
+        // No teardown or state sync needed here.
     }
 
     fn window_event(
@@ -4765,20 +4943,12 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing component def
-                if let DragState::ResizingComponentDef {
-                    comp_idx, anchor, ..
-                } = self.drag
-                {
+                if let DragState::ResizingComponentDef { comp_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if comp_idx < self.components.len() {
-                        let min_size = 40.0;
-                        let x0 = anchor[0].min(world[0]);
-                        let y0 = anchor[1].min(world[1]);
-                        let x1 = anchor[0].max(world[0]);
-                        let y1 = anchor[1].max(world[1]);
-                        self.components[comp_idx].position = [x0, y0];
-                        self.components[comp_idx].size =
-                            [(x1 - x0).max(min_size), (y1 - y0).max(min_size)];
+                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        self.components[comp_idx].position = pos;
+                        self.components[comp_idx].size = size;
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -4789,15 +4959,9 @@ impl ApplicationHandler for App {
                 if let DragState::ResizingExportRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if region_idx < self.export_regions.len() {
-                        let min_size = 40.0;
-                        let snapped_wx = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
-                        let snapped_ax = snap_to_grid(anchor[0], &self.settings, self.camera.zoom, self.bpm);
-                        let x0 = snapped_ax.min(snapped_wx);
-                        let y0 = anchor[1].min(world[1]);
-                        let x1 = snapped_ax.max(snapped_wx);
-                        let y1 = anchor[1].max(world[1]);
-                        self.export_regions[region_idx].position = [x0, y0];
-                        self.export_regions[region_idx].size = [(x1 - x0).max(min_size), (y1 - y0).max(min_size)];
+                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        self.export_regions[region_idx].position = pos;
+                        self.export_regions[region_idx].size = size;
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -4805,22 +4969,12 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing effect region
-                if let DragState::ResizingEffectRegion {
-                    region_idx, anchor, ..
-                } = self.drag
-                {
+                if let DragState::ResizingEffectRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if region_idx < self.effect_regions.len() {
-                        let min_size = 40.0;
-                        let snapped_wx = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
-                        let snapped_ax = snap_to_grid(anchor[0], &self.settings, self.camera.zoom, self.bpm);
-                        let x0 = snapped_ax.min(snapped_wx);
-                        let y0 = anchor[1].min(world[1]);
-                        let x1 = snapped_ax.max(snapped_wx);
-                        let y1 = anchor[1].max(world[1]);
-                        self.effect_regions[region_idx].position = [x0, y0];
-                        self.effect_regions[region_idx].size =
-                            [(x1 - x0).max(min_size), (y1 - y0).max(min_size)];
+                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        self.effect_regions[region_idx].position = pos;
+                        self.effect_regions[region_idx].size = size;
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -4831,15 +4985,9 @@ impl ApplicationHandler for App {
                 if let DragState::ResizingLoopRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if region_idx < self.loop_regions.len() {
-                        let min_size = 40.0;
-                        let snapped_wx = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
-                        let snapped_ax = snap_to_grid(anchor[0], &self.settings, self.camera.zoom, self.bpm);
-                        let x0 = snapped_ax.min(snapped_wx);
-                        let y0 = anchor[1].min(world[1]);
-                        let x1 = snapped_ax.max(snapped_wx);
-                        let y1 = anchor[1].max(world[1]);
-                        self.loop_regions[region_idx].position = [x0, y0];
-                        self.loop_regions[region_idx].size = [(x1 - x0).max(min_size), (y1 - y0).max(min_size)];
+                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        self.loop_regions[region_idx].position = pos;
+                        self.loop_regions[region_idx].size = size;
                     }
                     self.sync_loop_region();
                     self.mark_dirty();
@@ -5440,37 +5588,10 @@ impl ApplicationHandler for App {
                         self.last_canvas_click_world = world;
 
                         // --- component def corner resize ---
-                        {
-                            let handle_sz = 24.0 / self.camera.zoom;
-                            let mut corner_hit: Option<(usize, [f32; 2], bool)> = None;
-                            for (ci, def) in self.components.iter().enumerate() {
-                                let p = def.position;
-                                let s = def.size;
-                                let corners: [([f32; 2], [f32; 2], bool); 4] = [
-                                    ([p[0], p[1]], [p[0] + s[0], p[1] + s[1]], true),
-                                    ([p[0] + s[0], p[1]], [p[0], p[1] + s[1]], false),
-                                    ([p[0], p[1] + s[1]], [p[0] + s[0], p[1]], false),
-                                    ([p[0] + s[0], p[1] + s[1]], [p[0], p[1]], true),
-                                ];
-                                for (corner, anchor, is_nwse) in &corners {
-                                    let hx = corner[0] - handle_sz * 0.5;
-                                    let hy = corner[1] - handle_sz * 0.5;
-                                    if point_in_rect(world, [hx, hy], [handle_sz, handle_sz]) {
-                                        corner_hit = Some((ci, *anchor, *is_nwse));
-                                        break;
-                                    }
-                                }
-                                if corner_hit.is_some() {
-                                    break;
-                                }
-                            }
-                            if let Some((ci, anchor, nwse)) = corner_hit {
+                        for (ci, def) in self.components.iter().enumerate() {
+                            if let Some((anchor, nwse)) = hit_test_corner_resize(def.position, def.size, world, self.camera.zoom) {
                                 self.push_undo();
-                                self.drag = DragState::ResizingComponentDef {
-                                    comp_idx: ci,
-                                    anchor,
-                                    nwse,
-                                };
+                                self.drag = DragState::ResizingComponentDef { comp_idx: ci, anchor, nwse };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -5478,37 +5599,10 @@ impl ApplicationHandler for App {
                         }
 
                         // --- effect region corner resize ---
-                        {
-                            let handle_sz = 24.0 / self.camera.zoom;
-                            let mut corner_hit: Option<(usize, [f32; 2], bool)> = None;
-                            for (i, er) in self.effect_regions.iter().enumerate() {
-                                let p = er.position;
-                                let s = er.size;
-                                let corners: [([f32; 2], [f32; 2], bool); 4] = [
-                                    ([p[0], p[1]], [p[0] + s[0], p[1] + s[1]], true),
-                                    ([p[0] + s[0], p[1]], [p[0], p[1] + s[1]], false),
-                                    ([p[0], p[1] + s[1]], [p[0] + s[0], p[1]], false),
-                                    ([p[0] + s[0], p[1] + s[1]], [p[0], p[1]], true),
-                                ];
-                                for (corner, anchor, is_nwse) in &corners {
-                                    let hx = corner[0] - handle_sz * 0.5;
-                                    let hy = corner[1] - handle_sz * 0.5;
-                                    if point_in_rect(world, [hx, hy], [handle_sz, handle_sz]) {
-                                        corner_hit = Some((i, *anchor, *is_nwse));
-                                        break;
-                                    }
-                                }
-                                if corner_hit.is_some() {
-                                    break;
-                                }
-                            }
-                            if let Some((idx, anchor, nwse)) = corner_hit {
+                        for (i, er) in self.effect_regions.iter().enumerate() {
+                            if let Some((anchor, nwse)) = hit_test_corner_resize(er.position, er.size, world, self.camera.zoom) {
                                 self.push_undo();
-                                self.drag = DragState::ResizingEffectRegion {
-                                    region_idx: idx,
-                                    anchor,
-                                    nwse,
-                                };
+                                self.drag = DragState::ResizingEffectRegion { region_idx: i, anchor, nwse };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -5516,37 +5610,10 @@ impl ApplicationHandler for App {
                         }
 
                         // --- export region corner resize ---
-                        {
-                            let handle_sz = 24.0 / self.camera.zoom;
-                            let mut corner_hit: Option<(usize, [f32; 2], bool)> = None;
-                            for (i, er) in self.export_regions.iter().enumerate() {
-                                let p = er.position;
-                                let s = er.size;
-                                let corners: [([f32; 2], [f32; 2], bool); 4] = [
-                                    ([p[0], p[1]], [p[0] + s[0], p[1] + s[1]], true),
-                                    ([p[0] + s[0], p[1]], [p[0], p[1] + s[1]], false),
-                                    ([p[0], p[1] + s[1]], [p[0] + s[0], p[1]], false),
-                                    ([p[0] + s[0], p[1] + s[1]], [p[0], p[1]], true),
-                                ];
-                                for (corner, anchor, is_nwse) in &corners {
-                                    let hx = corner[0] - handle_sz * 0.5;
-                                    let hy = corner[1] - handle_sz * 0.5;
-                                    if point_in_rect(world, [hx, hy], [handle_sz, handle_sz]) {
-                                        corner_hit = Some((i, *anchor, *is_nwse));
-                                        break;
-                                    }
-                                }
-                                if corner_hit.is_some() {
-                                    break;
-                                }
-                            }
-                            if let Some((idx, anchor, nwse)) = corner_hit {
+                        for (i, er) in self.export_regions.iter().enumerate() {
+                            if let Some((anchor, nwse)) = hit_test_corner_resize(er.position, er.size, world, self.camera.zoom) {
                                 self.push_undo();
-                                self.drag = DragState::ResizingExportRegion {
-                                    region_idx: idx,
-                                    anchor,
-                                    nwse,
-                                };
+                                self.drag = DragState::ResizingExportRegion { region_idx: i, anchor, nwse };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -5567,40 +5634,13 @@ impl ApplicationHandler for App {
                         }
 
                         // --- loop region corner resize ---
-                        {
-                            let handle_sz = 24.0 / self.camera.zoom;
-                            let mut corner_hit: Option<(usize, [f32; 2], bool)> = None;
-                            for (i, lr) in self.loop_regions.iter().enumerate() {
-                                if !lr.enabled {
-                                    continue;
-                                }
-                                let p = lr.position;
-                                let s = lr.size;
-                                let corners: [([f32; 2], [f32; 2], bool); 4] = [
-                                    ([p[0], p[1]], [p[0] + s[0], p[1] + s[1]], true),
-                                    ([p[0] + s[0], p[1]], [p[0], p[1] + s[1]], false),
-                                    ([p[0], p[1] + s[1]], [p[0] + s[0], p[1]], false),
-                                    ([p[0] + s[0], p[1] + s[1]], [p[0], p[1]], true),
-                                ];
-                                for (corner, anchor, is_nwse) in &corners {
-                                    let hx = corner[0] - handle_sz * 0.5;
-                                    let hy = corner[1] - handle_sz * 0.5;
-                                    if point_in_rect(world, [hx, hy], [handle_sz, handle_sz]) {
-                                        corner_hit = Some((i, *anchor, *is_nwse));
-                                        break;
-                                    }
-                                }
-                                if corner_hit.is_some() {
-                                    break;
-                                }
+                        for (i, lr) in self.loop_regions.iter().enumerate() {
+                            if !lr.enabled {
+                                continue;
                             }
-                            if let Some((idx, anchor, nwse)) = corner_hit {
+                            if let Some((anchor, nwse)) = hit_test_corner_resize(lr.position, lr.size, world, self.camera.zoom) {
                                 self.push_undo();
-                                self.drag = DragState::ResizingLoopRegion {
-                                    region_idx: idx,
-                                    anchor,
-                                    nwse,
-                                };
+                                self.drag = DragState::ResizingLoopRegion { region_idx: i, anchor, nwse };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;

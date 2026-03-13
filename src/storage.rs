@@ -43,6 +43,8 @@ pub struct StoredPluginBlock {
     pub plugin_id: String,
     pub plugin_name: String,
     pub bypass: bool,
+    pub state: Vec<u8>,
+    pub params: Vec<u8>,
 }
 
 #[derive(Clone, SurrealValue)]

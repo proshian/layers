@@ -190,6 +190,8 @@ pub struct PluginBlock {
     pub bypass: bool,
     pub instance: Arc<Mutex<Option<Box<dyn PluginInstance>>>>,
     pub gui: Arc<Mutex<Option<vst3_gui::Vst3Gui>>>,
+    pub pending_state: Option<Vec<u8>>,
+    pub pending_params: Option<Vec<f64>>,
 }
 
 impl PluginBlock {
@@ -204,6 +206,8 @@ impl PluginBlock {
             bypass: false,
             instance: Arc::new(Mutex::new(None)),
             gui: Arc::new(Mutex::new(None)),
+            pending_state: None,
+            pending_params: None,
         }
     }
 

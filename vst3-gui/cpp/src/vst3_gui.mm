@@ -341,23 +341,40 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
 void vst3_gui_close(Vst3GuiHandle* handle) {
     if (!handle) return;
 
+    // Just hide the window — do NOT terminate/release plugin objects.
+    if (handle->window && [handle->window isVisible]) {
+        [handle->window orderOut:nil];
+    }
+
+    fprintf(stderr, "vst3_gui_close: window hidden\n");
+}
+
+void vst3_gui_destroy(Vst3GuiHandle* handle) {
+    if (!handle) return;
+
+    // 1. Hide window first to stop any rendering/interaction
+    if (handle->window) {
+        [handle->window orderOut:nil];
+    }
+
+    // 2. Detach the view from the container
     if (handle->view) {
         handle->view->setFrame(nullptr);
         handle->view->removed();
-        handle->view = nullptr;
     }
 
-    if (handle->plugFrame) {
-        handle->plugFrame->release();
-        handle->plugFrame = nullptr;
-    }
-
+    // 3. Close and release window (before terminating plugin objects)
     if (handle->window) {
+        [handle->window setContentView:nil];
         [handle->window close];
         handle->window = nil;
     }
+    handle->containerView = nil;
 
-    // Disconnect component ↔ controller
+    // 4. Release the view (after window is gone)
+    handle->view = nullptr;
+
+    // 5. Disconnect connection proxies
     if (handle->componentCP) {
         handle->componentCP->disconnect();
         handle->componentCP = nullptr;
@@ -367,23 +384,41 @@ void vst3_gui_close(Vst3GuiHandle* handle) {
         handle->controllerCP = nullptr;
     }
 
-    if (handle->controller && !handle->isSingleComponent) {
-        handle->controller->terminate();
+    // 6. Release plug frame and component handler before terminating
+    if (handle->plugFrame) {
+        handle->plugFrame->release();
+        handle->plugFrame = nullptr;
     }
-    handle->controller = nullptr;
-
-    if (handle->component) {
-        handle->component->terminate();
-        handle->component = nullptr;
-    }
-
     if (handle->componentHandler) {
         handle->componentHandler->release();
         handle->componentHandler = nullptr;
     }
 
+    // 7. Terminate controller (only if separate from component)
+    if (handle->controller) {
+        if (!handle->isSingleComponent) {
+            handle->controller->terminate();
+        }
+        handle->controller = nullptr;
+    }
+
+    // 8. Terminate component
+    if (handle->component) {
+        handle->component->terminate();
+        handle->component = nullptr;
+    }
+
+    // 9. Release the module last
     handle->module = nullptr;
+
     delete handle;
+    fprintf(stderr, "vst3_gui_destroy: handle destroyed\n");
+}
+
+void vst3_gui_show(Vst3GuiHandle* handle) {
+    if (!handle || !handle->window) return;
+    [handle->window makeKeyAndOrderFront:nil];
+    fprintf(stderr, "vst3_gui_show: window shown\n");
 }
 
 int vst3_gui_is_open(Vst3GuiHandle* handle) {
@@ -397,6 +432,127 @@ int vst3_gui_get_size(Vst3GuiHandle* handle, float* width, float* height) {
     if (handle->view->getSize(&rect) != kResultOk) return -1;
     if (width) *width = static_cast<float>(rect.right - rect.left);
     if (height) *height = static_cast<float>(rect.bottom - rect.top);
+    return 0;
+}
+
+int vst3_gui_get_state(Vst3GuiHandle* handle, unsigned char* data, int capacity) {
+    if (!handle || !handle->component) return -1;
+
+    // Use the same format as rack: [uint32 component_size][component state][controller state]
+    MemoryStream stream;
+
+    // Reserve space for component state size marker
+    uint32_t size_placeholder = 0;
+    stream.write(&size_placeholder, sizeof(size_placeholder), nullptr);
+
+    int64 comp_start = 0;
+    stream.tell(&comp_start);
+
+    if (handle->component->getState(&stream) != kResultOk) {
+        return -1;
+    }
+
+    int64 comp_end = 0;
+    stream.tell(&comp_end);
+    uint32_t comp_size = static_cast<uint32_t>(comp_end - comp_start);
+
+    // Write component size at the beginning
+    stream.seek(0, IBStream::kIBSeekSet, nullptr);
+    stream.write(&comp_size, sizeof(comp_size), nullptr);
+    stream.seek(comp_end, IBStream::kIBSeekSet, nullptr);
+
+    // Get controller state if separate
+    if (handle->controller && !handle->isSingleComponent) {
+        handle->controller->getState(&stream);
+    }
+
+    int64 total_size = 0;
+    stream.seek(0, IBStream::kIBSeekEnd, &total_size);
+    stream.seek(0, IBStream::kIBSeekSet, nullptr);
+
+    if (!data || capacity <= 0) {
+        return (int)total_size;
+    }
+
+    int bytesToCopy = (int)total_size < capacity ? (int)total_size : capacity;
+    int32 bytesRead = 0;
+    stream.read(data, bytesToCopy, &bytesRead);
+    return bytesRead;
+}
+
+int vst3_gui_set_state(Vst3GuiHandle* handle, const unsigned char* data, int size) {
+    if (!handle || !handle->component || !data || size <= (int)sizeof(uint32_t)) return -1;
+
+    // Parse rack format: [uint32 component_size][component state][controller state]
+    uint32_t comp_size = 0;
+    memcpy(&comp_size, data, sizeof(comp_size));
+
+    const unsigned char* comp_data = data + sizeof(uint32_t);
+    int comp_data_len = (int)comp_size;
+    if ((int)sizeof(uint32_t) + comp_data_len > size) {
+        comp_data_len = size - (int)sizeof(uint32_t);
+    }
+
+    // Set component state
+    MemoryStream compStream;
+    compStream.write((void*)comp_data, comp_data_len, nullptr);
+    compStream.seek(0, IBStream::kIBSeekSet, nullptr);
+    tresult result = handle->component->setState(&compStream);
+    if (result != kResultOk) {
+        fprintf(stderr, "vst3_gui_set_state: component setState failed (%d)\n", result);
+        return -1;
+    }
+
+    // Sync component state to controller (setComponentState, not setState)
+    if (handle->controller) {
+        compStream.seek(0, IBStream::kIBSeekSet, nullptr);
+        handle->controller->setComponentState(&compStream);
+    }
+
+    // Set controller state if separate and data is available
+    if (handle->controller && !handle->isSingleComponent) {
+        int ctrl_offset = (int)sizeof(uint32_t) + (int)comp_size;
+        if (ctrl_offset < size) {
+            const unsigned char* ctrl_data = data + ctrl_offset;
+            int ctrl_len = size - ctrl_offset;
+            MemoryStream ctrlStream;
+            ctrlStream.write((void*)ctrl_data, ctrl_len, nullptr);
+            ctrlStream.seek(0, IBStream::kIBSeekSet, nullptr);
+            handle->controller->setState(&ctrlStream);
+        }
+    }
+
+    fprintf(stderr, "vst3_gui_set_state: restored %d bytes (comp=%u)\n", size, comp_size);
+    return 0;
+}
+
+int vst3_gui_get_parameter_count(Vst3GuiHandle* handle) {
+    if (!handle || !handle->controller) return -1;
+    return handle->controller->getParameterCount();
+}
+
+int vst3_gui_get_parameter(Vst3GuiHandle* handle, int index, double* value) {
+    if (!handle || !handle->controller || !value) return -1;
+    int count = handle->controller->getParameterCount();
+    if (index < 0 || index >= count) return -1;
+
+    ParameterInfo info;
+    if (handle->controller->getParameterInfo(index, info) != kResultOk) return -1;
+    *value = handle->controller->getParamNormalized(info.id);
+    return 0;
+}
+
+int vst3_gui_set_parameter(Vst3GuiHandle* handle, int index, double value) {
+    if (!handle || !handle->controller) return -1;
+    int count = handle->controller->getParameterCount();
+    if (index < 0 || index >= count) return -1;
+
+    ParameterInfo info;
+    if (handle->controller->getParameterInfo(index, info) != kResultOk) return -1;
+    if (handle->controller->setParamNormalized(info.id, value) != kResultOk) return -1;
+
+    // Also notify the component if separate (through connection proxy)
+    // The controller→component sync happens via the connection if present
     return 0;
 }
 
