@@ -312,24 +312,11 @@ impl ApplicationHandler for App {
                 if self.sample_browser.visible && !matches!(self.drag, DragState::ResizingBrowser) {
                     let (_, sh, scale) = self.screen_info();
                     if self.sample_browser.contains(self.mouse_pos, sh, scale) {
-                        let plugin_y = self.plugin_section_y_offset(sh, scale);
-                        let header_h = ui::browser::HEADER_HEIGHT * scale;
-                        let local_plugin_y = self.mouse_pos[1] - plugin_y;
-                        if local_plugin_y >= 0.0
-                            && plugin_y >= header_h
-                            && !self.plugin_browser.plugins.is_empty()
-                        {
-                            self.plugin_browser.update_hover(local_plugin_y, scale);
-                            self.sample_browser.hovered_entry = None;
-                        } else {
-                            self.plugin_browser.hovered_entry = None;
-                            self.sample_browser.update_hover(self.mouse_pos, sh, scale);
-                        }
+                        self.sample_browser.update_hover(self.mouse_pos, sh, scale);
                     } else {
                         self.sample_browser.hovered_entry = None;
                         self.sample_browser.add_button_hovered = false;
                         self.sample_browser.resize_hovered = false;
-                        self.plugin_browser.hovered_entry = None;
                     }
                     self.update_cursor();
                 }
@@ -1009,34 +996,15 @@ impl ApplicationHandler for App {
                                 } else if self.sample_browser.hit_add_button(self.mouse_pos, scale)
                                 {
                                     self.open_add_folder_dialog();
-                                } else {
-                                    let plugin_section_y = self.plugin_section_y_offset(sh, scale);
-                                    let header_h = ui::browser::HEADER_HEIGHT * scale;
-                                    let local_plugin_y = self.mouse_pos[1] - plugin_section_y;
-
-                                    if local_plugin_y >= 0.0 && plugin_section_y >= header_h {
-                                        if self.plugin_browser.hit_header(local_plugin_y, scale) {
-                                            self.plugin_browser.expanded =
-                                                !self.plugin_browser.expanded;
-                                            self.plugin_browser.text_dirty = true;
-                                            self.sample_browser.extra_content_height =
-                                                self.plugin_browser.section_height(scale);
-                                        } else if let Some(idx) =
-                                            self.plugin_browser.item_at(local_plugin_y, scale)
-                                        {
-                                            let plugin = self.plugin_browser.plugins[idx].clone();
-                                            self.drag = DragState::DraggingPlugin {
-                                                plugin_id: plugin.unique_id,
-                                                plugin_name: plugin.name,
-                                            };
-                                        }
-                                    } else if let Some(idx) =
-                                        self.sample_browser.item_at(self.mouse_pos, sh, scale)
-                                    {
-                                        let entry = self.sample_browser.entries[idx].clone();
-                                        if entry.is_dir {
+                                } else if let Some(idx) =
+                                    self.sample_browser.item_at(self.mouse_pos, sh, scale)
+                                {
+                                    let entry = self.sample_browser.entries[idx].clone();
+                                    match &entry.kind {
+                                        ui::browser::EntryKind::Dir | ui::browser::EntryKind::PluginHeader => {
                                             self.sample_browser.toggle_expand(idx);
-                                        } else {
+                                        }
+                                        ui::browser::EntryKind::File => {
                                             let ext = entry
                                                 .path
                                                 .extension()
@@ -1048,6 +1016,12 @@ impl ApplicationHandler for App {
                                                     filename: entry.name.clone(),
                                                 };
                                             }
+                                        }
+                                        ui::browser::EntryKind::Plugin { unique_id } => {
+                                            self.drag = DragState::DraggingPlugin {
+                                                plugin_id: unique_id.clone(),
+                                                plugin_name: entry.name.clone(),
+                                            };
                                         }
                                     }
                                 }
@@ -2142,21 +2116,6 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 self.toast_manager.tick();
                 self.update_recording_waveform();
-                let (_pre_w, pre_h, pre_scale) = self.screen_info();
-                self.sample_browser.extra_content_height =
-                    self.plugin_browser.section_height(pre_scale);
-                let plugin_section_y = self.plugin_section_y_offset(pre_h, pre_scale);
-                let plugin_panel_w = self.sample_browser.panel_width(pre_scale);
-                let clip_top = ui::browser::HEADER_HEIGHT * pre_scale;
-                if self.sample_browser.visible && !self.plugin_browser.plugins.is_empty() {
-                    self.plugin_browser.get_text_entries(
-                        plugin_panel_w,
-                        plugin_section_y,
-                        pre_scale,
-                        clip_top,
-                        pre_h,
-                    );
-                }
                 if let Some(gpu) = &mut self.gpu {
                     let w = gpu.config.width as f32;
                     let h = gpu.config.height as f32;
@@ -2271,13 +2230,6 @@ impl ApplicationHandler for App {
                         .map_or(0.0, |e| e.position_seconds());
                     let is_recording = self.recorder.as_ref().map_or(false, |r| r.is_recording());
 
-                    let plugin_browser_ref =
-                        if self.sample_browser.visible && !self.plugin_browser.plugins.is_empty() {
-                            Some((&self.plugin_browser, plugin_section_y))
-                        } else {
-                            None
-                        };
-
                     gpu.render(
                         &self.camera,
                         &self.cached_instances,
@@ -2285,7 +2237,6 @@ impl ApplicationHandler for App {
                         self.command_palette.as_ref(),
                         self.context_menu.as_ref(),
                         browser_ref,
-                        plugin_browser_ref,
                         drag_ghost,
                         is_playing,
                         is_recording,

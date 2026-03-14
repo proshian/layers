@@ -1,3 +1,8 @@
+- 2026-03-14: Organize grid context menu like Ableton: Adaptive Grid + Fixed Grid sections (16.6k loc)
+- Make context menu shortcut text more visible (16.7k loc)
+- Optimize browser: refactor walk_dir to free function, remove unnecessary .clone() in rebuild_entries (16.7k loc)
+- Merge plugin browser into sample browser as unified entries with shared smooth scrolling (16.7k loc)
+- Fix sample label overlapping with sample browser by clipping text at browser panel edge (16.8k loc)
 - Refactor main.rs: extract plugins.rs (VST3 plugin management, ~256 lines) (16.8k loc)
 - Refactor main.rs: extract events.rs (ApplicationHandler impl, ~2.3k lines) (16.8k loc)
 - 2026-03-14: Refactor main.rs: extract history.rs (undo/redo/snapshots) module (16.8k loc)

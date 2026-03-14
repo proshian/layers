@@ -9,13 +9,6 @@ impl App {
         }
     }
 
-    pub(crate) fn plugin_section_y_offset(&self, _screen_h: f32, scale: f32) -> f32 {
-        let header_h = ui::browser::HEADER_HEIGHT * scale;
-        let item_h = ui::browser::ITEM_HEIGHT * scale;
-        let total_items = self.sample_browser.entries.len() as f32;
-        header_h + total_items * item_h - self.sample_browser.scroll_offset
-    }
-
     pub(crate) fn ensure_plugins_scanned(&mut self) {
         if self.plugin_registry.is_scanned() {
             return;
@@ -32,7 +25,7 @@ impl App {
                 manufacturer: e.info.manufacturer.clone(),
             })
             .collect();
-        self.plugin_browser.set_plugins(entries);
+        self.sample_browser.set_plugins(entries);
 
         // Reload any saved plugin blocks that were waiting for the scanner
         for pb in &mut self.plugin_blocks {

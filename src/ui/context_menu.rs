@@ -3,14 +3,14 @@ use crate::ui::palette::CommandAction;
 use crate::InstanceRaw;
 use crate::WAVEFORM_COLORS;
 
-pub const CTX_MENU_WIDTH: f32 = 220.0;
-pub const CTX_MENU_ITEM_HEIGHT: f32 = 32.0;
-pub const CTX_MENU_SECTION_HEIGHT: f32 = 26.0;
-pub const CTX_MENU_SEPARATOR_HEIGHT: f32 = 9.0;
-pub const CTX_MENU_PADDING: f32 = 4.0;
+pub const CTX_MENU_WIDTH: f32 = 210.0;
+pub const CTX_MENU_ITEM_HEIGHT: f32 = 26.0;
+pub const CTX_MENU_SECTION_HEIGHT: f32 = 22.0;
+pub const CTX_MENU_SEPARATOR_HEIGHT: f32 = 7.0;
+pub const CTX_MENU_PADDING: f32 = 3.0;
 pub const CTX_MENU_BORDER_RADIUS: f32 = 8.0;
-pub const CTX_MENU_INLINE_HEIGHT: f32 = 28.0;
-pub const CTX_MENU_SWATCH_HEIGHT: f32 = 30.0;
+pub const CTX_MENU_INLINE_HEIGHT: f32 = 24.0;
+pub const CTX_MENU_SWATCH_HEIGHT: f32 = 26.0;
 const INLINE_PILL_PAD_X: f32 = 7.0;
 const INLINE_PILL_GAP: f32 = 2.0;
 const INLINE_PILL_HEIGHT: f32 = 22.0;
@@ -83,85 +83,62 @@ fn grid_entries(settings: &Settings) -> Vec<ContextMenuEntry> {
     }));
     entries.push(ContextMenuEntry::Separator);
 
-    let is_adaptive = matches!(settings.grid_mode, GridMode::Adaptive(_));
+    entries.push(ContextMenuEntry::SectionHeader("Fixed Grid:"));
+    let bars = [
+        FixedGrid::Bars8,
+        FixedGrid::Bars4,
+        FixedGrid::Bars2,
+        FixedGrid::Bar1,
+    ];
+    entries.push(ContextMenuEntry::InlineGroup(
+        bars.iter()
+            .map(|&f| InlinePill {
+                label: f.label(),
+                action: CommandAction::SetGridFixed(f),
+                active: matches!(settings.grid_mode, GridMode::Fixed(cur) if cur == f),
+            })
+            .collect(),
+    ));
+    let subdivisions = [
+        FixedGrid::Half,
+        FixedGrid::Quarter,
+        FixedGrid::Eighth,
+        FixedGrid::Sixteenth,
+        FixedGrid::ThirtySecond,
+    ];
+    entries.push(ContextMenuEntry::InlineGroup(
+        subdivisions
+            .iter()
+            .map(|&f| InlinePill {
+                label: f.label(),
+                action: CommandAction::SetGridFixed(f),
+                active: matches!(settings.grid_mode, GridMode::Fixed(cur) if cur == f),
+            })
+            .collect(),
+    ));
 
-    entries.push(ContextMenuEntry::SectionHeader("Grid Mode:"));
-    entries.push(ContextMenuEntry::InlineGroup(vec![
-        InlinePill {
-            label: "Adaptive",
-            action: CommandAction::SetGridAdaptive(
-                if let GridMode::Adaptive(s) = settings.grid_mode {
-                    s
-                } else {
-                    AdaptiveGridSize::Medium
-                },
-            ),
-            active: is_adaptive,
-        },
-        InlinePill {
-            label: "Fixed",
-            action: CommandAction::SetGridFixed(if let GridMode::Fixed(f) = settings.grid_mode {
-                f
-            } else {
-                FixedGrid::Quarter
-            }),
-            active: !is_adaptive,
-        },
-    ]));
-
-    entries.push(ContextMenuEntry::SectionHeader("Grid Size:"));
-    if is_adaptive {
-        let sizes = [
-            AdaptiveGridSize::Widest,
-            AdaptiveGridSize::Wide,
-            AdaptiveGridSize::Medium,
-            AdaptiveGridSize::Narrow,
-            AdaptiveGridSize::Narrowest,
-        ];
-        entries.push(ContextMenuEntry::InlineGroup(
-            sizes
-                .iter()
-                .map(|&s| InlinePill {
-                    label: s.label(),
-                    action: CommandAction::SetGridAdaptive(s),
-                    active: matches!(settings.grid_mode, GridMode::Adaptive(cur) if cur == s),
-                })
-                .collect(),
-        ));
-    } else {
-        let fine = [
-            FixedGrid::Bars8,
-            FixedGrid::Bars4,
-            FixedGrid::Bars2,
-            FixedGrid::Bar1,
-        ];
-        entries.push(ContextMenuEntry::InlineGroup(
-            fine.iter()
-                .map(|&f| InlinePill {
-                    label: f.label(),
-                    action: CommandAction::SetGridFixed(f),
-                    active: matches!(settings.grid_mode, GridMode::Fixed(cur) if cur == f),
-                })
-                .collect(),
-        ));
-        let subdivisions = [
-            FixedGrid::Half,
-            FixedGrid::Quarter,
-            FixedGrid::Eighth,
-            FixedGrid::Sixteenth,
-            FixedGrid::ThirtySecond,
-        ];
-        entries.push(ContextMenuEntry::InlineGroup(
-            subdivisions
-                .iter()
-                .map(|&f| InlinePill {
-                    label: f.label(),
-                    action: CommandAction::SetGridFixed(f),
-                    active: matches!(settings.grid_mode, GridMode::Fixed(cur) if cur == f),
-                })
-                .collect(),
-        ));
-    }
+    entries.push(ContextMenuEntry::SectionHeader("Adaptive Grid:"));
+    let adaptive_row1 = [
+        AdaptiveGridSize::Widest,
+        AdaptiveGridSize::Wide,
+        AdaptiveGridSize::Medium,
+        AdaptiveGridSize::Narrow,
+    ];
+    entries.push(ContextMenuEntry::InlineGroup(
+        adaptive_row1
+            .iter()
+            .map(|&s| InlinePill {
+                label: s.label(),
+                action: CommandAction::SetGridAdaptive(s),
+                active: matches!(settings.grid_mode, GridMode::Adaptive(cur) if cur == s),
+            })
+            .collect(),
+    ));
+    entries.push(ContextMenuEntry::InlineGroup(vec![InlinePill {
+        label: AdaptiveGridSize::Narrowest.label(),
+        action: CommandAction::SetGridAdaptive(AdaptiveGridSize::Narrowest),
+        active: matches!(settings.grid_mode, GridMode::Adaptive(AdaptiveGridSize::Narrowest)),
+    }]));
 
     entries.push(ContextMenuEntry::Separator);
     entries.push(ContextMenuEntry::Item(ContextMenuItem {

@@ -137,7 +137,7 @@ pub enum GridMode {
 
 impl Default for GridMode {
     fn default() -> Self {
-        Self::Adaptive(AdaptiveGridSize::Narrow)
+        Self::Fixed(FixedGrid::Quarter)
     }
 }
 

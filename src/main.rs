@@ -286,7 +286,6 @@ struct App {
     component_instances: Vec<component::ComponentInstance>,
     next_component_id: component::ComponentId,
     plugin_registry: effects::PluginRegistry,
-    plugin_browser: ui::browser::PluginBrowserSection,
     export_regions: Vec<ExportRegion>,
     export_hover: ExportHover,
     loop_regions: Vec<LoopRegion>,
@@ -630,8 +629,6 @@ impl App {
             }
         }
 
-        let plugin_browser = ui::browser::PluginBrowserSection::new();
-
         let restored_loop_regions: Vec<LoopRegion> = stored_loop_regions
             .into_iter()
             .map(|slr| LoopRegion {
@@ -695,7 +692,6 @@ impl App {
             component_instances: restored_instances,
             next_component_id,
             plugin_registry,
-            plugin_browser,
             export_regions: Vec::new(),
             export_hover: ExportHover::None,
             loop_regions: restored_loop_regions,

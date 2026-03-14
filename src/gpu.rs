@@ -622,7 +622,6 @@ impl Gpu {
         command_palette: Option<&CommandPalette>,
         context_menu: Option<&ContextMenu>,
         sample_browser: Option<&browser::SampleBrowser>,
-        plugin_browser: Option<(&browser::PluginBrowserSection, f32)>,
         browser_drag_ghost: Option<(&str, [f32; 2])>,
         is_playing: bool,
         is_recording: bool,
@@ -682,20 +681,6 @@ impl Gpu {
 
         if let Some(br) = sample_browser {
             overlay_instances.extend(br.build_instances(w, h, self.scale_factor));
-        }
-
-        if let Some((pb, y_offset)) = plugin_browser {
-            let panel_w = sample_browser.map_or(260.0 * self.scale_factor, |b| {
-                b.panel_width(self.scale_factor)
-            });
-            let clip_top = browser::HEADER_HEIGHT * self.scale_factor;
-            overlay_instances.extend(pb.build_instances(
-                panel_w,
-                y_offset,
-                h,
-                self.scale_factor,
-                clip_top,
-            ));
         }
 
         if let Some((_, pos)) = browser_drag_ghost {
@@ -781,44 +766,6 @@ impl Gpu {
             }
         } else if !self.browser_text_buffers.is_empty() {
             self.browser_text_buffers.clear();
-        }
-
-        // Plugin browser section text
-        if let Some((pb, _)) = plugin_browser {
-            let panel_w = sample_browser.map_or(260.0 * scale, |b| b.panel_width(scale));
-            let clip_top = browser::HEADER_HEIGHT * scale;
-            for te in &pb.cached_text {
-                let actual_y = te.base_y;
-                if actual_y + te.line_height < clip_top || actual_y > h {
-                    continue;
-                }
-                let mut buf = TextBuffer::new(
-                    &mut self.font_system,
-                    Metrics::new(te.font_size, te.line_height),
-                );
-                buf.set_size(
-                    &mut self.font_system,
-                    Some(te.max_width),
-                    Some(te.line_height),
-                );
-                let attrs = Attrs::new()
-                    .family(Family::Name(".AppleSystemUIFont"))
-                    .weight(glyphon::Weight(te.weight));
-                buf.set_text(&mut self.font_system, &te.text, attrs, Shaping::Advanced);
-                buf.shape_until_scroll(&mut self.font_system, false);
-                text_buffers.push(buf);
-                text_meta.push((
-                    te.x,
-                    actual_y,
-                    TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
-                    TextBounds {
-                        left: 0,
-                        top: (actual_y.max(clip_top)) as i32,
-                        right: (panel_w - 8.0 * scale) as i32,
-                        bottom: (actual_y + te.line_height) as i32,
-                    },
-                ));
-            }
         }
 
         // Drag ghost text
@@ -1276,7 +1223,7 @@ impl Gpu {
                             text_meta.push((
                                 mpos[0] + CTX_MENU_WIDTH * scale - pad - 50.0 * scale,
                                 y + (CTX_MENU_ITEM_HEIGHT * scale - shortcut_line) * 0.5,
-                                TextColor::rgba(120, 120, 135, 180),
+                                TextColor::rgba(160, 160, 175, 220),
                                 full_bounds,
                             ));
                         }
@@ -1565,6 +1512,13 @@ impl Gpu {
         self.cached_er_label_bufs = new_er_cache;
 
         // Waveform sample name labels (cached shaping, positions recomputed each frame)
+        let browser_right = sample_browser.map_or(0.0, |b| b.panel_width(scale));
+        let wf_label_bounds = TextBounds {
+            left: browser_right as i32,
+            top: 0,
+            right: w as i32,
+            bottom: h as i32,
+        };
         let mut old_wf_cache = std::mem::take(&mut self.cached_wf_label_bufs);
         let mut new_wf_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut wf_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
@@ -1648,7 +1602,7 @@ impl Gpu {
                 name_screen_x,
                 name_screen_y,
                 TextColor::rgba(255, 255, 255, alpha),
-                full_bounds,
+                wf_label_bounds,
             ));
         }
         self.cached_wf_label_bufs = new_wf_cache;

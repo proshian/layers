@@ -22,12 +22,37 @@ const CHEVRON_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
 const ADD_BTN_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.50];
 const ADD_BTN_HOVER: [f32; 4] = [1.0, 1.0, 1.0, 0.80];
 
+const PLUGIN_SECTION_BG: [f32; 4] = [0.12, 0.10, 0.16, 1.0];
+const PLUGIN_SECTION_HEADER_BG: [f32; 4] = [0.14, 0.11, 0.20, 1.0];
+const PLUGIN_FX_BADGE: [f32; 4] = [0.55, 0.28, 0.85, 0.60];
+
+#[derive(Clone)]
+pub enum EntryKind {
+    Dir,
+    File,
+    PluginHeader,
+    Plugin { unique_id: String },
+}
+
 #[derive(Clone)]
 pub struct BrowserEntry {
     pub path: PathBuf,
     pub name: String,
-    pub is_dir: bool,
+    pub kind: EntryKind,
     pub depth: usize,
+}
+
+impl BrowserEntry {
+    pub fn is_dir(&self) -> bool {
+        matches!(self.kind, EntryKind::Dir)
+    }
+}
+
+#[derive(Clone)]
+pub struct PluginEntry {
+    pub unique_id: String,
+    pub name: String,
+    pub manufacturer: String,
 }
 
 pub struct SampleBrowser {
@@ -48,7 +73,8 @@ pub struct SampleBrowser {
     cached_scale: f32,
     last_scroll_screen_h: f32,
     last_scroll_scale: f32,
-    pub extra_content_height: f32,
+    pub plugins: Vec<PluginEntry>,
+    pub plugins_expanded: bool,
 }
 
 impl SampleBrowser {
@@ -71,7 +97,8 @@ impl SampleBrowser {
             cached_scale: 0.0,
             last_scroll_screen_h: 0.0,
             last_scroll_scale: 0.0,
-            extra_content_height: 0.0,
+            plugins: Vec::new(),
+            plugins_expanded: true,
         }
     }
 
@@ -120,14 +147,21 @@ impl SampleBrowser {
 
     pub fn toggle_expand(&mut self, entry_idx: usize) {
         if let Some(entry) = self.entries.get(entry_idx) {
-            if entry.is_dir {
-                let path = entry.path.clone();
-                if self.expanded.contains(&path) {
-                    self.expanded.remove(&path);
-                } else {
-                    self.expanded.insert(path);
+            match &entry.kind {
+                EntryKind::Dir => {
+                    let path = entry.path.clone();
+                    if self.expanded.contains(&path) {
+                        self.expanded.remove(&path);
+                    } else {
+                        self.expanded.insert(path);
+                    }
+                    self.rebuild_entries();
                 }
-                self.rebuild_entries();
+                EntryKind::PluginHeader => {
+                    self.plugins_expanded = !self.plugins_expanded;
+                    self.rebuild_entries();
+                }
+                _ => {}
             }
         }
     }
@@ -136,68 +170,43 @@ impl SampleBrowser {
         self.expanded.contains(path)
     }
 
+    pub fn set_plugins(&mut self, plugins: Vec<PluginEntry>) {
+        self.plugins = plugins;
+        self.rebuild_entries();
+    }
+
     pub fn rebuild_entries(&mut self) {
         self.entries.clear();
-        for root in &self.root_folders.clone() {
-            self.walk_dir(root, 0);
+        for root in &self.root_folders {
+            walk_dir(&mut self.entries, &self.expanded, root, 0);
+        }
+        // Append plugin section if we have plugins
+        if !self.plugins.is_empty() {
+            self.entries.push(BrowserEntry {
+                path: PathBuf::new(),
+                name: "VST PLUGINS".to_string(),
+                kind: EntryKind::PluginHeader,
+                depth: 0,
+            });
+            if self.plugins_expanded {
+                for i in 0..self.plugins.len() {
+                    self.entries.push(BrowserEntry {
+                        path: PathBuf::new(),
+                        name: self.plugins[i].name.clone(),
+                        kind: EntryKind::Plugin {
+                            unique_id: self.plugins[i].unique_id.clone(),
+                        },
+                        depth: 0,
+                    });
+                }
+            }
         }
         self.clamp_scroll();
         self.text_dirty = true;
     }
 
-    fn walk_dir(&mut self, dir: &PathBuf, depth: usize) {
-        let name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| dir.to_string_lossy().to_string());
-
-        self.entries.push(BrowserEntry {
-            path: dir.clone(),
-            name,
-            is_dir: true,
-            depth,
-        });
-
-        if !self.expanded.contains(dir) {
-            return;
-        }
-
-        let Ok(read) = std::fs::read_dir(dir) else {
-            return;
-        };
-
-        let mut children: Vec<(bool, String, PathBuf)> = Vec::new();
-        for entry in read.flatten() {
-            let path = entry.path();
-            let is_dir = path.is_dir();
-            let fname = entry.file_name().to_string_lossy().to_string();
-            if fname.starts_with('.') {
-                continue;
-            }
-            children.push((is_dir, fname, path));
-        }
-
-        children.sort_by(|a, b| {
-            b.0.cmp(&a.0)
-                .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-        });
-
-        for (is_dir, fname, path) in children {
-            if is_dir {
-                self.walk_dir(&path, depth + 1);
-            } else {
-                self.entries.push(BrowserEntry {
-                    path,
-                    name: fname,
-                    is_dir: false,
-                    depth: depth + 1,
-                });
-            }
-        }
-    }
-
     fn content_height(&self, scale: f32) -> f32 {
-        self.entries.len() as f32 * ITEM_HEIGHT * scale + self.extra_content_height
+        self.entries.len() as f32 * ITEM_HEIGHT * scale
     }
 
     fn visible_height(&self, screen_h: f32, scale: f32) -> f32 {
@@ -382,56 +391,129 @@ impl SampleBrowser {
                 continue;
             }
 
-            // Hover highlight
-            if self.hovered_entry == Some(i) {
-                out.push(InstanceRaw {
-                    position: [0.0, y],
-                    size: [w, item_h],
-                    color: HOVER_COLOR,
-                    border_radius: 0.0,
-                });
-            }
+            match &entry.kind {
+                EntryKind::PluginHeader => {
+                    // Section separator
+                    out.push(InstanceRaw {
+                        position: [0.0, y],
+                        size: [w, 1.0 * scale],
+                        color: [1.0, 1.0, 1.0, 0.07],
+                        border_radius: 0.0,
+                    });
 
-            let indent = entry.depth as f32 * INDENT_PX * scale + 8.0 * scale;
+                    // Section header background
+                    out.push(InstanceRaw {
+                        position: [0.0, y],
+                        size: [w, item_h],
+                        color: PLUGIN_SECTION_HEADER_BG,
+                        border_radius: 0.0,
+                    });
 
-            // Chevron for directories
-            if entry.is_dir {
-                let chev_sz = 6.0 * scale;
-                let cx = indent + chev_sz * 0.5;
-                let cy = y + item_h * 0.5;
+                    // FX badge
+                    let badge_w = 18.0 * scale;
+                    let badge_h = 12.0 * scale;
+                    let badge_x = 8.0 * scale;
+                    let badge_y = y + (item_h - badge_h) * 0.5;
+                    out.push(InstanceRaw {
+                        position: [badge_x, badge_y],
+                        size: [badge_w, badge_h],
+                        color: PLUGIN_FX_BADGE,
+                        border_radius: 2.0 * scale,
+                    });
 
-                if self.is_expanded(&entry.path) {
-                    // Down-pointing chevron (two small bars forming a V)
-                    let bar_w = chev_sz * 0.7;
-                    let bar_h = 1.5 * scale;
+                    // Hover highlight
+                    if self.hovered_entry == Some(i) {
+                        out.push(InstanceRaw {
+                            position: [0.0, y],
+                            size: [w, item_h],
+                            color: HOVER_COLOR,
+                            border_radius: 0.0,
+                        });
+                    }
+                }
+                EntryKind::Plugin { .. } => {
+                    // Plugin section background
                     out.push(InstanceRaw {
-                        position: [cx - bar_w * 0.5, cy - bar_h],
-                        size: [bar_w, bar_h],
-                        color: CHEVRON_COLOR,
+                        position: [0.0, y],
+                        size: [w, item_h],
+                        color: PLUGIN_SECTION_BG,
                         border_radius: 0.0,
                     });
+
+                    // Hover highlight
+                    if self.hovered_entry == Some(i) {
+                        out.push(InstanceRaw {
+                            position: [0.0, y],
+                            size: [w, item_h],
+                            color: HOVER_COLOR,
+                            border_radius: 0.0,
+                        });
+                    }
+
+                    // Purple dot
+                    let dot_sz = 5.0 * scale;
+                    let dot_x = 12.0 * scale;
+                    let dot_y = y + (item_h - dot_sz) * 0.5;
                     out.push(InstanceRaw {
-                        position: [cx - bar_w * 0.25, cy],
-                        size: [bar_w * 0.5, bar_h],
-                        color: CHEVRON_COLOR,
-                        border_radius: 0.0,
+                        position: [dot_x, dot_y],
+                        size: [dot_sz, dot_sz],
+                        color: [0.60, 0.35, 0.90, 0.70],
+                        border_radius: dot_sz * 0.5,
                     });
-                } else {
-                    // Right-pointing chevron
-                    let bar_w = 1.5 * scale;
-                    let bar_h = chev_sz * 0.7;
-                    out.push(InstanceRaw {
-                        position: [cx - bar_w, cy - bar_h * 0.5],
-                        size: [bar_w, bar_h],
-                        color: CHEVRON_COLOR,
-                        border_radius: 0.0,
-                    });
-                    out.push(InstanceRaw {
-                        position: [cx, cy - bar_h * 0.25],
-                        size: [bar_w, bar_h * 0.5],
-                        color: CHEVRON_COLOR,
-                        border_radius: 0.0,
-                    });
+                }
+                EntryKind::Dir | EntryKind::File => {
+                    // Hover highlight
+                    if self.hovered_entry == Some(i) {
+                        out.push(InstanceRaw {
+                            position: [0.0, y],
+                            size: [w, item_h],
+                            color: HOVER_COLOR,
+                            border_radius: 0.0,
+                        });
+                    }
+
+                    let indent = entry.depth as f32 * INDENT_PX * scale + 8.0 * scale;
+
+                    // Chevron for directories
+                    if entry.is_dir() {
+                        let chev_sz = 6.0 * scale;
+                        let cx = indent + chev_sz * 0.5;
+                        let cy = y + item_h * 0.5;
+
+                        if self.is_expanded(&entry.path) {
+                            // Down-pointing chevron (two small bars forming a V)
+                            let bar_w = chev_sz * 0.7;
+                            let bar_h = 1.5 * scale;
+                            out.push(InstanceRaw {
+                                position: [cx - bar_w * 0.5, cy - bar_h],
+                                size: [bar_w, bar_h],
+                                color: CHEVRON_COLOR,
+                                border_radius: 0.0,
+                            });
+                            out.push(InstanceRaw {
+                                position: [cx - bar_w * 0.25, cy],
+                                size: [bar_w * 0.5, bar_h],
+                                color: CHEVRON_COLOR,
+                                border_radius: 0.0,
+                            });
+                        } else {
+                            // Right-pointing chevron
+                            let bar_w = 1.5 * scale;
+                            let bar_h = chev_sz * 0.7;
+                            out.push(InstanceRaw {
+                                position: [cx - bar_w, cy - bar_h * 0.5],
+                                size: [bar_w, bar_h],
+                                color: CHEVRON_COLOR,
+                                border_radius: 0.0,
+                            });
+                            out.push(InstanceRaw {
+                                position: [cx, cy - bar_h * 0.25],
+                                size: [bar_w, bar_h * 0.5],
+                                color: CHEVRON_COLOR,
+                                border_radius: 0.0,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -503,31 +585,121 @@ impl SampleBrowser {
 
         for (i, entry) in self.entries.iter().enumerate() {
             let base_y = header_h + i as f32 * item_h;
-            let indent = entry.depth as f32 * INDENT_PX * scale + 8.0 * scale;
-            let text_x = indent + 18.0 * scale;
-            let font_sz = 13.0 * scale;
-            let line_h = 18.0 * scale;
 
-            let (color, weight) = if entry.is_dir {
-                ([210, 210, 218, 255], 400u16)
-            } else {
-                ([170, 170, 180, 255], 400u16)
-            };
+            match &entry.kind {
+                EntryKind::PluginHeader => {
+                    out.push(BrowserTextEntry {
+                        text: "VST PLUGINS".to_string(),
+                        x: 30.0 * scale,
+                        base_y: base_y + (item_h - 12.0 * scale) * 0.5,
+                        font_size: 10.0 * scale,
+                        line_height: 12.0 * scale,
+                        max_width: w * 0.6,
+                        color: [160, 140, 190, 200],
+                        weight: 600,
+                        is_header: false,
+                    });
+                }
+                EntryKind::Plugin { .. } => {
+                    let text_x = 22.0 * scale;
+                    let font_sz = 12.0 * scale;
+                    let line_h = 16.0 * scale;
+                    out.push(BrowserTextEntry {
+                        text: entry.name.clone(),
+                        x: text_x,
+                        base_y: base_y + (item_h - line_h) * 0.5,
+                        font_size: font_sz,
+                        line_height: line_h,
+                        max_width: w - text_x - 12.0 * scale,
+                        color: [190, 170, 210, 255],
+                        weight: 400,
+                        is_header: false,
+                    });
+                }
+                EntryKind::Dir | EntryKind::File => {
+                    let indent = entry.depth as f32 * INDENT_PX * scale + 8.0 * scale;
+                    let text_x = indent + 18.0 * scale;
+                    let font_sz = 13.0 * scale;
+                    let line_h = 18.0 * scale;
 
-            out.push(BrowserTextEntry {
-                text: entry.name.clone(),
-                x: text_x,
-                base_y: base_y + (item_h - line_h) * 0.5,
-                font_size: font_sz,
-                line_height: line_h,
-                max_width: w - text_x - 12.0 * scale,
-                color,
-                weight,
-                is_header: false,
-            });
+                    let (color, weight) = if entry.is_dir() {
+                        ([210, 210, 218, 255], 400u16)
+                    } else {
+                        ([170, 170, 180, 255], 400u16)
+                    };
+
+                    out.push(BrowserTextEntry {
+                        text: entry.name.clone(),
+                        x: text_x,
+                        base_y: base_y + (item_h - line_h) * 0.5,
+                        font_size: font_sz,
+                        line_height: line_h,
+                        max_width: w - text_x - 12.0 * scale,
+                        color,
+                        weight,
+                        is_header: false,
+                    });
+                }
+            }
         }
 
         out
+    }
+}
+
+fn walk_dir(
+    entries: &mut Vec<BrowserEntry>,
+    expanded: &HashSet<PathBuf>,
+    dir: &PathBuf,
+    depth: usize,
+) {
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| dir.to_string_lossy().to_string());
+
+    entries.push(BrowserEntry {
+        path: dir.clone(),
+        name,
+        kind: EntryKind::Dir,
+        depth,
+    });
+
+    if !expanded.contains(dir) {
+        return;
+    }
+
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    let mut children: Vec<(bool, String, PathBuf)> = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        let is_dir = path.is_dir();
+        let fname = entry.file_name().to_string_lossy().to_string();
+        if fname.starts_with('.') {
+            continue;
+        }
+        children.push((is_dir, fname, path));
+    }
+
+    children.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+    });
+
+    for (is_dir, fname, path) in children {
+        if is_dir {
+            walk_dir(entries, expanded, &path, depth + 1);
+        } else {
+            entries.push(BrowserEntry {
+                path,
+                name: fname,
+                kind: EntryKind::File,
+                depth: depth + 1,
+            });
+        }
     }
 }
 
@@ -541,242 +713,4 @@ pub struct BrowserTextEntry {
     pub color: [u8; 4],
     pub weight: u16,
     pub is_header: bool,
-}
-
-const PLUGIN_SECTION_HEADER_HEIGHT: f32 = 28.0;
-const PLUGIN_SECTION_BG: [f32; 4] = [0.12, 0.10, 0.16, 1.0];
-const PLUGIN_SECTION_HEADER_BG: [f32; 4] = [0.14, 0.11, 0.20, 1.0];
-const PLUGIN_FX_BADGE: [f32; 4] = [0.55, 0.28, 0.85, 0.60];
-
-#[derive(Clone)]
-pub struct PluginEntry {
-    pub unique_id: String,
-    pub name: String,
-    pub manufacturer: String,
-}
-
-pub struct PluginBrowserSection {
-    pub plugins: Vec<PluginEntry>,
-    pub hovered_entry: Option<usize>,
-    pub expanded: bool,
-    pub text_dirty: bool,
-    pub cached_text: Vec<BrowserTextEntry>,
-    pub text_generation: u64,
-}
-
-impl PluginBrowserSection {
-    pub fn new() -> Self {
-        Self {
-            plugins: Vec::new(),
-            hovered_entry: None,
-            expanded: true,
-            text_dirty: true,
-            cached_text: Vec::new(),
-            text_generation: 0,
-        }
-    }
-
-    pub fn set_plugins(&mut self, plugins: Vec<PluginEntry>) {
-        self.plugins = plugins;
-        self.text_dirty = true;
-        self.text_generation += 1;
-    }
-
-    pub fn section_height(&self, scale: f32) -> f32 {
-        let header = PLUGIN_SECTION_HEADER_HEIGHT * scale;
-        if !self.expanded {
-            return header;
-        }
-        header + self.plugins.len() as f32 * ITEM_HEIGHT * scale
-    }
-
-    pub fn item_at(&self, local_y: f32, scale: f32) -> Option<usize> {
-        if !self.expanded {
-            return None;
-        }
-        let header = PLUGIN_SECTION_HEADER_HEIGHT * scale;
-        if local_y < header {
-            return None;
-        }
-        let idx = ((local_y - header) / (ITEM_HEIGHT * scale)) as usize;
-        if idx < self.plugins.len() {
-            Some(idx)
-        } else {
-            None
-        }
-    }
-
-    pub fn hit_header(&self, local_y: f32, scale: f32) -> bool {
-        local_y >= 0.0 && local_y < PLUGIN_SECTION_HEADER_HEIGHT * scale
-    }
-
-    pub fn update_hover(&mut self, local_y: f32, scale: f32) {
-        self.hovered_entry = self.item_at(local_y, scale);
-    }
-
-    pub fn build_instances(
-        &self,
-        panel_w: f32,
-        y_offset: f32,
-        screen_h: f32,
-        scale: f32,
-        clip_top: f32,
-    ) -> Vec<InstanceRaw> {
-        let mut out = Vec::new();
-        let header_h = PLUGIN_SECTION_HEADER_HEIGHT * scale;
-        let item_h = ITEM_HEIGHT * scale;
-
-        if y_offset + self.section_height(scale) < clip_top || y_offset > screen_h {
-            return out;
-        }
-
-        // Separator
-        if y_offset >= clip_top {
-            out.push(InstanceRaw {
-                position: [0.0, y_offset],
-                size: [panel_w, 1.0 * scale],
-                color: [1.0, 1.0, 1.0, 0.07],
-                border_radius: 0.0,
-            });
-        }
-
-        // Section background
-        let total_h = self.section_height(scale);
-        let bg_top = y_offset.max(clip_top);
-        let bg_bottom = (y_offset + total_h).min(screen_h);
-        if bg_bottom > bg_top {
-            out.push(InstanceRaw {
-                position: [0.0, bg_top],
-                size: [panel_w, bg_bottom - bg_top],
-                color: PLUGIN_SECTION_BG,
-                border_radius: 0.0,
-            });
-        }
-
-        // Section header
-        if y_offset + header_h > clip_top && y_offset < screen_h {
-            out.push(InstanceRaw {
-                position: [0.0, y_offset.max(clip_top)],
-                size: [panel_w, header_h],
-                color: PLUGIN_SECTION_HEADER_BG,
-                border_radius: 0.0,
-            });
-
-            // FX badge in header
-            if y_offset >= clip_top {
-                let badge_w = 18.0 * scale;
-                let badge_h = 12.0 * scale;
-                let badge_x = 8.0 * scale;
-                let badge_y = y_offset + (header_h - badge_h) * 0.5;
-                out.push(InstanceRaw {
-                    position: [badge_x, badge_y],
-                    size: [badge_w, badge_h],
-                    color: PLUGIN_FX_BADGE,
-                    border_radius: 2.0 * scale,
-                });
-            }
-        }
-
-        if !self.expanded {
-            return out;
-        }
-
-        for i in 0..self.plugins.len() {
-            let y = y_offset + header_h + i as f32 * item_h;
-            if y + item_h < clip_top || y > screen_h {
-                continue;
-            }
-
-            if self.hovered_entry == Some(i) {
-                out.push(InstanceRaw {
-                    position: [0.0, y],
-                    size: [panel_w, item_h],
-                    color: HOVER_COLOR,
-                    border_radius: 0.0,
-                });
-            }
-
-            let dot_sz = 5.0 * scale;
-            let dot_x = 12.0 * scale;
-            let dot_y = y + (item_h - dot_sz) * 0.5;
-            out.push(InstanceRaw {
-                position: [dot_x, dot_y],
-                size: [dot_sz, dot_sz],
-                color: [0.60, 0.35, 0.90, 0.70],
-                border_radius: dot_sz * 0.5,
-            });
-        }
-
-        out
-    }
-
-    pub fn get_text_entries(
-        &mut self,
-        panel_w: f32,
-        y_offset: f32,
-        scale: f32,
-        clip_top: f32,
-        screen_h: f32,
-    ) -> &[BrowserTextEntry] {
-        // Always rebuild since y_offset changes on scroll
-        self.cached_text = self.build_text_entries(panel_w, y_offset, scale, clip_top, screen_h);
-        self.text_dirty = false;
-        self.text_generation += 1;
-        &self.cached_text
-    }
-
-    fn build_text_entries(
-        &self,
-        panel_w: f32,
-        y_offset: f32,
-        scale: f32,
-        clip_top: f32,
-        screen_h: f32,
-    ) -> Vec<BrowserTextEntry> {
-        let mut out = Vec::new();
-        let header_h = PLUGIN_SECTION_HEADER_HEIGHT * scale;
-        let item_h = ITEM_HEIGHT * scale;
-
-        if y_offset >= clip_top && y_offset < screen_h {
-            out.push(BrowserTextEntry {
-                text: "VST PLUGINS".to_string(),
-                x: 30.0 * scale,
-                base_y: y_offset + (header_h - 12.0 * scale) * 0.5,
-                font_size: 10.0 * scale,
-                line_height: 12.0 * scale,
-                max_width: panel_w * 0.6,
-                color: [160, 140, 190, 200],
-                weight: 600,
-                is_header: true,
-            });
-        }
-
-        if !self.expanded {
-            return out;
-        }
-
-        for (i, plugin) in self.plugins.iter().enumerate() {
-            let base_y = y_offset + header_h + i as f32 * item_h;
-            if base_y + item_h < clip_top || base_y > screen_h {
-                continue;
-            }
-            let text_x = 22.0 * scale;
-            let font_sz = 12.0 * scale;
-            let line_h = 16.0 * scale;
-
-            out.push(BrowserTextEntry {
-                text: plugin.name.clone(),
-                x: text_x,
-                base_y: base_y + (item_h - line_h) * 0.5,
-                font_size: font_sz,
-                line_height: line_h,
-                max_width: panel_w - text_x - 12.0 * scale,
-                color: [190, 170, 210, 255],
-                weight: 400,
-                is_header: false,
-            });
-        }
-
-        out
-    }
 }
