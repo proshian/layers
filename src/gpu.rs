@@ -9,7 +9,7 @@ use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use crate::audio::PIXELS_PER_SECOND;
-use crate::browser;
+use crate::ui::browser;
 use crate::effects;
 use crate::settings::{Settings, SettingsWindow};
 use crate::ui::context_menu::{
@@ -854,6 +854,9 @@ impl Gpu {
                 PaletteMode::SampleVolumeFader => {
                     ("Sample Volume", TextColor::rgb(235, 235, 240))
                 }
+                PaletteMode::PluginPicker if palette.search_text.is_empty() => {
+                    ("Search plugins...", TextColor::rgba(140, 140, 150, 160))
+                }
                 _ if palette.search_text.is_empty() => {
                     ("Search", TextColor::rgba(140, 140, 150, 160))
                 }
@@ -1137,6 +1140,72 @@ impl Gpu {
 
                                 y += PALETTE_ITEM_HEIGHT * scale;
                             }
+                        }
+                    }
+                }
+                PaletteMode::PluginPicker => {
+                    let ifont = 13.5 * scale;
+                    let iline = 20.0 * scale;
+                    let mfont = 11.0 * scale;
+                    let mline = 16.0 * scale;
+
+                    let y_offset = palette.plugin_scroll_y_offset(scale);
+                    let mut y = list_top - y_offset;
+                    for &entry_idx in palette.visible_plugin_entries(scale) {
+                        if let Some(entry) = palette.plugin_entries.get(entry_idx) {
+                            // Plugin name
+                            let mut buf = TextBuffer::new(
+                                &mut self.font_system,
+                                Metrics::new(ifont, iline),
+                            );
+                            buf.set_size(
+                                &mut self.font_system,
+                                Some(PALETTE_WIDTH * scale * 0.65),
+                                Some(PALETTE_ITEM_HEIGHT * scale),
+                            );
+                            buf.set_text(
+                                &mut self.font_system,
+                                &entry.name,
+                                Attrs::new().family(Family::SansSerif),
+                                Shaping::Advanced,
+                            );
+                            buf.shape_until_scroll(&mut self.font_system, false);
+                            text_buffers.push(buf);
+                            text_meta.push((
+                                ppos[0] + margin + 12.0 * scale,
+                                y + (PALETTE_ITEM_HEIGHT * scale - iline) * 0.5,
+                                TextColor::rgb(215, 215, 222),
+                                full_bounds,
+                            ));
+
+                            // Manufacturer (right-aligned, dimmer)
+                            if !entry.manufacturer.is_empty() {
+                                let mut buf = TextBuffer::new(
+                                    &mut self.font_system,
+                                    Metrics::new(mfont, mline),
+                                );
+                                buf.set_size(
+                                    &mut self.font_system,
+                                    Some(140.0 * scale),
+                                    Some(PALETTE_ITEM_HEIGHT * scale),
+                                );
+                                buf.set_text(
+                                    &mut self.font_system,
+                                    &entry.manufacturer,
+                                    Attrs::new().family(Family::SansSerif),
+                                    Shaping::Advanced,
+                                );
+                                buf.shape_until_scroll(&mut self.font_system, false);
+                                text_buffers.push(buf);
+                                text_meta.push((
+                                    ppos[0] + PALETTE_WIDTH * scale - margin - 130.0 * scale,
+                                    y + (PALETTE_ITEM_HEIGHT * scale - mline) * 0.5,
+                                    TextColor::rgba(120, 120, 135, 180),
+                                    full_bounds,
+                                ));
+                            }
+
+                            y += PALETTE_ITEM_HEIGHT * scale;
                         }
                     }
                 }

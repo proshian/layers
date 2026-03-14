@@ -1358,6 +1358,30 @@ impl SettingsWindow {
                     weight: 400,
                 });
 
+                // Build version
+                let build_row_y = row_y + ROW_HEIGHT * scale;
+                out.push(SettingsTextEntry {
+                    text: "Build".to_string(),
+                    x: content_x + ROW_LABEL_X * scale,
+                    y: build_row_y + (ROW_HEIGHT * scale - label_line) * 0.5,
+                    font_size: label_font,
+                    line_height: label_line,
+                    color: [210, 210, 218, 255],
+                    weight: 400,
+                });
+                let build_version = std::fs::read_to_string("build_version")
+                    .unwrap_or_else(|_| "0".to_string());
+                let build_version = build_version.trim();
+                out.push(SettingsTextEntry {
+                    text: format!("#{}", build_version),
+                    x: dp[0] + 10.0 * scale,
+                    y: build_row_y + (ROW_HEIGHT * scale - dd_line) * 0.5,
+                    font_size: dd_font,
+                    line_height: dd_line,
+                    color: [140, 140, 150, 200],
+                    weight: 400,
+                });
+
                 // Popup item text
                 if let Some(0) = self.open_dropdown {
                     let options = Self::dev_mode_options();

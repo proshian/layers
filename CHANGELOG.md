@@ -1,3 +1,8 @@
+- Refactor main.rs: extract plugins.rs (VST3 plugin management, ~256 lines) (16.8k loc)
+- Refactor main.rs: extract events.rs (ApplicationHandler impl, ~2.3k lines) (16.8k loc)
+- 2026-03-14: Refactor main.rs: extract history.rs (undo/redo/snapshots) module (16.8k loc)
+- 2026-03-14: Refactor main.rs: extract rendering.rs module (16.8k loc)
+- 2026-03-14: Refactor main.rs: extract grid.rs, regions.rs, hit_testing.rs modules (16.8k loc)
 - Clip volume fader: up/down arrow keys adjust by 1 dB; vertical layout, dB scale (-inf to +6 dB), gain boost (16.3k loc)
 - Non-destructive clip edge resizing by dragging left/right edges with grid snap and min-width enforcement (16.1k loc)
 - Refactor area corner-resize into shared helpers; component resize now snaps to grid (15.8k loc)

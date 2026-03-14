@@ -1,3 +1,4 @@
+pub(crate) mod browser;
 pub(crate) mod context_menu;
 pub(crate) mod palette;
 pub(crate) mod plugin_editor;

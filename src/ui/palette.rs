@@ -47,6 +47,7 @@ pub enum CommandAction {
     AddLoopArea,
     AddEffectsArea,
     AddRenderArea,
+    AddPlugin,
     SetSampleColor(usize),
 }
 
@@ -55,6 +56,13 @@ pub enum PaletteMode {
     Commands,
     VolumeFader,
     SampleVolumeFader,
+    PluginPicker,
+}
+
+pub struct PluginPickerEntry {
+    pub name: String,
+    pub manufacturer: String,
+    pub unique_id: String,
 }
 
 pub const FADER_CONTENT_HEIGHT: f32 = 90.0;
@@ -238,6 +246,13 @@ pub const COMMANDS: &[CommandDef] = &[
         dev_only: false,
     },
     CommandDef {
+        name: "Add Plugin",
+        shortcut: "",
+        category: "Audio",
+        action: CommandAction::AddPlugin,
+        dev_only: false,
+    },
+    CommandDef {
         name: "Add Render Area",
         shortcut: "",
         category: "Audio",
@@ -270,6 +285,11 @@ pub struct CommandPalette {
     pub fader_rms: f32,
     pub fader_dragging: bool,
     pub fader_target_waveform: Option<usize>,
+    // Plugin picker state
+    pub plugin_entries: Vec<PluginPickerEntry>,
+    pub filtered_plugin_indices: Vec<usize>,
+    pub plugin_selected_index: usize,
+    pub plugin_scroll_offset: f32,
 }
 
 impl CommandPalette {
@@ -285,6 +305,10 @@ impl CommandPalette {
             fader_rms: 0.0,
             fader_dragging: false,
             fader_target_waveform: None,
+            plugin_entries: Vec::new(),
+            filtered_plugin_indices: Vec::new(),
+            plugin_selected_index: 0,
+            plugin_scroll_offset: 0.0,
         };
         p.rebuild_rows(dev_mode);
         p
@@ -333,7 +357,113 @@ impl CommandPalette {
     }
 
     pub fn update_filter(&mut self, dev_mode: bool) {
+        if self.mode == PaletteMode::PluginPicker {
+            self.rebuild_plugin_filter();
+            return;
+        }
         self.rebuild_rows(dev_mode);
+    }
+
+    pub fn set_plugin_entries(&mut self, entries: Vec<PluginPickerEntry>) {
+        self.plugin_entries = entries;
+        self.rebuild_plugin_filter();
+    }
+
+    fn rebuild_plugin_filter(&mut self) {
+        let query = self.search_text.to_lowercase();
+        self.filtered_plugin_indices = self
+            .plugin_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                query.is_empty()
+                    || e.name.to_lowercase().contains(&query)
+                    || e.manufacturer.to_lowercase().contains(&query)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let count = self.filtered_plugin_indices.len();
+        if count == 0 {
+            self.plugin_selected_index = 0;
+        } else if self.plugin_selected_index >= count {
+            self.plugin_selected_index = count - 1;
+        }
+        self.plugin_scroll_offset = 0.0;
+        // Note: ensure_plugin_selected_visible needs scale, but after filter reset
+        // selection is at top so scroll is already correct.
+    }
+
+    pub fn plugin_content_height(&self, scale: f32) -> f32 {
+        self.filtered_plugin_indices.len() as f32 * PALETTE_ITEM_HEIGHT * scale
+    }
+
+    pub fn plugin_visible_height(&self, scale: f32) -> f32 {
+        let max_h = PALETTE_MAX_VISIBLE_ROWS as f32 * PALETTE_ITEM_HEIGHT * scale;
+        self.plugin_content_height(scale).min(max_h)
+    }
+
+    pub fn plugin_max_scroll(&self, scale: f32) -> f32 {
+        (self.plugin_content_height(scale) - self.plugin_visible_height(scale)).max(0.0)
+    }
+
+    pub fn clamp_plugin_scroll(&mut self, scale: f32) {
+        self.plugin_scroll_offset = self.plugin_scroll_offset.clamp(0.0, self.plugin_max_scroll(scale));
+    }
+
+    pub fn move_plugin_selection(&mut self, delta: i32, scale: f32) {
+        let count = self.filtered_plugin_indices.len();
+        if count == 0 {
+            return;
+        }
+        self.plugin_selected_index =
+            ((self.plugin_selected_index as i32 + delta).rem_euclid(count as i32)) as usize;
+        self.ensure_plugin_selected_visible(scale);
+    }
+
+    fn ensure_plugin_selected_visible(&mut self, scale: f32) {
+        let item_h = PALETTE_ITEM_HEIGHT * scale;
+        let sel_top = self.plugin_selected_index as f32 * item_h;
+        let sel_bottom = sel_top + item_h;
+        let visible_h = self.plugin_visible_height(scale);
+
+        if sel_top < self.plugin_scroll_offset {
+            self.plugin_scroll_offset = sel_top;
+        }
+        if sel_bottom > self.plugin_scroll_offset + visible_h {
+            self.plugin_scroll_offset = sel_bottom - visible_h;
+        }
+        self.clamp_plugin_scroll(scale);
+    }
+
+    pub fn scroll_plugin_by(&mut self, delta_px: f32, scale: f32) {
+        self.plugin_scroll_offset += delta_px;
+        self.clamp_plugin_scroll(scale);
+    }
+
+    pub fn visible_plugin_entries(&self, scale: f32) -> &[usize] {
+        let item_h = PALETTE_ITEM_HEIGHT * scale;
+        if item_h <= 0.0 {
+            return &[];
+        }
+        let start = (self.plugin_scroll_offset / item_h).floor() as usize;
+        let start = start.min(self.filtered_plugin_indices.len());
+        let end = (start + PALETTE_MAX_VISIBLE_ROWS + 1).min(self.filtered_plugin_indices.len());
+        &self.filtered_plugin_indices[start..end]
+    }
+
+    /// Returns the pixel Y offset of the first visible row relative to the list top.
+    /// This is the fractional part that makes scrolling smooth.
+    pub fn plugin_scroll_y_offset(&self, scale: f32) -> f32 {
+        let item_h = PALETTE_ITEM_HEIGHT * scale;
+        if item_h <= 0.0 {
+            return 0.0;
+        }
+        self.plugin_scroll_offset % item_h
+    }
+
+    pub fn selected_plugin(&self) -> Option<&PluginPickerEntry> {
+        let idx = *self.filtered_plugin_indices.get(self.plugin_selected_index)?;
+        self.plugin_entries.get(idx)
     }
 
     pub fn move_selection(&mut self, delta: i32) {
@@ -412,10 +542,7 @@ impl CommandPalette {
     }
 
     pub fn visible_rows(&self) -> &[PaletteRow] {
-        if matches!(
-            self.mode,
-            PaletteMode::VolumeFader | PaletteMode::SampleVolumeFader
-        ) {
+        if !matches!(self.mode, PaletteMode::Commands) {
             return &[];
         }
         let start = self.scroll_row_offset.min(self.rows.len());
@@ -429,6 +556,9 @@ impl CommandPalette {
         }
         if self.mode == PaletteMode::VolumeFader {
             return FADER_CONTENT_HEIGHT * scale;
+        }
+        if self.mode == PaletteMode::PluginPicker {
+            return self.plugin_visible_height(scale);
         }
         let mut h = 0.0;
         for row in self.visible_rows() {
@@ -460,6 +590,7 @@ impl CommandPalette {
     }
 
     /// Returns the global command-relative index if mouse is on a command row.
+    /// In PluginPicker mode, returns the index into filtered_plugin_indices.
     pub fn item_at(
         &self,
         pos: [f32; 2],
@@ -475,6 +606,24 @@ impl CommandPalette {
         }
         let (rp, _) = self.palette_rect(screen_w, screen_h, scale);
         let list_top = rp[1] + PALETTE_INPUT_HEIGHT * scale + 1.0 * scale;
+
+        if self.mode == PaletteMode::PluginPicker {
+            let item_h = PALETTE_ITEM_HEIGHT * scale;
+            if item_h <= 0.0 {
+                return None;
+            }
+            let y_offset = self.plugin_scroll_y_offset(scale);
+            let visible = self.visible_plugin_entries(scale);
+            let first_row = (self.plugin_scroll_offset / item_h).floor() as usize;
+            for (i, _) in visible.iter().enumerate() {
+                let y = list_top + i as f32 * item_h - y_offset;
+                if pos[1] >= y && pos[1] < y + item_h {
+                    return Some(first_row + i);
+                }
+            }
+            return None;
+        }
+
         let base_cmd = self.visible_command_offset();
         let mut y = list_top;
         let mut cmd_i = 0;
@@ -769,6 +918,65 @@ impl CommandPalette {
                     color: [1.0, 1.0, 1.0, 0.95],
                     border_radius: thumb_r,
                 });
+            }
+            PaletteMode::PluginPicker => {
+                let item_h = PALETTE_ITEM_HEIGHT * scale;
+                let y_offset = self.plugin_scroll_y_offset(scale);
+                let first_row = if item_h > 0.0 {
+                    (self.plugin_scroll_offset / item_h).floor() as usize
+                } else {
+                    0
+                };
+                let visible = self.visible_plugin_entries(scale);
+                let mut y = list_top + 1.0 * scale - y_offset;
+                for (i, _) in visible.iter().enumerate() {
+                    let abs_idx = first_row + i;
+                    if abs_idx == self.plugin_selected_index {
+                        out.push(InstanceRaw {
+                            position: [pos[0] + margin, y],
+                            size: [size[0] - margin * 2.0, item_h],
+                            color: [0.26, 0.26, 0.32, 0.8],
+                            border_radius: 6.0 * scale,
+                        });
+                    }
+                    y += item_h;
+                }
+
+                // Scrollbar
+                let content_h = self.plugin_content_height(scale);
+                let visible_h = self.plugin_visible_height(scale);
+                if content_h > visible_h {
+                    let sb_w = 6.0 * scale;
+                    let sb_x = pos[0] + size[0] - margin - sb_w;
+                    let track_top = list_top + 1.0 * scale;
+                    let track_h = visible_h;
+
+                    // Track
+                    out.push(InstanceRaw {
+                        position: [sb_x, track_top],
+                        size: [sb_w, track_h],
+                        color: [1.0, 1.0, 1.0, 0.08],
+                        border_radius: 3.0 * scale,
+                    });
+
+                    // Thumb
+                    let ratio = visible_h / content_h;
+                    let thumb_h = (ratio * track_h).max(20.0 * scale);
+                    let max_scroll = self.plugin_max_scroll(scale);
+                    let scroll_ratio = if max_scroll > 0.0 {
+                        self.plugin_scroll_offset / max_scroll
+                    } else {
+                        0.0
+                    };
+                    let thumb_y = track_top + scroll_ratio * (track_h - thumb_h);
+
+                    out.push(InstanceRaw {
+                        position: [sb_x, thumb_y],
+                        size: [sb_w, thumb_h],
+                        color: [1.0, 1.0, 1.0, 0.20],
+                        border_radius: 3.0 * scale,
+                    });
+                }
             }
         }
 

@@ -1,0 +1,134 @@
+use crate::hit_testing::point_in_rect;
+use crate::Camera;
+
+#[derive(Clone)]
+pub(crate) struct ExportRegion {
+    pub(crate) position: [f32; 2],
+    pub(crate) size: [f32; 2],
+}
+
+impl ExportRegion {
+    pub fn hit_test_border(&self, world_pos: [f32; 2], camera: &Camera) -> bool {
+        let border_thickness = 6.0 / camera.zoom;
+        let p = self.position;
+        let s = self.size;
+        if !point_in_rect(
+            world_pos,
+            [p[0] - border_thickness, p[1] - border_thickness],
+            [s[0] + border_thickness * 2.0, s[1] + border_thickness * 2.0],
+        ) {
+            return false;
+        }
+        if point_in_rect(world_pos, [p[0], p[1] - border_thickness], [s[0], border_thickness * 2.0]) {
+            return true;
+        }
+        if point_in_rect(world_pos, [p[0], p[1] + s[1] - border_thickness], [s[0], border_thickness * 2.0]) {
+            return true;
+        }
+        if point_in_rect(world_pos, [p[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
+            return true;
+        }
+        if point_in_rect(world_pos, [p[0] + s[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
+            return true;
+        }
+        let pill_w = EXPORT_RENDER_PILL_W / camera.zoom;
+        let pill_h = EXPORT_RENDER_PILL_H / camera.zoom;
+        if point_in_rect(
+            world_pos,
+            [p[0] + 4.0 / camera.zoom, p[1] + 4.0 / camera.zoom],
+            [pill_w, pill_h],
+        ) {
+            return true;
+        }
+        false
+    }
+}
+
+pub(crate) struct SelectArea {
+    pub(crate) position: [f32; 2],
+    pub(crate) size: [f32; 2],
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum ExportHover {
+    None,
+    RenderPill(usize),
+    CornerNW(usize),
+    CornerNE(usize),
+    CornerSW(usize),
+    CornerSE(usize),
+}
+
+pub(crate) const EXPORT_REGION_DEFAULT_WIDTH: f32 = 800.0;
+pub(crate) const EXPORT_REGION_DEFAULT_HEIGHT: f32 = 300.0;
+pub(crate) const EXPORT_FILL_COLOR: [f32; 4] = [0.15, 0.70, 0.55, 0.10];
+pub(crate) const EXPORT_BORDER_COLOR: [f32; 4] = [0.20, 0.80, 0.60, 0.50];
+pub(crate) const EXPORT_RENDER_PILL_COLOR: [f32; 4] = [0.15, 0.65, 0.50, 0.85];
+pub(crate) const EXPORT_RENDER_PILL_W: f32 = 110.0;
+pub(crate) const EXPORT_RENDER_PILL_H: f32 = 22.0;
+
+#[derive(Clone)]
+pub(crate) struct LoopRegion {
+    pub(crate) position: [f32; 2],
+    pub(crate) size: [f32; 2],
+    pub(crate) enabled: bool,
+}
+
+impl LoopRegion {
+    pub fn hit_test_border(&self, world_pos: [f32; 2], camera: &Camera) -> bool {
+        let border_thickness = 6.0 / camera.zoom;
+        let p = self.position;
+        let s = self.size;
+        if !point_in_rect(
+            world_pos,
+            [p[0] - border_thickness, p[1] - border_thickness],
+            [s[0] + border_thickness * 2.0, s[1] + border_thickness * 2.0],
+        ) {
+            return false;
+        }
+        // Top edge
+        if point_in_rect(world_pos, [p[0], p[1] - border_thickness], [s[0], border_thickness * 2.0]) {
+            return true;
+        }
+        // Bottom edge
+        if point_in_rect(world_pos, [p[0], p[1] + s[1] - border_thickness], [s[0], border_thickness * 2.0]) {
+            return true;
+        }
+        // Left edge
+        if point_in_rect(world_pos, [p[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
+            return true;
+        }
+        // Right edge
+        if point_in_rect(world_pos, [p[0] + s[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
+            return true;
+        }
+        // LOOP badge area
+        let badge_w = LOOP_BADGE_W / camera.zoom;
+        let badge_h = LOOP_BADGE_H / camera.zoom;
+        if point_in_rect(
+            world_pos,
+            [p[0] + 4.0 / camera.zoom, p[1] + 4.0 / camera.zoom],
+            [badge_w, badge_h],
+        ) {
+            return true;
+        }
+        false
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum LoopHover {
+    None,
+    CornerNW(usize),
+    CornerNE(usize),
+    CornerSW(usize),
+    CornerSE(usize),
+}
+
+pub(crate) const LOOP_REGION_DEFAULT_WIDTH: f32 = 800.0;
+pub(crate) const LOOP_REGION_DEFAULT_HEIGHT: f32 = 250.0;
+pub(crate) const LOOP_FILL_COLOR: [f32; 4] = [0.25, 0.55, 0.95, 0.08];
+pub(crate) const LOOP_BORDER_COLOR: [f32; 4] = [0.30, 0.60, 1.0, 0.50];
+pub(crate) const LOOP_BADGE_COLOR: [f32; 4] = [0.20, 0.50, 0.95, 0.85];
+pub(crate) const LOOP_BADGE_W: f32 = 70.0;
+pub(crate) const LOOP_BADGE_H: f32 = 22.0;
