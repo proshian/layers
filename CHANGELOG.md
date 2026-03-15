@@ -1,3 +1,7 @@
+- 2026-03-15: feat: midi note drag shows default cursor, right-edge hover/resize shows EwResize cursor, alt+drag duplicates notes (21.0k loc)
+- 2026-03-15: feat: add "Open Project..." (Cmd+O) menu item, rename submenu to "Open Recent" (20.9k loc)
+- 2026-03-15: fix: hide temp projects from recent menu after saving, grey out missing-folder projects (20.9k loc)
+- 2026-03-15: feat: hold Cmd during any drag/resize to temporarily disable grid snapping (20.9k loc)
 - 2026-03-14: fix: hide plugin GUIs on project load so they don't appear until explicitly opened (20.9k loc)
 - 2026-03-14: fix: plugin state now restored at startup via open+hide (no manual GUI open needed), test_vst3 binary for real Pro-Q 4 / FabFilter One integration tests (20.9k loc)
 - 2026-03-14: fix: restore effect plugin state+params on project load, not just on GUI open (20.4k loc)

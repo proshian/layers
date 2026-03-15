@@ -350,7 +350,7 @@ impl ApplicationHandler for App {
                 if let DragState::ResizingComponentDef { comp_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if comp_idx < self.components.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
                         self.components[comp_idx].position = pos;
                         self.components[comp_idx].size = size;
                     }
@@ -363,7 +363,7 @@ impl ApplicationHandler for App {
                 if let DragState::ResizingExportRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if region_idx < self.export_regions.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
                         self.export_regions[region_idx].position = pos;
                         self.export_regions[region_idx].size = size;
                     }
@@ -376,7 +376,7 @@ impl ApplicationHandler for App {
                 if let DragState::ResizingEffectRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if region_idx < self.effect_regions.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
                         self.effect_regions[region_idx].position = pos;
                         self.effect_regions[region_idx].size = size;
                     }
@@ -389,7 +389,7 @@ impl ApplicationHandler for App {
                 if let DragState::ResizingInstrumentRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if region_idx < self.instrument_regions.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
                         self.instrument_regions[region_idx].position = pos;
                         self.instrument_regions[region_idx].size = size;
                     }
@@ -402,7 +402,7 @@ impl ApplicationHandler for App {
                 if let DragState::ResizingMidiClip { clip_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if clip_idx < self.midi_clips.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
                         self.midi_clips[clip_idx].position = pos;
                         self.midi_clips[clip_idx].size = size;
                     }
@@ -415,7 +415,7 @@ impl ApplicationHandler for App {
                 if let DragState::ResizingLoopRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
                     if region_idx < self.loop_regions.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
                         self.loop_regions[region_idx].position = pos;
                         self.loop_regions[region_idx].size = size;
                     }
@@ -444,7 +444,11 @@ impl ApplicationHandler for App {
                         };
 
                         if is_left_edge {
-                            let snapped_x = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
+                            let snapped_x = if self.is_snap_override_active() {
+                                world[0]
+                            } else {
+                                snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm)
+                            };
                             let dx = snapped_x - initial_position_x;
                             let mut new_offset = initial_offset_px + dx;
                             let mut new_size_w = initial_size_w - dx;
@@ -471,7 +475,11 @@ impl ApplicationHandler for App {
                             wf.fade_in_px = wf.fade_in_px.min(new_size_w * 0.5);
                             wf.fade_out_px = wf.fade_out_px.min(new_size_w * 0.5);
                         } else {
-                            let snapped_right = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
+                            let snapped_right = if self.is_snap_override_active() {
+                                world[0]
+                            } else {
+                                snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm)
+                            };
                             let mut new_size_w = snapped_right - self.waveforms[waveform_idx].position[0];
                             let cur_offset = self.waveforms[waveform_idx].sample_offset_px;
 
@@ -606,7 +614,11 @@ impl ApplicationHandler for App {
                         let mut needs_sync = false;
                         for (target, offset) in &offsets {
                             let raw_x = world[0] - offset[0];
-                            let snapped_x = snap_to_grid(raw_x, &self.settings, self.camera.zoom, self.bpm);
+                            let snapped_x = if self.is_snap_override_active() {
+                                raw_x
+                            } else {
+                                snap_to_grid(raw_x, &self.settings, self.camera.zoom, self.bpm)
+                            };
                             self.set_target_pos(target, [snapped_x, world[1] - offset[1]]);
                             if matches!(
                                 target,
@@ -1519,17 +1531,42 @@ impl ApplicationHandler for App {
                                                 if !self.selected_midi_notes.contains(&note_idx) {
                                                     self.selected_midi_notes.push(note_idx);
                                                 }
-                                                let offsets: Vec<[f32; 2]> = self.selected_midi_notes.iter().map(|&ni| {
-                                                    let n = &self.midi_clips[mc_idx].notes[ni];
-                                                    let nx = mc_pos[0] + n.start_px;
-                                                    let ny = self.midi_clips[mc_idx].pitch_to_y(n.pitch);
-                                                    [world[0] - nx, world[1] - ny]
-                                                }).collect();
-                                                self.drag = DragState::MovingMidiNote {
-                                                    clip_idx: mc_idx,
-                                                    note_indices: self.selected_midi_notes.clone(),
-                                                    offsets,
-                                                };
+                                                if self.modifiers.alt_key() {
+                                                    // Alt+drag: duplicate selected notes and drag the copies
+                                                    self.push_undo();
+                                                    let mut new_indices: Vec<usize> = Vec::new();
+                                                    for &ni in &self.selected_midi_notes {
+                                                        if ni < self.midi_clips[mc_idx].notes.len() {
+                                                            let cloned = self.midi_clips[mc_idx].notes[ni].clone();
+                                                            self.midi_clips[mc_idx].notes.push(cloned);
+                                                            new_indices.push(self.midi_clips[mc_idx].notes.len() - 1);
+                                                        }
+                                                    }
+                                                    self.selected_midi_notes = new_indices.clone();
+                                                    let offsets: Vec<[f32; 2]> = new_indices.iter().map(|&ni| {
+                                                        let n = &self.midi_clips[mc_idx].notes[ni];
+                                                        let nx = mc_pos[0] + n.start_px;
+                                                        let ny = self.midi_clips[mc_idx].pitch_to_y(n.pitch);
+                                                        [world[0] - nx, world[1] - ny]
+                                                    }).collect();
+                                                    self.drag = DragState::MovingMidiNote {
+                                                        clip_idx: mc_idx,
+                                                        note_indices: new_indices,
+                                                        offsets,
+                                                    };
+                                                } else {
+                                                    let offsets: Vec<[f32; 2]> = self.selected_midi_notes.iter().map(|&ni| {
+                                                        let n = &self.midi_clips[mc_idx].notes[ni];
+                                                        let nx = mc_pos[0] + n.start_px;
+                                                        let ny = self.midi_clips[mc_idx].pitch_to_y(n.pitch);
+                                                        [world[0] - nx, world[1] - ny]
+                                                    }).collect();
+                                                    self.drag = DragState::MovingMidiNote {
+                                                        clip_idx: mc_idx,
+                                                        note_indices: self.selected_midi_notes.clone(),
+                                                        offsets,
+                                                    };
+                                                }
                                             }
                                         }
                                     } else {

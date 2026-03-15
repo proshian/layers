@@ -293,6 +293,7 @@ struct MenuState {
     menu: muda::Menu,
     new_project: MenuId,
     save_project: MenuId,
+    open_project: MenuId,
     settings: MenuId,
     undo: MenuId,
     redo: MenuId,
@@ -321,6 +322,7 @@ struct App {
     fade_handle_hovered: Option<(usize, bool)>,
     fade_curve_hovered: Option<(usize, bool)>,
     waveform_edge_hover: WaveformEdgeHover,
+    midi_note_edge_hover: bool,
     file_hovering: bool,
     modifiers: ModifiersState,
     command_palette: Option<CommandPalette>,
@@ -397,6 +399,7 @@ impl App {
             fade_handle_hovered: None,
             fade_curve_hovered: None,
             waveform_edge_hover: WaveformEdgeHover::None,
+            midi_note_edge_hover: false,
             file_hovering: false,
             modifiers: ModifiersState::empty(),
             command_palette: None,
@@ -906,6 +909,7 @@ impl App {
             fade_handle_hovered: None,
             fade_curve_hovered: None,
             waveform_edge_hover: WaveformEdgeHover::None,
+            midi_note_edge_hover: false,
             file_hovering: false,
             modifiers: ModifiersState::empty(),
             command_palette: None,
@@ -1189,6 +1193,16 @@ impl App {
         } else if id == menu.save_project {
             self.save_project();
             self.refresh_open_project_menu();
+        } else if id == menu.open_project {
+            if let Some(folder) = rfd::FileDialog::new()
+                .set_title("Open Project")
+                .pick_folder()
+            {
+                let path = folder.to_string_lossy().to_string();
+                self.load_project(&path);
+                self.refresh_open_project_menu();
+                self.request_redraw();
+            }
         } else if id == menu.settings {
             self.command_palette = None;
             self.context_menu = None;
@@ -1519,8 +1533,14 @@ impl App {
         let mut new_items: Vec<(MenuId, String)> = Vec::new();
         if let Some(s) = &self.storage {
             for entry in s.list_projects() {
-                let item = muda::MenuItem::new(&entry.name, true, None);
-                new_items.push((item.id().clone(), entry.path.clone()));
+                if entry.is_temp {
+                    continue;
+                }
+                let exists = std::path::Path::new(&entry.path).exists();
+                let item = muda::MenuItem::new(&entry.name, exists, None);
+                if exists {
+                    new_items.push((item.id().clone(), entry.path.clone()));
+                }
                 let _ = menu.open_submenu.append(&item);
             }
         }
@@ -2043,6 +2063,8 @@ impl App {
                     DragState::ResizingWaveform { .. } => CursorIcon::EwResize,
                     DragState::DraggingFadeCurve { .. } => CursorIcon::NsResize,
                     DragState::DraggingAutomationPoint { .. } => CursorIcon::Grabbing,
+                    DragState::MovingMidiNote { .. } => CursorIcon::Default,
+                    DragState::ResizingMidiNote { .. } => CursorIcon::EwResize,
                     DragState::ResizingComponentDef { nwse, .. } => {
                         if *nwse {
                             CursorIcon::NwseResize
@@ -2068,6 +2090,8 @@ impl App {
                         if self.sample_browser.visible && self.sample_browser.resize_hovered {
                             CursorIcon::EwResize
                         } else if self.waveform_edge_hover != WaveformEdgeHover::None {
+                            CursorIcon::EwResize
+                        } else if self.midi_note_edge_hover {
                             CursorIcon::EwResize
                         } else if self.fade_handle_hovered.is_some() {
                             CursorIcon::EwResize
@@ -2146,6 +2170,18 @@ impl App {
         }
         let world = self.camera.screen_to_world(self.mouse_pos);
         self.waveform_edge_hover = hit_test_waveform_edge(&self.waveforms, world, &self.camera);
+        self.midi_note_edge_hover = if let Some(mc_idx) = self.editing_midi_clip {
+            if mc_idx < self.midi_clips.len() {
+                matches!(
+                    midi::hit_test_midi_note(&self.midi_clips[mc_idx], world, &self.camera),
+                    Some((_, midi::MidiNoteHitZone::RightEdge))
+                )
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         self.fade_handle_hovered = if self.waveform_edge_hover == WaveformEdgeHover::None {
             hit_test_fade_handle(&self.waveforms, world, &self.camera)
         } else {
@@ -2359,6 +2395,10 @@ impl App {
             HitTarget::MidiClip(i) => self.midi_clips[*i].position,
             HitTarget::InstrumentRegion(i) => self.instrument_regions[*i].position,
         }
+    }
+
+    fn is_snap_override_active(&self) -> bool {
+        self.modifiers.super_key()
     }
 
     fn begin_move_selection(&mut self, world: [f32; 2], alt_copy: bool) {
@@ -3805,12 +3845,25 @@ fn build_app_menu(storage: Option<&Storage>) -> MenuState {
     let _ = file_menu.append(&save_project_item);
     let _ = file_menu.append(&PredefinedMenuItem::separator());
 
-    let open_submenu = Submenu::new("Open Project", true);
+    let open_project_item = MenuItem::new(
+        "Open Project...",
+        true,
+        Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyO)),
+    );
+    let _ = file_menu.append(&open_project_item);
+
+    let open_submenu = Submenu::new("Open Recent", true);
     let mut open_items: Vec<(MenuId, String)> = Vec::new();
     if let Some(s) = storage {
         for entry in s.list_projects() {
-            let item = MenuItem::new(&entry.name, true, None);
-            open_items.push((item.id().clone(), entry.path.clone()));
+            if entry.is_temp {
+                continue;
+            }
+            let exists = std::path::Path::new(&entry.path).exists();
+            let item = MenuItem::new(&entry.name, exists, None);
+            if exists {
+                open_items.push((item.id().clone(), entry.path.clone()));
+            }
             let _ = open_submenu.append(&item);
         }
     }
@@ -3863,6 +3916,7 @@ fn build_app_menu(storage: Option<&Storage>) -> MenuState {
         menu,
         new_project: new_project_item.id().clone(),
         save_project: save_project_item.id().clone(),
+        open_project: open_project_item.id().clone(),
         settings: settings_item.id().clone(),
         undo: undo_item.id().clone(),
         redo: redo_item.id().clone(),

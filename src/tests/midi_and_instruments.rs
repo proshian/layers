@@ -174,3 +174,56 @@ fn test_undo_redo_instrument_region() {
     app.redo();
     assert_eq!(app.instrument_regions.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Alt+drag duplication of MIDI notes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_alt_duplicate_midi_notes() {
+    let mut app = App::new_headless();
+    app.add_midi_clip();
+    let mc_idx = 0;
+
+    // Add two notes to the clip
+    app.midi_clips[mc_idx].notes.push(midi::MidiNote {
+        pitch: 60,
+        start_px: 10.0,
+        duration_px: 30.0,
+        velocity: 100,
+    });
+    app.midi_clips[mc_idx].notes.push(midi::MidiNote {
+        pitch: 64,
+        start_px: 50.0,
+        duration_px: 20.0,
+        velocity: 80,
+    });
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 2);
+
+    // Simulate what alt+drag does: clone selected notes and push them
+    app.push_undo();
+    let selected = vec![0usize, 1usize];
+    let mut new_indices: Vec<usize> = Vec::new();
+    for &ni in &selected {
+        let cloned = app.midi_clips[mc_idx].notes[ni].clone();
+        app.midi_clips[mc_idx].notes.push(cloned);
+        new_indices.push(app.midi_clips[mc_idx].notes.len() - 1);
+    }
+    app.selected_midi_notes = new_indices.clone();
+
+    // Should now have 4 notes (original 2 + 2 duplicates)
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 4);
+
+    // Duplicates have the same pitch and duration as originals
+    assert_eq!(app.midi_clips[mc_idx].notes[2].pitch, 60);
+    assert_eq!(app.midi_clips[mc_idx].notes[2].duration_px, 30.0);
+    assert_eq!(app.midi_clips[mc_idx].notes[3].pitch, 64);
+    assert_eq!(app.midi_clips[mc_idx].notes[3].duration_px, 20.0);
+
+    // selected_midi_notes points to the new duplicates
+    assert_eq!(app.selected_midi_notes, vec![2, 3]);
+
+    // Undo should revert to 2 notes
+    app.undo();
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 2);
+}
