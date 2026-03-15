@@ -74,6 +74,7 @@ pub struct PluginPickerEntry {
     pub name: String,
     pub manufacturer: String,
     pub unique_id: String,
+    pub is_instrument: bool,
 }
 
 pub const FADER_CONTENT_HEIGHT: f32 = 90.0;
@@ -322,6 +323,7 @@ pub const COMMANDS: &[CommandDef] = &[
 pub enum PaletteRow {
     Section(&'static str),
     Command(usize),
+    Plugin(usize),
 }
 
 pub struct CommandPalette {
@@ -335,6 +337,7 @@ pub struct CommandPalette {
     pub fader_rms: f32,
     pub fader_dragging: bool,
     pub fader_target_waveform: Option<usize>,
+    pub scroll_accumulator: f32,
     // Plugin picker state
     pub plugin_entries: Vec<PluginPickerEntry>,
     pub filtered_plugin_indices: Vec<usize>,
@@ -355,6 +358,7 @@ impl CommandPalette {
             fader_rms: 0.0,
             fader_dragging: false,
             fader_target_waveform: None,
+            scroll_accumulator: 0.0,
             plugin_entries: Vec::new(),
             filtered_plugin_indices: Vec::new(),
             plugin_selected_index: 0,
@@ -397,6 +401,48 @@ impl CommandPalette {
             }
         }
 
+        // Append matching (or all) plugins: instruments first, then effects
+        // Search also matches the type label ("instrument" / "effect")
+        let plugin_matches = |e: &PluginPickerEntry| -> bool {
+            if !is_searching {
+                return true;
+            }
+            let label = if e.is_instrument { "instrument" } else { "effect" };
+            e.name.to_lowercase().contains(&query)
+                || e.manufacturer.to_lowercase().contains(&query)
+                || label.contains(&query)
+        };
+        let instruments: Vec<usize> = self
+            .plugin_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.is_instrument)
+            .filter(|(_, e)| plugin_matches(e))
+            .map(|(i, _)| i)
+            .collect();
+        let effects: Vec<usize> = self
+            .plugin_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !e.is_instrument)
+            .filter(|(_, e)| plugin_matches(e))
+            .map(|(i, _)| i)
+            .collect();
+        if !instruments.is_empty() {
+            self.rows.push(PaletteRow::Section("Instruments"));
+            for i in instruments {
+                self.rows.push(PaletteRow::Plugin(i));
+                self.command_count += 1;
+            }
+        }
+        if !effects.is_empty() {
+            self.rows.push(PaletteRow::Section("Effects"));
+            for i in effects {
+                self.rows.push(PaletteRow::Plugin(i));
+                self.command_count += 1;
+            }
+        }
+
         if self.command_count == 0 {
             self.selected_index = 0;
         } else if self.selected_index >= self.command_count {
@@ -407,7 +453,7 @@ impl CommandPalette {
     }
 
     pub fn update_filter(&mut self, dev_mode: bool) {
-        if self.mode == PaletteMode::PluginPicker {
+        if matches!(self.mode, PaletteMode::PluginPicker | PaletteMode::InstrumentPicker) {
             self.rebuild_plugin_filter();
             return;
         }
@@ -532,7 +578,7 @@ impl CommandPalette {
     fn row_index_for_selected(&self) -> Option<usize> {
         let mut cmd_i = 0;
         for (ri, row) in self.rows.iter().enumerate() {
-            if let PaletteRow::Command(_) = row {
+            if matches!(row, PaletteRow::Command(_) | PaletteRow::Plugin(_)) {
                 if cmd_i == self.selected_index {
                     return Some(ri);
                 }
@@ -556,6 +602,16 @@ impl CommandPalette {
         self.clamp_scroll_offset();
     }
 
+    fn total_row_height(&self, scale: f32) -> f32 {
+        self.rows
+            .iter()
+            .map(|r| match r {
+                PaletteRow::Section(_) => PALETTE_SECTION_HEIGHT * scale,
+                PaletteRow::Command(_) | PaletteRow::Plugin(_) => PALETTE_ITEM_HEIGHT * scale,
+            })
+            .sum()
+    }
+
     fn clamp_scroll_offset(&mut self) {
         let max = self.rows.len().saturating_sub(PALETTE_MAX_VISIBLE_ROWS);
         if self.scroll_row_offset > max {
@@ -572,10 +628,20 @@ impl CommandPalette {
         self.scroll_row_offset = new as usize;
     }
 
+    pub fn scroll_by_pixels(&mut self, pixels: f32, scale: f32) {
+        self.scroll_accumulator += pixels;
+        let row_h = PALETTE_ITEM_HEIGHT * scale;
+        let lines = (self.scroll_accumulator / row_h) as i32;
+        if lines != 0 {
+            self.scroll_accumulator -= lines as f32 * row_h;
+            self.scroll_by(lines);
+        }
+    }
+
     pub fn visible_command_offset(&self) -> usize {
         let mut count = 0;
         for row in &self.rows[..self.scroll_row_offset] {
-            if matches!(row, PaletteRow::Command(_)) {
+            if matches!(row, PaletteRow::Command(_) | PaletteRow::Plugin(_)) {
                 count += 1;
             }
         }
@@ -585,11 +651,38 @@ impl CommandPalette {
     pub fn selected_action(&self) -> Option<CommandAction> {
         let mut cmd_i = 0;
         for row in &self.rows {
-            if let PaletteRow::Command(ci) = row {
-                if cmd_i == self.selected_index {
-                    return Some(COMMANDS[*ci].action);
+            match row {
+                PaletteRow::Command(ci) => {
+                    if cmd_i == self.selected_index {
+                        return Some(COMMANDS[*ci].action);
+                    }
+                    cmd_i += 1;
                 }
-                cmd_i += 1;
+                PaletteRow::Plugin(_) => {
+                    // Plugin rows count toward selected_index but aren't command actions
+                    cmd_i += 1;
+                }
+                PaletteRow::Section(_) => {}
+            }
+        }
+        None
+    }
+
+    /// Returns the selected plugin entry if a Plugin row is selected in Commands mode.
+    pub fn selected_inline_plugin(&self) -> Option<&PluginPickerEntry> {
+        let mut cmd_i = 0;
+        for row in &self.rows {
+            match row {
+                PaletteRow::Plugin(pi) => {
+                    if cmd_i == self.selected_index {
+                        return self.plugin_entries.get(*pi);
+                    }
+                    cmd_i += 1;
+                }
+                PaletteRow::Command(_) => {
+                    cmd_i += 1;
+                }
+                PaletteRow::Section(_) => {}
             }
         }
         None
@@ -611,14 +704,14 @@ impl CommandPalette {
         if self.mode == PaletteMode::VolumeFader {
             return FADER_CONTENT_HEIGHT * scale;
         }
-        if self.mode == PaletteMode::PluginPicker {
+        if matches!(self.mode, PaletteMode::PluginPicker | PaletteMode::InstrumentPicker) {
             return self.plugin_visible_height(scale);
         }
         let mut h = 0.0;
         for row in self.visible_rows() {
             h += match row {
                 PaletteRow::Section(_) => PALETTE_SECTION_HEIGHT * scale,
-                PaletteRow::Command(_) => PALETTE_ITEM_HEIGHT * scale,
+                PaletteRow::Command(_) | PaletteRow::Plugin(_) => PALETTE_ITEM_HEIGHT * scale,
             };
         }
         h
@@ -661,7 +754,7 @@ impl CommandPalette {
         let (rp, _) = self.palette_rect(screen_w, screen_h, scale);
         let list_top = rp[1] + PALETTE_INPUT_HEIGHT * scale + 1.0 * scale;
 
-        if self.mode == PaletteMode::PluginPicker {
+        if matches!(self.mode, PaletteMode::PluginPicker | PaletteMode::InstrumentPicker) {
             let item_h = PALETTE_ITEM_HEIGHT * scale;
             if item_h <= 0.0 {
                 return None;
@@ -684,15 +777,15 @@ impl CommandPalette {
         for row in self.visible_rows() {
             let rh = match row {
                 PaletteRow::Section(_) => PALETTE_SECTION_HEIGHT * scale,
-                PaletteRow::Command(_) => PALETTE_ITEM_HEIGHT * scale,
+                PaletteRow::Command(_) | PaletteRow::Plugin(_) => PALETTE_ITEM_HEIGHT * scale,
             };
             if pos[1] >= y && pos[1] < y + rh {
                 return match row {
                     PaletteRow::Section(_) => None,
-                    PaletteRow::Command(_) => Some(base_cmd + cmd_i),
+                    PaletteRow::Command(_) | PaletteRow::Plugin(_) => Some(base_cmd + cmd_i),
                 };
             }
-            if matches!(row, PaletteRow::Command(_)) {
+            if matches!(row, PaletteRow::Command(_) | PaletteRow::Plugin(_)) {
                 cmd_i += 1;
             }
             y += rh;
@@ -855,7 +948,7 @@ impl CommandPalette {
                         PaletteRow::Section(_) => {
                             y += PALETTE_SECTION_HEIGHT * scale;
                         }
-                        PaletteRow::Command(_) => {
+                        PaletteRow::Command(_) | PaletteRow::Plugin(_) => {
                             if base_cmd + cmd_i == self.selected_index {
                                 out.push(InstanceRaw {
                                     position: [pos[0] + margin, y],
@@ -864,10 +957,64 @@ impl CommandPalette {
                                     border_radius: 6.0 * scale,
                                 });
                             }
+                            // Label pill for plugin rows
+                            if let PaletteRow::Plugin(pi) = row {
+                                let entry = &self.plugin_entries[*pi];
+                                let is_inst = entry.is_instrument;
+                                let pill_w = if is_inst { 72.0 } else { 44.0 };
+                                let pill_h = 20.0 * scale;
+                                let pill_x = pos[0] + size[0] - margin - (pill_w + 10.0) * scale;
+                                let pill_y = y + (PALETTE_ITEM_HEIGHT * scale - pill_h) * 0.5;
+                                let border_color = if is_inst {
+                                    [0.39, 0.63, 1.0, 0.25]
+                                } else {
+                                    [1.0, 0.67, 0.31, 0.25]
+                                };
+                                out.push(InstanceRaw {
+                                    position: [pill_x, pill_y],
+                                    size: [pill_w * scale, pill_h],
+                                    color: border_color,
+                                    border_radius: 4.0 * scale,
+                                });
+                            }
                             cmd_i += 1;
                             y += PALETTE_ITEM_HEIGHT * scale;
                         }
                     }
+                }
+
+                // Scrollbar
+                let total_h = self.total_row_height(scale);
+                let visible_h = self.content_height(scale);
+                if total_h > visible_h && visible_h > 0.0 {
+                    let sb_w = 6.0 * scale;
+                    let sb_x = pos[0] + size[0] - margin - sb_w;
+                    let track_top = list_top + 1.0 * scale;
+                    let track_h = visible_h;
+
+                    out.push(InstanceRaw {
+                        position: [sb_x, track_top],
+                        size: [sb_w, track_h],
+                        color: [1.0, 1.0, 1.0, 0.08],
+                        border_radius: 3.0 * scale,
+                    });
+
+                    let ratio = visible_h / total_h;
+                    let thumb_h = (ratio * track_h).max(20.0 * scale);
+                    let max_offset = self.rows.len().saturating_sub(PALETTE_MAX_VISIBLE_ROWS);
+                    let scroll_ratio = if max_offset > 0 {
+                        self.scroll_row_offset as f32 / max_offset as f32
+                    } else {
+                        0.0
+                    };
+                    let thumb_y = track_top + scroll_ratio * (track_h - thumb_h);
+
+                    out.push(InstanceRaw {
+                        position: [sb_x, thumb_y],
+                        size: [sb_w, thumb_h],
+                        color: [1.0, 1.0, 1.0, 0.20],
+                        border_radius: 3.0 * scale,
+                    });
                 }
             }
             PaletteMode::VolumeFader => {

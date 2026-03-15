@@ -780,3 +780,215 @@ fn test_velocity_divider_hit_test() {
     // Outside clip x range
     assert!(!midi::hit_test_velocity_divider(mc, [-10.0, lane_top], &camera));
 }
+
+#[test]
+fn test_transpose_selected_notes_by_semitone() {
+    let mut app = App::new_headless();
+    app.add_midi_clip();
+    app.editing_midi_clip = Some(0);
+
+    app.midi_clips[0].notes.push(midi::MidiNote {
+        pitch: 60,
+        start_px: 10.0,
+        duration_px: 30.0,
+        velocity: 100,
+    });
+    app.midi_clips[0].notes.push(midi::MidiNote {
+        pitch: 64,
+        start_px: 50.0,
+        duration_px: 30.0,
+        velocity: 80,
+    });
+
+    // Select both notes
+    app.selected_midi_notes = vec![0, 1];
+
+    // Transpose up by 1 semitone
+    for &ni in &app.selected_midi_notes.clone() {
+        app.midi_clips[0].notes[ni].pitch += 1;
+    }
+    assert_eq!(app.midi_clips[0].notes[0].pitch, 61);
+    assert_eq!(app.midi_clips[0].notes[1].pitch, 65);
+
+    // Transpose down by 1 semitone
+    for &ni in &app.selected_midi_notes.clone() {
+        app.midi_clips[0].notes[ni].pitch -= 1;
+    }
+    assert_eq!(app.midi_clips[0].notes[0].pitch, 60);
+    assert_eq!(app.midi_clips[0].notes[1].pitch, 64);
+
+    // Transpose up by octave (12 semitones)
+    for &ni in &app.selected_midi_notes.clone() {
+        app.midi_clips[0].notes[ni].pitch += 12;
+    }
+    assert_eq!(app.midi_clips[0].notes[0].pitch, 72);
+    assert_eq!(app.midi_clips[0].notes[1].pitch, 76);
+}
+
+// ---------------------------------------------------------------------------
+// Cmd+D duplicate MIDI notes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cmd_d_duplicate_midi_notes() {
+    let mut app = App::new_headless();
+    app.add_midi_clip();
+    let mc_idx = 0;
+    app.editing_midi_clip = Some(mc_idx);
+
+    // Single note: duplicate shifts by its own duration
+    app.midi_clips[mc_idx].notes.push(midi::MidiNote {
+        pitch: 60,
+        start_px: 10.0,
+        duration_px: 30.0,
+        velocity: 100,
+    });
+    app.selected_midi_notes = vec![0];
+
+    app.push_undo();
+    let notes = &app.midi_clips[mc_idx].notes;
+    let min_start = notes[0].start_px;
+    let max_end = notes[0].start_px + notes[0].duration_px;
+    let group_shift = max_end - min_start; // 30.0
+    let mut cloned = app.midi_clips[mc_idx].notes[0].clone();
+    cloned.start_px += group_shift;
+    app.midi_clips[mc_idx].notes.push(cloned);
+    app.selected_midi_notes = vec![1];
+
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 2);
+    assert_eq!(app.midi_clips[mc_idx].notes[1].start_px, 40.0); // 10 + 30
+    assert_eq!(app.selected_midi_notes, vec![1]);
+
+    app.undo();
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 1);
+}
+
+#[test]
+fn test_cmd_d_duplicate_midi_notes_group() {
+    let mut app = App::new_headless();
+    app.add_midi_clip();
+    let mc_idx = 0;
+    app.editing_midi_clip = Some(mc_idx);
+
+    // Two notes forming a group: [10..40] and [50..70]
+    // Group span = max_end(70) - min_start(10) = 60
+    app.midi_clips[mc_idx].notes.push(midi::MidiNote {
+        pitch: 60,
+        start_px: 10.0,
+        duration_px: 30.0,
+        velocity: 100,
+    });
+    app.midi_clips[mc_idx].notes.push(midi::MidiNote {
+        pitch: 64,
+        start_px: 50.0,
+        duration_px: 20.0,
+        velocity: 80,
+    });
+    app.selected_midi_notes = vec![0, 1];
+
+    app.push_undo();
+    let group_shift = 70.0 - 10.0; // 60.0
+    let mut new_indices: Vec<usize> = Vec::new();
+    for &ni in &[0usize, 1] {
+        let mut cloned = app.midi_clips[mc_idx].notes[ni].clone();
+        cloned.start_px += group_shift;
+        app.midi_clips[mc_idx].notes.push(cloned);
+        new_indices.push(app.midi_clips[mc_idx].notes.len() - 1);
+    }
+    app.selected_midi_notes = new_indices;
+
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 4);
+    // Duplicated group preserves relative positions
+    assert_eq!(app.midi_clips[mc_idx].notes[2].start_px, 70.0);  // 10 + 60
+    assert_eq!(app.midi_clips[mc_idx].notes[2].pitch, 60);
+    assert_eq!(app.midi_clips[mc_idx].notes[3].start_px, 110.0); // 50 + 60
+    assert_eq!(app.midi_clips[mc_idx].notes[3].pitch, 64);
+    assert_eq!(app.selected_midi_notes, vec![2, 3]);
+
+    app.undo();
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Cmd+C / Cmd+V copy-paste MIDI notes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_copy_paste_midi_notes() {
+    use crate::ClipboardItem;
+
+    let mut app = App::new_headless();
+    app.add_midi_clip();
+    let mc_idx = 0;
+    app.editing_midi_clip = Some(mc_idx);
+
+    // Two notes: [10..40] pitch 60, [50..70] pitch 64
+    app.midi_clips[mc_idx].notes.push(midi::MidiNote {
+        pitch: 60,
+        start_px: 10.0,
+        duration_px: 30.0,
+        velocity: 100,
+    });
+    app.midi_clips[mc_idx].notes.push(midi::MidiNote {
+        pitch: 64,
+        start_px: 50.0,
+        duration_px: 20.0,
+        velocity: 80,
+    });
+    app.selected_midi_notes = vec![0, 1];
+
+    // --- Copy (simulate Cmd+C logic) ---
+    let notes = &app.midi_clips[mc_idx].notes;
+    let min_start = app.selected_midi_notes.iter()
+        .map(|&ni| notes[ni].start_px)
+        .fold(f32::INFINITY, f32::min);
+    let mut copied: Vec<midi::MidiNote> = Vec::new();
+    for &ni in &app.selected_midi_notes {
+        let mut n = app.midi_clips[mc_idx].notes[ni].clone();
+        n.start_px -= min_start;
+        copied.push(n);
+    }
+    app.clipboard.items.clear();
+    app.clipboard.items.push(ClipboardItem::MidiNotes(copied));
+
+    // Clipboard should have normalized notes (start_px relative to 0)
+    if let ClipboardItem::MidiNotes(ref cn) = app.clipboard.items[0] {
+        assert_eq!(cn.len(), 2);
+        assert_eq!(cn[0].start_px, 0.0);   // 10 - 10
+        assert_eq!(cn[1].start_px, 40.0);  // 50 - 10
+    } else {
+        panic!("expected MidiNotes in clipboard");
+    }
+
+    // --- Paste at offset 200 (simulate Cmd+V logic) ---
+    app.push_undo();
+    let paste_offset = 200.0;
+    if let ClipboardItem::MidiNotes(ref notes) = app.clipboard.items[0] {
+        let mut new_indices: Vec<usize> = Vec::new();
+        for n in notes {
+            let mut pasted = n.clone();
+            pasted.start_px += paste_offset;
+            app.midi_clips[mc_idx].notes.push(pasted);
+            new_indices.push(app.midi_clips[mc_idx].notes.len() - 1);
+        }
+        app.selected_midi_notes = new_indices;
+    }
+
+    // Should have 4 notes total
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 4);
+
+    // Pasted notes preserve relative positions, offset by paste_offset
+    assert_eq!(app.midi_clips[mc_idx].notes[2].pitch, 60);
+    assert_eq!(app.midi_clips[mc_idx].notes[2].start_px, 200.0);
+    assert_eq!(app.midi_clips[mc_idx].notes[2].duration_px, 30.0);
+    assert_eq!(app.midi_clips[mc_idx].notes[3].pitch, 64);
+    assert_eq!(app.midi_clips[mc_idx].notes[3].start_px, 240.0);
+    assert_eq!(app.midi_clips[mc_idx].notes[3].duration_px, 20.0);
+
+    // Selection points to pasted notes
+    assert_eq!(app.selected_midi_notes, vec![2, 3]);
+
+    // Undo reverts paste
+    app.undo();
+    assert_eq!(app.midi_clips[mc_idx].notes.len(), 2);
+}

@@ -99,6 +99,27 @@ impl App {
         self.sync_audio_clips();
     }
 
+    pub(crate) fn build_palette_plugin_entries(&self) -> Vec<ui::palette::PluginPickerEntry> {
+        let mut entries = Vec::new();
+        for e in &self.plugin_registry.instruments {
+            entries.push(ui::palette::PluginPickerEntry {
+                name: e.info.name.clone(),
+                manufacturer: e.info.manufacturer.clone(),
+                unique_id: e.info.unique_id.clone(),
+                is_instrument: true,
+            });
+        }
+        for e in &self.plugin_registry.plugins {
+            entries.push(ui::palette::PluginPickerEntry {
+                name: e.info.name.clone(),
+                manufacturer: e.info.manufacturer.clone(),
+                unique_id: e.info.unique_id.clone(),
+                is_instrument: false,
+            });
+        }
+        entries
+    }
+
     pub(crate) fn add_plugin_block(&mut self, position: [f32; 2], plugin_id: &str, plugin_name: &str) {
         self.ensure_plugins_scanned();
         let sample_rate = 48000.0;

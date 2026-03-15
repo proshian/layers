@@ -301,6 +301,7 @@ pub(crate) struct Gpu {
     cached_auto_dot_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_auto_lane_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_midi_note_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
+    cached_midi_per_note_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     pub(crate) auto_lane_close_rects: Vec<(usize, [f32; 4])>,
 }
 
@@ -1100,6 +1101,73 @@ impl Gpu {
                                         full_bounds,
                                     ));
                                 }
+
+                                y += PALETTE_ITEM_HEIGHT * scale;
+                            }
+                            PaletteRow::Plugin(pi) => {
+                                let entry = &palette.plugin_entries[*pi];
+
+                                // Plugin name
+                                let mut buf = TextBuffer::new(
+                                    &mut self.font_system,
+                                    Metrics::new(ifont, iline),
+                                );
+                                buf.set_size(
+                                    &mut self.font_system,
+                                    Some(PALETTE_WIDTH * scale * 0.55),
+                                    Some(PALETTE_ITEM_HEIGHT * scale),
+                                );
+                                buf.set_text(
+                                    &mut self.font_system,
+                                    &entry.name,
+                                    Attrs::new().family(Family::SansSerif),
+                                    Shaping::Advanced,
+                                );
+                                buf.shape_until_scroll(&mut self.font_system, false);
+                                text_buffers.push(buf);
+                                text_meta.push((
+                                    ppos[0] + margin + 12.0 * scale,
+                                    y + (PALETTE_ITEM_HEIGHT * scale - iline) * 0.5,
+                                    TextColor::rgb(215, 215, 222),
+                                    full_bounds,
+                                ));
+
+                                // Type label pill: "Instrument" or "Effect"
+                                let label = if entry.is_instrument { "Instrument" } else { "Effect" };
+                                let color = if entry.is_instrument {
+                                    TextColor::rgba(100, 160, 255, 220)
+                                } else {
+                                    TextColor::rgba(255, 170, 80, 220)
+                                };
+                                let label_font = 10.5 * scale;
+                                let label_line = 14.0 * scale;
+                                let pill_w = if entry.is_instrument { 72.0 } else { 44.0 };
+                                let pill_h = 20.0 * scale;
+                                let pill_x = ppos[0] + PALETTE_WIDTH * scale - margin - (pill_w + 10.0) * scale;
+                                let pill_y = y + (PALETTE_ITEM_HEIGHT * scale - pill_h) * 0.5;
+                                let mut buf = TextBuffer::new(
+                                    &mut self.font_system,
+                                    Metrics::new(label_font, label_line),
+                                );
+                                buf.set_size(
+                                    &mut self.font_system,
+                                    Some(pill_w * scale),
+                                    Some(pill_h),
+                                );
+                                buf.set_text(
+                                    &mut self.font_system,
+                                    label,
+                                    Attrs::new().family(Family::SansSerif),
+                                    Shaping::Advanced,
+                                );
+                                buf.shape_until_scroll(&mut self.font_system, false);
+                                text_buffers.push(buf);
+                                text_meta.push((
+                                    pill_x + (pill_w * scale - pill_w * scale * 0.9) * 0.5,
+                                    pill_y + (pill_h - label_line) * 0.5,
+                                    color,
+                                    full_bounds,
+                                ));
 
                                 y += PALETTE_ITEM_HEIGHT * scale;
                             }

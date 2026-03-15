@@ -1276,29 +1276,60 @@ impl ApplicationHandler for App {
                                     self.command_palette = None;
                                 }
                             } else {
-                                let clicked_action = self.command_palette.as_ref().and_then(|p| {
+                                enum ClickResult {
+                                    Action(CommandAction),
+                                    InlinePlugin { unique_id: String, name: String, is_instrument: bool },
+                                }
+                                let click_result = self.command_palette.as_ref().and_then(|p| {
                                     let idx = p.item_at(self.mouse_pos, sw, sh, scale)?;
                                     let mut cmd_i = 0;
                                     for row in p.visible_rows() {
-                                        if let PaletteRow::Command(ci) = row {
-                                            if cmd_i == idx {
-                                                return Some(COMMANDS[*ci].action);
+                                        match row {
+                                            PaletteRow::Command(ci) => {
+                                                if cmd_i == idx {
+                                                    return Some(ClickResult::Action(COMMANDS[*ci].action));
+                                                }
+                                                cmd_i += 1;
                                             }
-                                            cmd_i += 1;
+                                            PaletteRow::Plugin(pi) => {
+                                                if cmd_i == idx {
+                                                    let e = &p.plugin_entries[*pi];
+                                                    return Some(ClickResult::InlinePlugin {
+                                                        unique_id: e.unique_id.clone(),
+                                                        name: e.name.clone(),
+                                                        is_instrument: e.is_instrument,
+                                                    });
+                                                }
+                                                cmd_i += 1;
+                                            }
+                                            PaletteRow::Section(_) => {}
                                         }
                                     }
                                     None
                                 });
 
-                                if let Some(action) = clicked_action {
-                                    if matches!(action, CommandAction::SetMasterVolume | CommandAction::SetSampleVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
-                                        self.execute_command(action);
-                                    } else {
-                                        self.command_palette = None;
-                                        self.execute_command(action);
+                                match click_result {
+                                    Some(ClickResult::Action(action)) => {
+                                        if matches!(action, CommandAction::SetMasterVolume | CommandAction::SetSampleVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
+                                            self.execute_command(action);
+                                        } else {
+                                            self.command_palette = None;
+                                            self.execute_command(action);
+                                        }
                                     }
-                                } else if !inside {
-                                    self.command_palette = None;
+                                    Some(ClickResult::InlinePlugin { unique_id, name, is_instrument }) => {
+                                        self.command_palette = None;
+                                        if is_instrument {
+                                            self.add_instrument(&unique_id, &name);
+                                        } else {
+                                            self.add_plugin_to_selected_effect_region(&unique_id, &name);
+                                        }
+                                    }
+                                    None => {
+                                        if !inside {
+                                            self.command_palette = None;
+                                        }
+                                    }
                                 }
                             }
                             self.request_redraw();
@@ -1850,10 +1881,11 @@ impl ApplicationHandler for App {
                                                         }
                                                     }
                                                     self.selected_midi_notes = new_indices.clone();
+                                                    let nh = self.midi_clips[mc_idx].note_height_editing(true);
                                                     let offsets: Vec<[f32; 2]> = new_indices.iter().map(|&ni| {
                                                         let n = &self.midi_clips[mc_idx].notes[ni];
                                                         let nx = mc_pos[0] + n.start_px;
-                                                        let ny = self.midi_clips[mc_idx].pitch_to_y_editing(n.pitch, true);
+                                                        let ny = self.midi_clips[mc_idx].pitch_to_y_editing(n.pitch, true) + nh * 0.5;
                                                         [world[0] - nx, world[1] - ny]
                                                     }).collect();
                                                     self.drag = DragState::MovingMidiNote {
@@ -1863,10 +1895,11 @@ impl ApplicationHandler for App {
                                                     };
                                                 } else {
                                                     self.push_undo();
+                                                    let nh = self.midi_clips[mc_idx].note_height_editing(true);
                                                     let offsets: Vec<[f32; 2]> = self.selected_midi_notes.iter().map(|&ni| {
                                                         let n = &self.midi_clips[mc_idx].notes[ni];
                                                         let nx = mc_pos[0] + n.start_px;
-                                                        let ny = self.midi_clips[mc_idx].pitch_to_y_editing(n.pitch, true);
+                                                        let ny = self.midi_clips[mc_idx].pitch_to_y_editing(n.pitch, true) + nh * 0.5;
                                                         [world[0] - nx, world[1] - ny]
                                                     }).collect();
                                                     self.drag = DragState::MovingMidiNote {
@@ -2289,6 +2322,169 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
+                        // Cmd+C: copy selected MIDI notes
+                        if matches!(&event.logical_key, Key::Character(ch) if ch.as_ref() == "c") && self.modifiers.super_key() {
+                            if let Some(mc_idx) = self.editing_midi_clip {
+                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
+                                    let notes = &self.midi_clips[mc_idx].notes;
+                                    let min_start = self.selected_midi_notes.iter()
+                                        .filter(|&&ni| ni < notes.len())
+                                        .map(|&ni| notes[ni].start_px)
+                                        .fold(f32::INFINITY, f32::min);
+                                    let mut copied: Vec<midi::MidiNote> = Vec::new();
+                                    for &ni in &self.selected_midi_notes {
+                                        if ni < self.midi_clips[mc_idx].notes.len() {
+                                            let mut n = self.midi_clips[mc_idx].notes[ni].clone();
+                                            n.start_px -= min_start;
+                                            copied.push(n);
+                                        }
+                                    }
+                                    self.clipboard.items.clear();
+                                    self.clipboard.items.push(ClipboardItem::MidiNotes(copied));
+                                    return;
+                                }
+                            }
+                        }
+                        // Cmd+V: paste MIDI notes at playhead
+                        if matches!(&event.logical_key, Key::Character(ch) if ch.as_ref() == "v") && self.modifiers.super_key() {
+                            if let Some(mc_idx) = self.editing_midi_clip {
+                                let midi_notes = self.clipboard.items.iter().find_map(|item| {
+                                    if let ClipboardItem::MidiNotes(notes) = item { Some(notes.clone()) } else { None }
+                                });
+                                if let Some(notes) = midi_notes {
+                                    if mc_idx < self.midi_clips.len() {
+                                        self.push_undo();
+                                        let clip_x = self.midi_clips[mc_idx].position[0];
+                                        let paste_x = self.audio_engine.as_ref()
+                                            .map(|e| (e.position_seconds() * PIXELS_PER_SECOND as f64) as f32)
+                                            .unwrap_or_else(|| self.camera.screen_to_world(self.mouse_pos)[0]);
+                                        let offset = (paste_x - clip_x).max(0.0);
+                                        let mut new_indices: Vec<usize> = Vec::new();
+                                        for n in &notes {
+                                            let mut pasted = n.clone();
+                                            pasted.start_px += offset;
+                                            self.midi_clips[mc_idx].notes.push(pasted);
+                                            new_indices.push(self.midi_clips[mc_idx].notes.len() - 1);
+                                        }
+                                        self.selected_midi_notes = new_indices;
+                                        self.sync_audio_clips();
+                                        self.mark_dirty();
+                                        self.request_redraw();
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        // Cmd+D: duplicate selected MIDI notes
+                        if matches!(&event.logical_key, Key::Character(ch) if ch.as_ref() == "d") && self.modifiers.super_key() {
+                            if let Some(mc_idx) = self.editing_midi_clip {
+                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
+                                    self.push_undo();
+                                    let notes = &self.midi_clips[mc_idx].notes;
+                                    // Compute group span: shift = max_end - min_start
+                                    let min_start = self.selected_midi_notes.iter()
+                                        .filter(|&&ni| ni < notes.len())
+                                        .map(|&ni| notes[ni].start_px)
+                                        .fold(f32::INFINITY, f32::min);
+                                    let max_end = self.selected_midi_notes.iter()
+                                        .filter(|&&ni| ni < notes.len())
+                                        .map(|&ni| notes[ni].start_px + notes[ni].duration_px)
+                                        .fold(f32::NEG_INFINITY, f32::max);
+                                    let group_shift = max_end - min_start;
+                                    let mut new_indices: Vec<usize> = Vec::new();
+                                    for &ni in &self.selected_midi_notes {
+                                        if ni < self.midi_clips[mc_idx].notes.len() {
+                                            let mut cloned = self.midi_clips[mc_idx].notes[ni].clone();
+                                            cloned.start_px += group_shift;
+                                            self.midi_clips[mc_idx].notes.push(cloned);
+                                            new_indices.push(self.midi_clips[mc_idx].notes.len() - 1);
+                                        }
+                                    }
+                                    self.selected_midi_notes = new_indices;
+                                    self.sync_audio_clips();
+                                    self.mark_dirty();
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+                        // Left/Right: move notes; Shift+Left/Right: resize note duration
+                        if matches!(event.logical_key, Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight)) {
+                            if let Some(mc_idx) = self.editing_midi_clip {
+                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
+                                    let mc = &self.midi_clips[mc_idx];
+                                    let step = grid::clip_grid_spacing(mc.grid_mode, mc.triplet_grid, self.camera.zoom, self.bpm);
+                                    let delta = if matches!(event.logical_key, Key::Named(NamedKey::ArrowRight)) { step } else { -step };
+                                    if self.modifiers.shift_key() {
+                                        // Resize duration
+                                        let min_dur = step;
+                                        let all_valid = self.selected_midi_notes.iter().all(|&ni| {
+                                            if ni >= self.midi_clips[mc_idx].notes.len() { return false; }
+                                            self.midi_clips[mc_idx].notes[ni].duration_px + delta >= min_dur
+                                        });
+                                        if all_valid {
+                                            self.push_undo();
+                                            for &ni in &self.selected_midi_notes {
+                                                if ni < self.midi_clips[mc_idx].notes.len() {
+                                                    self.midi_clips[mc_idx].notes[ni].duration_px += delta;
+                                                }
+                                            }
+                                            self.sync_audio_clips();
+                                            self.mark_dirty();
+                                            self.request_redraw();
+                                            return;
+                                        }
+                                    } else {
+                                        // Move position
+                                        let all_valid = self.selected_midi_notes.iter().all(|&ni| {
+                                            if ni >= self.midi_clips[mc_idx].notes.len() { return false; }
+                                            self.midi_clips[mc_idx].notes[ni].start_px + delta >= 0.0
+                                        });
+                                        if all_valid {
+                                            self.push_undo();
+                                            for &ni in &self.selected_midi_notes {
+                                                if ni < self.midi_clips[mc_idx].notes.len() {
+                                                    self.midi_clips[mc_idx].notes[ni].start_px += delta;
+                                                }
+                                            }
+                                            self.sync_audio_clips();
+                                            self.mark_dirty();
+                                            self.request_redraw();
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Transpose selected notes by semitone with Up/Down arrows
+                        // Shift+Up/Down transposes by an octave (12 semitones)
+                        if matches!(event.logical_key, Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown)) {
+                            if let Some(mc_idx) = self.editing_midi_clip {
+                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
+                                    let delta: i16 = if self.modifiers.shift_key() { 12 } else { 1 };
+                                    let delta = if matches!(event.logical_key, Key::Named(NamedKey::ArrowUp)) { delta } else { -delta };
+                                    // Check if all notes stay in valid range (0..=127)
+                                    let all_valid = self.selected_midi_notes.iter().all(|&ni| {
+                                        if ni >= self.midi_clips[mc_idx].notes.len() { return false; }
+                                        let new_pitch = self.midi_clips[mc_idx].notes[ni].pitch as i16 + delta;
+                                        (0..=127).contains(&new_pitch)
+                                    });
+                                    if all_valid {
+                                        self.push_undo();
+                                        for &ni in &self.selected_midi_notes {
+                                            if ni < self.midi_clips[mc_idx].notes.len() {
+                                                self.midi_clips[mc_idx].notes[ni].pitch =
+                                                    (self.midi_clips[mc_idx].notes[ni].pitch as i16 + delta) as u8;
+                                            }
+                                        }
+                                        self.sync_audio_clips();
+                                        self.mark_dirty();
+                                        self.request_redraw();
+                                        return;
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // --- BPM editing input ---
@@ -2542,6 +2738,14 @@ impl ApplicationHandler for App {
                                     self.request_redraw();
                                     return;
                                 }
+                                Key::Named(NamedKey::Space) => {
+                                    if let Some(p) = &mut self.command_palette {
+                                        p.search_text.push(' ');
+                                        p.update_filter(self.settings.dev_mode);
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                }
                                 Key::Character(ch) if !self.modifiers.super_key() => {
                                     if let Some(p) = &mut self.command_palette {
                                         p.search_text.push_str(ch.as_ref());
@@ -2578,6 +2782,23 @@ impl ApplicationHandler for App {
                                 return;
                             }
                             Key::Named(NamedKey::Enter) => {
+                                // Check if an inline plugin row is selected
+                                let inline_plugin = self
+                                    .command_palette
+                                    .as_ref()
+                                    .and_then(|p| p.selected_inline_plugin())
+                                    .map(|e| (e.unique_id.clone(), e.name.clone(), e.is_instrument));
+                                if let Some((plugin_id, plugin_name, is_instrument)) = inline_plugin {
+                                    self.command_palette = None;
+                                    if is_instrument {
+                                        self.add_instrument(&plugin_id, &plugin_name);
+                                    } else {
+                                        self.add_plugin_to_selected_effect_region(&plugin_id, &plugin_name);
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                }
+
                                 let action = self
                                     .command_palette
                                     .as_ref()
@@ -2598,6 +2819,14 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Backspace) => {
                                 if let Some(p) = &mut self.command_palette {
                                     p.search_text.pop();
+                                    p.update_filter(self.settings.dev_mode);
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                if let Some(p) = &mut self.command_palette {
+                                    p.search_text.push(' ');
                                     p.update_filter(self.settings.dev_mode);
                                 }
                                 self.request_redraw();
@@ -2739,7 +2968,9 @@ impl ApplicationHandler for App {
                                 self.command_palette = if self.command_palette.is_some() {
                                     None
                                 } else {
-                                    Some(CommandPalette::new(self.settings.dev_mode))
+                                    let mut p = CommandPalette::new(self.settings.dev_mode);
+                                    p.plugin_entries = self.build_palette_plugin_entries();
+                                    Some(p)
                                 };
                                 self.request_redraw();
                             }
@@ -2749,7 +2980,9 @@ impl ApplicationHandler for App {
                                 self.command_palette = if self.command_palette.is_some() {
                                     None
                                 } else {
-                                    Some(CommandPalette::new(self.settings.dev_mode))
+                                    let mut p = CommandPalette::new(self.settings.dev_mode);
+                                    p.plugin_entries = self.build_palette_plugin_entries();
+                                    Some(p)
                                 };
                                 self.request_redraw();
                             }
@@ -2849,12 +3082,10 @@ impl ApplicationHandler for App {
                             -dy_raw * PALETTE_ITEM_HEIGHT * palette_scale
                         };
                         p.scroll_plugin_by(delta_px, palette_scale);
+                    } else if is_pixel_delta {
+                        p.scroll_by_pixels(-dy_raw, palette_scale);
                     } else {
-                        let lines = if is_pixel_delta {
-                            -(dy_raw / PALETTE_ITEM_HEIGHT) as i32
-                        } else {
-                            -(dy_raw as i32)
-                        };
+                        let lines = -(dy_raw as i32);
                         if lines != 0 {
                             p.scroll_by(lines);
                         }

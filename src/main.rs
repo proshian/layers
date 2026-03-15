@@ -248,6 +248,7 @@ enum ClipboardItem {
     ),
     ComponentInstance(component::ComponentInstance),
     MidiClip(midi::MidiClip),
+    MidiNotes(Vec<midi::MidiNote>),
     InstrumentRegion(instruments::InstrumentRegionSnapshot),
 }
 
@@ -2286,7 +2287,7 @@ impl App {
         let (sw, sh, scale) = self.screen_info();
         if let Some(palette) = &mut self.command_palette {
             if let Some(idx) = palette.item_at(self.mouse_pos, sw, sh, scale) {
-                if palette.mode == PaletteMode::PluginPicker {
+                if matches!(palette.mode, PaletteMode::PluginPicker | PaletteMode::InstrumentPicker) {
                     palette.plugin_selected_index = idx;
                 } else {
                     palette.selected_index = idx;
@@ -3009,6 +3010,7 @@ impl App {
                         name: e.info.name.clone(),
                         manufacturer: e.info.manufacturer.clone(),
                         unique_id: e.info.unique_id.clone(),
+                        is_instrument: true,
                     })
                     .collect();
                 if let Some(p) = &mut self.command_palette {
@@ -3029,6 +3031,7 @@ impl App {
                         name: e.info.name.clone(),
                         manufacturer: e.info.manufacturer.clone(),
                         unique_id: e.info.unique_id.clone(),
+                        is_instrument: false,
                     })
                     .collect();
                 if let Some(p) = &mut self.command_palette {
@@ -3612,6 +3615,7 @@ impl App {
                 ClipboardItem::ComponentDef(d, _) => d.position,
                 ClipboardItem::ComponentInstance(ci) => ci.position,
                 ClipboardItem::MidiClip(mc) => mc.position,
+                ClipboardItem::MidiNotes(_) => continue,
                 ClipboardItem::InstrumentRegion(ir) => ir.position,
             };
             if pos[0] < min_x {
@@ -3717,6 +3721,9 @@ impl App {
                     mc.position[1] += dy;
                     self.midi_clips.push(mc);
                     new_selected.push(HitTarget::MidiClip(self.midi_clips.len() - 1));
+                }
+                ClipboardItem::MidiNotes(_) => {
+                    // Handled in MIDI editing mode (events.rs), skip in global paste
                 }
                 ClipboardItem::InstrumentRegion(snap) => {
                     let mut ir = instruments::InstrumentRegion::new(snap.position, snap.size);
