@@ -675,15 +675,23 @@ impl ApplicationHandler for App {
                             if clip_idx < self.midi_clips.len() {
                                 let mc_pos = self.midi_clips[clip_idx].position;
                                 let mc_pr = self.midi_clips[clip_idx].pitch_range;
-                                let mc_size = self.midi_clips[clip_idx].size;
+                                let editing = self.editing_midi_clip == Some(clip_idx);
+                                let area_h = self.midi_clips[clip_idx].note_area_height(editing);
+                                let first_raw_x = world[0] - offsets[0][0];
+                                let mc_gm = self.midi_clips[clip_idx].grid_mode;
+                                let mc_trip = self.midi_clips[clip_idx].triplet_grid;
+                                let snap_delta = if self.is_snap_override_active() {
+                                    0.0
+                                } else {
+                                    snap_to_clip_grid(first_raw_x, &self.settings, mc_gm, mc_trip, self.camera.zoom, self.bpm) - first_raw_x
+                                };
                                 for (i, &ni) in note_indices.iter().enumerate() {
                                     if ni < self.midi_clips[clip_idx].notes.len() {
-                                        let nx = world[0] - offsets[i][0];
+                                        let raw_x = world[0] - offsets[i][0];
                                         let ny = world[1] - offsets[i][1];
-                                        let start_px = (nx - mc_pos[0]).max(0.0);
-                                        // Inline y_to_pitch
-                                        let nh = mc_size[1] / (mc_pr.1 - mc_pr.0) as f32;
-                                        let relative = mc_pos[1] + mc_size[1] - ny;
+                                        let start_px = (raw_x + snap_delta - mc_pos[0]).max(0.0);
+                                        let nh = area_h / (mc_pr.1 - mc_pr.0) as f32;
+                                        let relative = mc_pos[1] + area_h - ny;
                                         let pitch = ((relative / nh) as u8 + mc_pr.0).clamp(mc_pr.0, mc_pr.1 - 1);
                                         self.midi_clips[clip_idx].notes[ni].start_px = start_px;
                                         self.midi_clips[clip_idx].notes[ni].pitch = pitch;
@@ -692,13 +700,139 @@ impl ApplicationHandler for App {
                                 self.mark_dirty();
                             }
                         }
-                        if let DragState::ResizingMidiNote { clip_idx, note_idx, .. } = &self.drag {
+                        if let DragState::ResizingMidiNote { clip_idx, anchor_idx, note_indices, original_durations } = &self.drag {
                             let clip_idx = *clip_idx;
-                            let note_idx = *note_idx;
-                            if clip_idx < self.midi_clips.len() && note_idx < self.midi_clips[clip_idx].notes.len() {
-                                let note_x = self.midi_clips[clip_idx].position[0] + self.midi_clips[clip_idx].notes[note_idx].start_px;
-                                let new_dur = (world[0] - note_x).max(10.0);
-                                self.midi_clips[clip_idx].notes[note_idx].duration_px = new_dur;
+                            let anchor_idx = *anchor_idx;
+                            let indices = note_indices.clone();
+                            let orig_durs = original_durations.clone();
+                            if clip_idx < self.midi_clips.len() && anchor_idx < self.midi_clips[clip_idx].notes.len() {
+                                let mc_gm = self.midi_clips[clip_idx].grid_mode;
+                                let mc_trip = self.midi_clips[clip_idx].triplet_grid;
+                                let snapped_edge = if self.is_snap_override_active() {
+                                    world[0]
+                                } else {
+                                    snap_to_clip_grid(world[0], &self.settings, mc_gm, mc_trip, self.camera.zoom, self.bpm)
+                                };
+                                let anchor_x = self.midi_clips[clip_idx].position[0] + self.midi_clips[clip_idx].notes[anchor_idx].start_px;
+                                let anchor_new_dur = (snapped_edge - anchor_x).max(10.0);
+                                if let Some(ai) = indices.iter().position(|&ni| ni == anchor_idx) {
+                                    let delta = anchor_new_dur - orig_durs[ai];
+                                    for (j, &ni) in indices.iter().enumerate() {
+                                        if ni < self.midi_clips[clip_idx].notes.len() {
+                                            self.midi_clips[clip_idx].notes[ni].duration_px = (orig_durs[j] + delta).max(10.0);
+                                        }
+                                    }
+                                } else {
+                                    self.midi_clips[clip_idx].notes[anchor_idx].duration_px = anchor_new_dur;
+                                }
+                                self.mark_dirty();
+                            }
+                        }
+                        if let DragState::ResizingMidiNoteLeft { clip_idx, anchor_idx, note_indices, original_starts, original_durations } = &self.drag {
+                            let clip_idx = *clip_idx;
+                            let anchor_idx = *anchor_idx;
+                            let indices = note_indices.clone();
+                            let orig_starts = original_starts.clone();
+                            let orig_durs = original_durations.clone();
+                            if clip_idx < self.midi_clips.len() && anchor_idx < self.midi_clips[clip_idx].notes.len() {
+                                if let Some(ai) = indices.iter().position(|&ni| ni == anchor_idx) {
+                                    let clip_x = self.midi_clips[clip_idx].position[0];
+                                    let mc_gm = self.midi_clips[clip_idx].grid_mode;
+                                    let mc_trip = self.midi_clips[clip_idx].triplet_grid;
+                                    let snapped_x = if self.is_snap_override_active() {
+                                        world[0]
+                                    } else {
+                                        snap_to_clip_grid(world[0], &self.settings, mc_gm, mc_trip, self.camera.zoom, self.bpm)
+                                    };
+                                    let anchor_new_start = (snapped_x - clip_x).max(0.0);
+                                    let anchor_right = orig_starts[ai] + orig_durs[ai];
+                                    let anchor_clamped = anchor_new_start.min(anchor_right - 10.0);
+                                    let delta = anchor_clamped - orig_starts[ai];
+                                    for (j, &ni) in indices.iter().enumerate() {
+                                        if ni < self.midi_clips[clip_idx].notes.len() {
+                                            let new_start = (orig_starts[j] + delta).max(0.0);
+                                            let right_edge = orig_starts[j] + orig_durs[j];
+                                            let clamped = new_start.min(right_edge - 10.0);
+                                            self.midi_clips[clip_idx].notes[ni].start_px = clamped;
+                                            self.midi_clips[clip_idx].notes[ni].duration_px = right_edge - clamped;
+                                        }
+                                    }
+                                }
+                                self.mark_dirty();
+                            }
+                        }
+                        if let DragState::MovingMidiClip { clip_idx, offset } = &self.drag {
+                            let clip_idx = *clip_idx;
+                            let offset = *offset;
+                            if clip_idx < self.midi_clips.len() {
+                                let raw_x = world[0] - offset[0];
+                                let snapped_x = if self.is_snap_override_active() {
+                                    raw_x
+                                } else {
+                                    snap_to_grid(raw_x, &self.settings, self.camera.zoom, self.bpm)
+                                };
+                                self.midi_clips[clip_idx].position = [snapped_x, world[1] - offset[1]];
+                                self.mark_dirty();
+                                self.sync_audio_clips();
+                            }
+                        }
+                        if let DragState::SelectingMidiNotes { clip_idx, start_world } = &self.drag {
+                            let clip_idx = *clip_idx;
+                            let start = *start_world;
+                            if clip_idx < self.midi_clips.len() {
+                                let mc_pos = self.midi_clips[clip_idx].position;
+                                let mc_size = self.midi_clips[clip_idx].size;
+                                // Compute selection rect, clamped to clip bounds
+                                let rx = start[0].min(world[0]).max(mc_pos[0]);
+                                let ry = start[1].min(world[1]).max(mc_pos[1]);
+                                let rx2 = start[0].max(world[0]).min(mc_pos[0] + mc_size[0]);
+                                let ry2 = start[1].max(world[1]).min(mc_pos[1] + mc_size[1]);
+                                let rw = (rx2 - rx).max(0.0);
+                                let rh = (ry2 - ry).max(0.0);
+                                self.midi_note_select_rect = Some([rx, ry, rw, rh]);
+                                let editing = self.editing_midi_clip == Some(clip_idx);
+                                let nh = self.midi_clips[clip_idx].note_height_editing(editing);
+                                let mut selected = Vec::new();
+                                for (i, note) in self.midi_clips[clip_idx].notes.iter().enumerate() {
+                                    let nx = mc_pos[0] + note.start_px;
+                                    let ny = self.midi_clips[clip_idx].pitch_to_y_editing(note.pitch, editing);
+                                    let nw = note.duration_px;
+                                    // AABB intersection
+                                    if nx < rx + rw && nx + nw > rx && ny < ry + rh && ny + nh > ry {
+                                        selected.push(i);
+                                    }
+                                }
+                                self.selected_midi_notes = selected;
+                                self.mark_dirty();
+                            }
+                        }
+                        if let DragState::DraggingVelocity { clip_idx, note_indices, original_velocities, start_world_y } = &self.drag {
+                            let clip_idx = *clip_idx;
+                            let indices = note_indices.clone();
+                            let orig_vels = original_velocities.clone();
+                            let start_y = *start_world_y;
+                            if clip_idx < self.midi_clips.len() {
+                                let lane_height = self.midi_clips[clip_idx].velocity_lane_height;
+                                let delta_y = start_y - world[1];
+                                let vel_delta = (delta_y / lane_height * 127.0) as i16;
+                                for (j, &ni) in indices.iter().enumerate() {
+                                    if ni < self.midi_clips[clip_idx].notes.len() {
+                                        let new_vel = (orig_vels[j] as i16 + vel_delta).clamp(0, 127) as u8;
+                                        self.midi_clips[clip_idx].notes[ni].velocity = new_vel;
+                                    }
+                                }
+                                self.mark_dirty();
+                            }
+                        }
+                        if let DragState::ResizingVelocityLane { clip_idx, start_world_y, original_height } = &self.drag {
+                            let clip_idx = *clip_idx;
+                            let start_y = *start_world_y;
+                            let orig_h = *original_height;
+                            if clip_idx < self.midi_clips.len() {
+                                let delta_y = start_y - world[1];
+                                let new_height = (orig_h + delta_y)
+                                    .clamp(midi::VELOCITY_LANE_MIN_HEIGHT, midi::VELOCITY_LANE_MAX_HEIGHT);
+                                self.midi_clips[clip_idx].velocity_lane_height = new_height;
                                 self.mark_dirty();
                             }
                         }
@@ -773,6 +907,23 @@ impl ApplicationHandler for App {
                         }
 
                         let world = self.camera.screen_to_world(self.mouse_pos);
+
+                        if let Some(mc_idx) = self.editing_midi_clip {
+                            if mc_idx < self.midi_clips.len() {
+                                let mc = &self.midi_clips[mc_idx];
+                                if mc.contains(world) {
+                                    let menu_ctx = MenuContext::MidiClipEdit {
+                                        grid_mode: mc.grid_mode,
+                                        triplet_grid: mc.triplet_grid,
+                                    };
+                                    self.context_menu =
+                                        Some(ContextMenu::new(self.mouse_pos, menu_ctx, &self.settings));
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+
                         let hit = hit_test(
                             &self.objects,
                             &self.waveforms,
@@ -1252,6 +1403,38 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        // --- midi clip body move (when not editing notes) ---
+                        if self.editing_midi_clip.is_none() {
+                            let hit_clip = self.midi_clips.iter().enumerate().find(|(_, mc)| {
+                                point_in_rect(world, mc.position, mc.size)
+                            }).map(|(i, mc)| (i, mc.position));
+                            if let Some((i, pos)) = hit_clip {
+                                if self.camera.zoom >= MIDI_AUTO_EDIT_ZOOM_THRESHOLD {
+                                    self.editing_midi_clip = Some(i);
+                                    self.selected_midi_notes.clear();
+                                    // Fall through to note-editing section below
+                                } else {
+                                    self.push_undo();
+                                    let clip_idx = if self.modifiers.alt_key() {
+                                        let mc = self.midi_clips[i].clone();
+                                        self.midi_clips.push(mc);
+                                        self.midi_clips.len() - 1
+                                    } else {
+                                        i
+                                    };
+                                    if !self.selected.contains(&HitTarget::MidiClip(clip_idx)) {
+                                        self.selected.clear();
+                                        self.selected.push(HitTarget::MidiClip(clip_idx));
+                                    }
+                                    let offset = [world[0] - pos[0], world[1] - pos[1]];
+                                    self.drag = DragState::MovingMidiClip { clip_idx, offset };
+                                    self.update_cursor();
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+
                         // --- export region corner resize ---
                         for (i, er) in self.export_regions.iter().enumerate() {
                             if let Some((anchor, nwse)) = hit_test_corner_resize(er.position, er.size, world, self.camera.zoom) {
@@ -1476,6 +1659,30 @@ impl ApplicationHandler for App {
                                 return;
                             }
                             if let Some(HitTarget::MidiClip(idx)) = hit {
+                                if self.editing_midi_clip == Some(idx) {
+                                    self.select_area = None;
+                                    self.selected.clear();
+                                    let mc = &self.midi_clips[idx];
+                                    // Only create notes in the note area, not the velocity lane
+                                    let in_vel_lane = world[1] >= mc.velocity_lane_top();
+                                    let hit_note = midi::hit_test_midi_note_editing(mc, world, &self.camera, true);
+                                    if hit_note.is_none() && !in_vel_lane {
+                                        self.push_undo();
+                                        let pitch = self.midi_clips[idx].y_to_pitch_editing(world[1], true);
+                                        let start_px = self.midi_clips[idx].x_to_start_px(world[0]);
+                                        self.midi_clips[idx].notes.push(midi::MidiNote {
+                                            pitch,
+                                            start_px,
+                                            duration_px: midi::DEFAULT_NOTE_DURATION_PX,
+                                            velocity: 100,
+                                        });
+                                        let new_idx = self.midi_clips[idx].notes.len() - 1;
+                                        self.selected_midi_notes = vec![new_idx];
+                                        self.mark_dirty();
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                }
                                 self.editing_midi_clip = Some(idx);
                                 self.selected_midi_notes.clear();
                                 println!("Entered MIDI clip edit mode");
@@ -1512,27 +1719,98 @@ impl ApplicationHandler for App {
                                 let mc_pos = self.midi_clips[mc_idx].position;
                                 let mc_size = self.midi_clips[mc_idx].size;
                                 if point_in_rect(world, mc_pos, mc_size) {
-                                    // Check if clicking on existing note
-                                    let hit_note = midi::hit_test_midi_note(&self.midi_clips[mc_idx], world, &self.camera);
+                                    self.select_area = None;
+                                    self.selected.clear();
+
+                                    // Check velocity lane divider first (for resizing)
+                                    if midi::hit_test_velocity_divider(&self.midi_clips[mc_idx], world, &self.camera) {
+                                        self.drag = DragState::ResizingVelocityLane {
+                                            clip_idx: mc_idx,
+                                            start_world_y: world[1],
+                                            original_height: self.midi_clips[mc_idx].velocity_lane_height,
+                                        };
+                                        self.update_cursor();
+                                        self.request_redraw();
+                                        return;
+                                    }
+
+                                    // Check velocity bar
+                                    let vel_hit = midi::hit_test_velocity_bar(&self.midi_clips[mc_idx], world, &self.camera);
+                                    if let Some(note_idx) = vel_hit {
+                                        if self.selected_midi_notes.contains(&note_idx) {
+                                            // already selected
+                                        } else if self.modifiers.shift_key() {
+                                            self.selected_midi_notes.push(note_idx);
+                                        } else {
+                                            self.selected_midi_notes.clear();
+                                            self.selected_midi_notes.push(note_idx);
+                                        }
+                                        self.push_undo();
+                                        let indices = self.selected_midi_notes.clone();
+                                        let velocities: Vec<u8> = indices.iter().map(|&ni| {
+                                            self.midi_clips[mc_idx].notes[ni].velocity
+                                        }).collect();
+                                        self.drag = DragState::DraggingVelocity {
+                                            clip_idx: mc_idx,
+                                            note_indices: indices,
+                                            original_velocities: velocities,
+                                            start_world_y: world[1],
+                                        };
+                                        self.mark_dirty();
+                                        self.request_redraw();
+                                        return;
+                                    }
+
+                                    // Check if clicking on existing note (editing-aware)
+                                    let hit_note = midi::hit_test_midi_note_editing(&self.midi_clips[mc_idx], world, &self.camera, true);
                                     if let Some((note_idx, zone)) = hit_note {
                                         match zone {
                                             midi::MidiNoteHitZone::RightEdge => {
-                                                let original_duration = self.midi_clips[mc_idx].notes[note_idx].duration_px;
+                                                self.push_undo();
+                                                let mut indices = self.selected_midi_notes.clone();
+                                                if !indices.contains(&note_idx) {
+                                                    indices = vec![note_idx];
+                                                }
+                                                let durations: Vec<f32> = indices.iter().map(|&ni| {
+                                                    self.midi_clips[mc_idx].notes[ni].duration_px
+                                                }).collect();
                                                 self.drag = DragState::ResizingMidiNote {
                                                     clip_idx: mc_idx,
-                                                    note_idx,
-                                                    original_duration,
+                                                    anchor_idx: note_idx,
+                                                    note_indices: indices,
+                                                    original_durations: durations,
+                                                };
+                                            }
+                                            midi::MidiNoteHitZone::LeftEdge => {
+                                                self.push_undo();
+                                                let mut indices = self.selected_midi_notes.clone();
+                                                if !indices.contains(&note_idx) {
+                                                    indices = vec![note_idx];
+                                                }
+                                                let starts: Vec<f32> = indices.iter().map(|&ni| {
+                                                    self.midi_clips[mc_idx].notes[ni].start_px
+                                                }).collect();
+                                                let durations: Vec<f32> = indices.iter().map(|&ni| {
+                                                    self.midi_clips[mc_idx].notes[ni].duration_px
+                                                }).collect();
+                                                self.drag = DragState::ResizingMidiNoteLeft {
+                                                    clip_idx: mc_idx,
+                                                    anchor_idx: note_idx,
+                                                    note_indices: indices,
+                                                    original_starts: starts,
+                                                    original_durations: durations,
                                                 };
                                             }
                                             midi::MidiNoteHitZone::Body => {
-                                                if !self.modifiers.shift_key() {
+                                                if self.selected_midi_notes.contains(&note_idx) {
+                                                    // Already selected -> drag whole selection
+                                                } else if self.modifiers.shift_key() {
+                                                    self.selected_midi_notes.push(note_idx);
+                                                } else {
                                                     self.selected_midi_notes.clear();
-                                                }
-                                                if !self.selected_midi_notes.contains(&note_idx) {
                                                     self.selected_midi_notes.push(note_idx);
                                                 }
                                                 if self.modifiers.alt_key() {
-                                                    // Alt+drag: duplicate selected notes and drag the copies
                                                     self.push_undo();
                                                     let mut new_indices: Vec<usize> = Vec::new();
                                                     for &ni in &self.selected_midi_notes {
@@ -1546,7 +1824,7 @@ impl ApplicationHandler for App {
                                                     let offsets: Vec<[f32; 2]> = new_indices.iter().map(|&ni| {
                                                         let n = &self.midi_clips[mc_idx].notes[ni];
                                                         let nx = mc_pos[0] + n.start_px;
-                                                        let ny = self.midi_clips[mc_idx].pitch_to_y(n.pitch);
+                                                        let ny = self.midi_clips[mc_idx].pitch_to_y_editing(n.pitch, true);
                                                         [world[0] - nx, world[1] - ny]
                                                     }).collect();
                                                     self.drag = DragState::MovingMidiNote {
@@ -1555,10 +1833,11 @@ impl ApplicationHandler for App {
                                                         offsets,
                                                     };
                                                 } else {
+                                                    self.push_undo();
                                                     let offsets: Vec<[f32; 2]> = self.selected_midi_notes.iter().map(|&ni| {
                                                         let n = &self.midi_clips[mc_idx].notes[ni];
                                                         let nx = mc_pos[0] + n.start_px;
-                                                        let ny = self.midi_clips[mc_idx].pitch_to_y(n.pitch);
+                                                        let ny = self.midi_clips[mc_idx].pitch_to_y_editing(n.pitch, true);
                                                         [world[0] - nx, world[1] - ny]
                                                     }).collect();
                                                     self.drag = DragState::MovingMidiNote {
@@ -1568,21 +1847,15 @@ impl ApplicationHandler for App {
                                                     };
                                                 }
                                             }
+                                            midi::MidiNoteHitZone::VelocityBar => unreachable!(),
                                         }
                                     } else {
-                                        // Click on empty space: create new note
-                                        self.push_undo();
-                                        let pitch = self.midi_clips[mc_idx].y_to_pitch(world[1]);
-                                        let start_px = self.midi_clips[mc_idx].x_to_start_px(world[0]);
-                                        self.midi_clips[mc_idx].notes.push(midi::MidiNote {
-                                            pitch,
-                                            start_px,
-                                            duration_px: midi::DEFAULT_NOTE_DURATION_PX,
-                                            velocity: 100,
-                                        });
-                                        let note_idx = self.midi_clips[mc_idx].notes.len() - 1;
-                                        self.selected_midi_notes = vec![note_idx];
-                                        self.sync_audio_clips();
+                                        self.selected_midi_notes.clear();
+                                        self.midi_note_select_rect = None;
+                                        self.drag = DragState::SelectingMidiNotes {
+                                            clip_idx: mc_idx,
+                                            start_world: world,
+                                        };
                                     }
                                     self.mark_dirty();
                                     self.request_redraw();
@@ -1732,9 +2005,45 @@ impl ApplicationHandler for App {
                         }
 
                         // --- finish MIDI note drag/resize ---
-                        if matches!(self.drag, DragState::MovingMidiNote { .. } | DragState::ResizingMidiNote { .. } | DragState::ResizingMidiClip { .. }) {
+                        if matches!(self.drag, DragState::MovingMidiNote { .. } | DragState::ResizingMidiNote { .. } | DragState::ResizingMidiNoteLeft { .. } | DragState::ResizingMidiClip { .. }) {
                             self.drag = DragState::None;
                             self.sync_audio_clips();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // --- finish velocity drag ---
+                        if matches!(self.drag, DragState::DraggingVelocity { .. }) {
+                            self.drag = DragState::None;
+                            self.sync_audio_clips();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // --- finish velocity lane resize ---
+                        if matches!(self.drag, DragState::ResizingVelocityLane { .. }) {
+                            self.drag = DragState::None;
+                            self.update_hover();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // --- finish MIDI clip move ---
+                        if matches!(self.drag, DragState::MovingMidiClip { .. }) {
+                            self.drag = DragState::None;
+                            self.sync_audio_clips();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // --- finish MIDI note selection drag ---
+                        if matches!(self.drag, DragState::SelectingMidiNotes { .. }) {
+                            self.drag = DragState::None;
+                            self.midi_note_select_rect = None;
                             self.update_cursor();
                             self.request_redraw();
                             return;
@@ -2547,6 +2856,10 @@ impl ApplicationHandler for App {
                     let zoom_sensitivity = 0.005;
                     let factor = (1.0 + dy * zoom_sensitivity).clamp(0.5, 2.0);
                     self.camera.zoom_at(self.mouse_pos, factor);
+                    if self.camera.zoom < MIDI_AUTO_EDIT_ZOOM_THRESHOLD && self.editing_midi_clip.is_some() {
+                        self.editing_midi_clip = None;
+                        self.selected_midi_notes.clear();
+                    }
                 } else {
                     self.camera.position[0] -= dx / self.camera.zoom;
                     self.camera.position[1] -= dy / self.camera.zoom;
@@ -2562,6 +2875,10 @@ impl ApplicationHandler for App {
                 }
                 let factor = (1.0 + delta as f32).clamp(0.5, 2.0);
                 self.camera.zoom_at(self.mouse_pos, factor);
+                if self.camera.zoom < MIDI_AUTO_EDIT_ZOOM_THRESHOLD && self.editing_midi_clip.is_some() {
+                    self.editing_midi_clip = None;
+                    self.selected_midi_notes.clear();
+                }
                 self.update_hover();
                 self.request_redraw();
             }
@@ -2644,6 +2961,7 @@ impl ApplicationHandler for App {
                             instrument_regions: &self.instrument_regions,
                             midi_clips: &self.midi_clips,
                             selected_midi_notes: &self.selected_midi_notes,
+                            midi_note_select_rect: self.midi_note_select_rect,
                         };
                         build_instances(&mut self.cached_instances, &render_ctx);
                         build_waveform_vertices(&mut self.cached_wf_verts, &render_ctx);
@@ -2718,6 +3036,13 @@ impl ApplicationHandler for App {
                         self.editing_bpm.as_deref(),
                         self.automation_mode,
                         self.active_automation_param,
+                        &self.midi_clips,
+                        match self.hovered {
+                            Some(HitTarget::MidiClip(i)) => Some(i),
+                            _ => None,
+                        },
+                        self.editing_midi_clip,
+                        self.camera.screen_to_world(self.mouse_pos),
                     );
                 }
                 if self.toast_manager.has_active() {

@@ -22,7 +22,7 @@ mod tests;
 pub(crate) use gpu::{push_border, Camera, Gpu, InstanceRaw};
 pub(crate) use ui::transport::{TransportPanel, TRANSPORT_WIDTH};
 
-use grid::{grid_spacing_for_settings, snap_to_grid, DEFAULT_BPM};
+use grid::{grid_spacing_for_settings, snap_to_clip_grid, snap_to_grid, DEFAULT_BPM};
 use hit_testing::{
     canonical_rect, compute_resize, full_audio_width_px, hit_test, hit_test_corner_resize,
     hit_test_fade_curve_dot, hit_test_fade_handle, hit_test_waveform_edge,
@@ -167,6 +167,10 @@ enum DragState {
         anchor: [f32; 2],
         nwse: bool,
     },
+    MovingMidiClip {
+        clip_idx: usize,
+        offset: [f32; 2],
+    },
     MovingMidiNote {
         clip_idx: usize,
         note_indices: Vec<usize>,
@@ -174,8 +178,31 @@ enum DragState {
     },
     ResizingMidiNote {
         clip_idx: usize,
-        note_idx: usize,
-        original_duration: f32,
+        anchor_idx: usize,
+        note_indices: Vec<usize>,
+        original_durations: Vec<f32>,
+    },
+    ResizingMidiNoteLeft {
+        clip_idx: usize,
+        anchor_idx: usize,
+        note_indices: Vec<usize>,
+        original_starts: Vec<f32>,
+        original_durations: Vec<f32>,
+    },
+    SelectingMidiNotes {
+        clip_idx: usize,
+        start_world: [f32; 2],
+    },
+    DraggingVelocity {
+        clip_idx: usize,
+        note_indices: Vec<usize>,
+        original_velocities: Vec<u8>,
+        start_world_y: f32,
+    },
+    ResizingVelocityLane {
+        clip_idx: usize,
+        start_world_y: f32,
+        original_height: f32,
     },
 }
 
@@ -260,6 +287,8 @@ pub(crate) const WAVEFORM_COLORS: &[[f32; 4]] = &[
 // Audio formats supported via symphonia: wav, mp3, ogg, flac, aac
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "ogg", "flac", "aac", "m4a", "mp4"];
 
+pub(crate) const MIDI_AUTO_EDIT_ZOOM_THRESHOLD: f32 = 2.0;
+
 pub(crate) fn format_playback_time(secs: f64) -> String {
     let minutes = (secs / 60.0) as u32;
     let s = secs % 60.0;
@@ -323,6 +352,8 @@ struct App {
     fade_curve_hovered: Option<(usize, bool)>,
     waveform_edge_hover: WaveformEdgeHover,
     midi_note_edge_hover: bool,
+    velocity_bar_hovered: bool,
+    velocity_divider_hovered: bool,
     file_hovering: bool,
     modifiers: ModifiersState,
     command_palette: Option<CommandPalette>,
@@ -353,6 +384,7 @@ struct App {
     instrument_regions: Vec<instruments::InstrumentRegion>,
     editing_midi_clip: Option<usize>,
     selected_midi_notes: Vec<usize>,
+    midi_note_select_rect: Option<[f32; 4]>,
     editing_component: Option<usize>,
     editing_effect_name: Option<(usize, String)>,
     editing_waveform_name: Option<(usize, String)>,
@@ -400,6 +432,8 @@ impl App {
             fade_curve_hovered: None,
             waveform_edge_hover: WaveformEdgeHover::None,
             midi_note_edge_hover: false,
+            velocity_bar_hovered: false,
+            velocity_divider_hovered: false,
             file_hovering: false,
             modifiers: ModifiersState::empty(),
             command_palette: None,
@@ -430,6 +464,7 @@ impl App {
             instrument_regions: Vec::new(),
             editing_midi_clip: None,
             selected_midi_notes: Vec::new(),
+            midi_note_select_rect: None,
             editing_component: None,
             editing_effect_name: None,
             editing_waveform_name: None,
@@ -868,6 +903,9 @@ impl App {
                     velocity: n.velocity as u8,
                 }).collect(),
                 pitch_range: (smc.pitch_low as u8, smc.pitch_high as u8),
+                grid_mode: storage::grid_mode_from_stored(&smc.grid_mode_tag, &smc.grid_mode_value),
+                triplet_grid: smc.triplet_grid,
+                velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
             })
             .collect();
 
@@ -910,6 +948,8 @@ impl App {
             fade_curve_hovered: None,
             waveform_edge_hover: WaveformEdgeHover::None,
             midi_note_edge_hover: false,
+            velocity_bar_hovered: false,
+            velocity_divider_hovered: false,
             file_hovering: false,
             modifiers: ModifiersState::empty(),
             command_palette: None,
@@ -940,6 +980,7 @@ impl App {
             instrument_regions: restored_instrument_regions,
             editing_midi_clip: None,
             selected_midi_notes: Vec::new(),
+            midi_note_select_rect: None,
             editing_component: None,
             editing_effect_name: None,
             editing_waveform_name: None,
@@ -1079,18 +1120,24 @@ impl App {
                 components: stored_components,
                 component_instances: stored_instances,
                 bpm: self.bpm,
-                midi_clips: self.midi_clips.iter().map(|mc| storage::StoredMidiClip {
-                    position: mc.position,
-                    size: mc.size,
-                    color: mc.color,
-                    notes: mc.notes.iter().map(|n| storage::StoredMidiNote {
-                        pitch: n.pitch as u32,
-                        start_px: n.start_px,
-                        duration_px: n.duration_px,
-                        velocity: n.velocity as u32,
-                    }).collect(),
-                    pitch_low: mc.pitch_range.0 as u32,
-                    pitch_high: mc.pitch_range.1 as u32,
+                midi_clips: self.midi_clips.iter().map(|mc| {
+                    let (grid_tag, grid_val) = storage::grid_mode_to_stored(mc.grid_mode);
+                    storage::StoredMidiClip {
+                        position: mc.position,
+                        size: mc.size,
+                        color: mc.color,
+                        notes: mc.notes.iter().map(|n| storage::StoredMidiNote {
+                            pitch: n.pitch as u32,
+                            start_px: n.start_px,
+                            duration_px: n.duration_px,
+                            velocity: n.velocity as u32,
+                        }).collect(),
+                        pitch_low: mc.pitch_range.0 as u32,
+                        pitch_high: mc.pitch_range.1 as u32,
+                        grid_mode_tag: grid_tag,
+                        grid_mode_value: grid_val,
+                        triplet_grid: mc.triplet_grid,
+                    }
                 }).collect(),
                 instrument_regions: self.instrument_regions.iter().map(|ir| storage::StoredInstrumentRegion {
                     position: ir.position,
@@ -1478,7 +1525,61 @@ impl App {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.export_regions.clear();
-        self.loop_regions.clear();
+
+        self.loop_regions = state
+            .loop_regions
+            .into_iter()
+            .map(|slr| LoopRegion {
+                position: slr.position,
+                size: slr.size,
+                enabled: slr.enabled,
+            })
+            .collect();
+
+        self.midi_clips = state
+            .midi_clips
+            .into_iter()
+            .map(|smc| midi::MidiClip {
+                position: smc.position,
+                size: smc.size,
+                color: smc.color,
+                notes: smc.notes.into_iter().map(|n| midi::MidiNote {
+                    pitch: n.pitch as u8,
+                    start_px: n.start_px,
+                    duration_px: n.duration_px,
+                    velocity: n.velocity as u8,
+                }).collect(),
+                pitch_range: (smc.pitch_low as u8, smc.pitch_high as u8),
+                grid_mode: storage::grid_mode_from_stored(&smc.grid_mode_tag, &smc.grid_mode_value),
+                triplet_grid: smc.triplet_grid,
+                velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
+            })
+            .collect();
+
+        self.instrument_regions = state
+            .instrument_regions
+            .into_iter()
+            .map(|sir| {
+                let mut ir = instruments::InstrumentRegion::new(sir.position, sir.size);
+                ir.name = sir.name;
+                ir.plugin_id = sir.plugin_id;
+                ir.plugin_name = sir.plugin_name;
+                if !sir.state.is_empty() {
+                    ir.pending_state = Some(sir.state);
+                }
+                if !sir.params.is_empty() {
+                    ir.pending_params = Some(sir.params.chunks(8).map(|chunk| {
+                        let mut bytes = [0u8; 8];
+                        bytes[..chunk.len()].copy_from_slice(chunk);
+                        f64::from_le_bytes(bytes)
+                    }).collect());
+                }
+                ir
+            })
+            .collect();
+
+        self.editing_midi_clip = None;
+        self.selected_midi_notes.clear();
         self.editing_component = None;
         self.editing_effect_name = None;
         self.editing_waveform_name = None;
@@ -1770,9 +1871,14 @@ impl App {
         self.push_undo();
         let (sw, sh, _) = self.screen_info();
         let center = self.camera.screen_to_world([sw * 0.5, sh * 0.5]);
-        let size = midi::MIDI_CLIP_DEFAULT_SIZE;
-        let pos = [center[0] - size[0] * 0.5, center[1] - size[1] * 0.5];
-        self.midi_clips.push(midi::MidiClip::new(pos));
+        let ppb = grid::pixels_per_beat(self.bpm);
+        let beats_per_bar = 4.0;
+        let width = ppb * beats_per_bar * midi::MIDI_CLIP_DEFAULT_BARS as f32;
+        let height = midi::MIDI_CLIP_DEFAULT_HEIGHT;
+        let pos = [center[0] - width * 0.5, center[1] - height * 0.5];
+        let mut clip = midi::MidiClip::new(pos, &self.settings);
+        clip.size = [width, height];
+        self.midi_clips.push(clip);
         let idx = self.midi_clips.len() - 1;
         self.selected.clear();
         self.selected.push(HitTarget::MidiClip(idx));
@@ -2065,6 +2171,18 @@ impl App {
                     DragState::DraggingAutomationPoint { .. } => CursorIcon::Grabbing,
                     DragState::MovingMidiNote { .. } => CursorIcon::Default,
                     DragState::ResizingMidiNote { .. } => CursorIcon::EwResize,
+                    DragState::ResizingMidiNoteLeft { .. } => CursorIcon::EwResize,
+                    DragState::ResizingMidiClip { nwse, .. } => {
+                        if *nwse {
+                            CursorIcon::NwseResize
+                        } else {
+                            CursorIcon::NeswResize
+                        }
+                    }
+                    DragState::MovingMidiClip { .. } => CursorIcon::Grabbing,
+                    DragState::SelectingMidiNotes { .. } => CursorIcon::Default,
+                    DragState::DraggingVelocity { .. } => CursorIcon::NsResize,
+                    DragState::ResizingVelocityLane { .. } => CursorIcon::NsResize,
                     DragState::ResizingComponentDef { nwse, .. } => {
                         if *nwse {
                             CursorIcon::NwseResize
@@ -2093,6 +2211,10 @@ impl App {
                             CursorIcon::EwResize
                         } else if self.midi_note_edge_hover {
                             CursorIcon::EwResize
+                        } else if self.velocity_divider_hovered {
+                            CursorIcon::NsResize
+                        } else if self.velocity_bar_hovered {
+                            CursorIcon::NsResize
                         } else if self.fade_handle_hovered.is_some() {
                             CursorIcon::EwResize
                         } else if self.fade_curve_hovered.is_some() {
@@ -2138,7 +2260,9 @@ impl App {
                                                 CursorIcon::NeswResize
                                             }
                                             LoopHover::None => {
-                                                if self.hovered.is_some() {
+                                                if matches!(self.hovered, Some(HitTarget::MidiClip(i)) if self.editing_midi_clip == Some(i)) {
+                                                    CursorIcon::Default
+                                                } else if self.hovered.is_some() {
                                                     CursorIcon::Grab
                                                 } else {
                                                     CursorIcon::Default
@@ -2173,9 +2297,27 @@ impl App {
         self.midi_note_edge_hover = if let Some(mc_idx) = self.editing_midi_clip {
             if mc_idx < self.midi_clips.len() {
                 matches!(
-                    midi::hit_test_midi_note(&self.midi_clips[mc_idx], world, &self.camera),
-                    Some((_, midi::MidiNoteHitZone::RightEdge))
+                    midi::hit_test_midi_note_editing(&self.midi_clips[mc_idx], world, &self.camera, true),
+                    Some((_, midi::MidiNoteHitZone::RightEdge | midi::MidiNoteHitZone::LeftEdge))
                 )
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        self.velocity_divider_hovered = if let Some(mc_idx) = self.editing_midi_clip {
+            if mc_idx < self.midi_clips.len() {
+                midi::hit_test_velocity_divider(&self.midi_clips[mc_idx], world, &self.camera)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        self.velocity_bar_hovered = if let Some(mc_idx) = self.editing_midi_clip {
+            if mc_idx < self.midi_clips.len() && !self.velocity_divider_hovered {
+                midi::hit_test_velocity_bar(&self.midi_clips[mc_idx], world, &self.camera).is_some()
             } else {
                 false
             }
@@ -2401,7 +2543,7 @@ impl App {
         self.modifiers.super_key()
     }
 
-    fn begin_move_selection(&mut self, world: [f32; 2], alt_copy: bool) {
+    pub(crate) fn begin_move_selection(&mut self, world: [f32; 2], alt_copy: bool) {
         self.push_undo();
 
         if alt_copy {
@@ -2717,6 +2859,60 @@ impl App {
             CommandAction::ToggleTripletGrid => {
                 self.settings.triplet_grid = !self.settings.triplet_grid;
                 self.settings.save();
+            }
+            CommandAction::SetMidiClipGridFixed(fg) => {
+                if let Some(idx) = self.editing_midi_clip {
+                    if idx < self.midi_clips.len() {
+                        self.midi_clips[idx].grid_mode = GridMode::Fixed(fg);
+                        self.mark_dirty();
+                    }
+                }
+            }
+            CommandAction::SetMidiClipGridAdaptive(size) => {
+                if let Some(idx) = self.editing_midi_clip {
+                    if idx < self.midi_clips.len() {
+                        self.midi_clips[idx].grid_mode = GridMode::Adaptive(size);
+                        self.mark_dirty();
+                    }
+                }
+            }
+            CommandAction::ToggleMidiClipTripletGrid => {
+                if let Some(idx) = self.editing_midi_clip {
+                    if idx < self.midi_clips.len() {
+                        self.midi_clips[idx].triplet_grid = !self.midi_clips[idx].triplet_grid;
+                        self.mark_dirty();
+                    }
+                }
+            }
+            CommandAction::NarrowMidiClipGrid => {
+                if let Some(idx) = self.editing_midi_clip {
+                    if idx < self.midi_clips.len() {
+                        match self.midi_clips[idx].grid_mode {
+                            GridMode::Adaptive(s) => {
+                                self.midi_clips[idx].grid_mode = GridMode::Adaptive(s.narrower());
+                            }
+                            GridMode::Fixed(f) => {
+                                self.midi_clips[idx].grid_mode = GridMode::Fixed(f.finer());
+                            }
+                        }
+                        self.mark_dirty();
+                    }
+                }
+            }
+            CommandAction::WidenMidiClipGrid => {
+                if let Some(idx) = self.editing_midi_clip {
+                    if idx < self.midi_clips.len() {
+                        match self.midi_clips[idx].grid_mode {
+                            GridMode::Adaptive(s) => {
+                                self.midi_clips[idx].grid_mode = GridMode::Adaptive(s.wider());
+                            }
+                            GridMode::Fixed(f) => {
+                                self.midi_clips[idx].grid_mode = GridMode::Fixed(f.coarser());
+                            }
+                        }
+                        self.mark_dirty();
+                    }
+                }
             }
             CommandAction::ToggleAutomation => {
                 self.automation_mode = !self.automation_mode;

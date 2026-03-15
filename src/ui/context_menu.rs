@@ -30,6 +30,10 @@ pub enum MenuContext {
     ComponentDef,
     ComponentInstance,
     BrowserEntry,
+    MidiClipEdit {
+        grid_mode: GridMode,
+        triplet_grid: bool,
+    },
 }
 
 pub struct ContextMenuItem {
@@ -137,7 +141,10 @@ fn grid_entries(settings: &Settings) -> Vec<ContextMenuEntry> {
     entries.push(ContextMenuEntry::InlineGroup(vec![InlinePill {
         label: AdaptiveGridSize::Narrowest.label(),
         action: CommandAction::SetGridAdaptive(AdaptiveGridSize::Narrowest),
-        active: matches!(settings.grid_mode, GridMode::Adaptive(AdaptiveGridSize::Narrowest)),
+        active: matches!(
+            settings.grid_mode,
+            GridMode::Adaptive(AdaptiveGridSize::Narrowest)
+        ),
     }]));
 
     entries.push(ContextMenuEntry::Separator);
@@ -170,6 +177,92 @@ fn grid_entries(settings: &Settings) -> Vec<ContextMenuEntry> {
         shortcut: "",
         action: CommandAction::ToggleGrid,
         checked: false,
+    }));
+
+    entries
+}
+
+fn midi_clip_grid_entries(grid_mode: GridMode, triplet_grid: bool) -> Vec<ContextMenuEntry> {
+    let mut entries = Vec::new();
+
+    entries.push(ContextMenuEntry::SectionHeader("Clip Grid:"));
+
+    entries.push(ContextMenuEntry::SectionHeader("Fixed:"));
+    let bars = [
+        FixedGrid::Bars8,
+        FixedGrid::Bars4,
+        FixedGrid::Bars2,
+        FixedGrid::Bar1,
+    ];
+    entries.push(ContextMenuEntry::InlineGroup(
+        bars.iter()
+            .map(|&f| InlinePill {
+                label: f.label(),
+                action: CommandAction::SetMidiClipGridFixed(f),
+                active: matches!(grid_mode, GridMode::Fixed(cur) if cur == f),
+            })
+            .collect(),
+    ));
+    let subdivisions = [
+        FixedGrid::Half,
+        FixedGrid::Quarter,
+        FixedGrid::Eighth,
+        FixedGrid::Sixteenth,
+        FixedGrid::ThirtySecond,
+    ];
+    entries.push(ContextMenuEntry::InlineGroup(
+        subdivisions
+            .iter()
+            .map(|&f| InlinePill {
+                label: f.label(),
+                action: CommandAction::SetMidiClipGridFixed(f),
+                active: matches!(grid_mode, GridMode::Fixed(cur) if cur == f),
+            })
+            .collect(),
+    ));
+
+    entries.push(ContextMenuEntry::SectionHeader("Adaptive:"));
+    let adaptive_row1 = [
+        AdaptiveGridSize::Widest,
+        AdaptiveGridSize::Wide,
+        AdaptiveGridSize::Medium,
+        AdaptiveGridSize::Narrow,
+    ];
+    entries.push(ContextMenuEntry::InlineGroup(
+        adaptive_row1
+            .iter()
+            .map(|&s| InlinePill {
+                label: s.label(),
+                action: CommandAction::SetMidiClipGridAdaptive(s),
+                active: matches!(grid_mode, GridMode::Adaptive(cur) if cur == s),
+            })
+            .collect(),
+    ));
+    entries.push(ContextMenuEntry::InlineGroup(vec![InlinePill {
+        label: AdaptiveGridSize::Narrowest.label(),
+        action: CommandAction::SetMidiClipGridAdaptive(AdaptiveGridSize::Narrowest),
+        active: matches!(grid_mode, GridMode::Adaptive(AdaptiveGridSize::Narrowest)),
+    }]));
+
+    entries.push(ContextMenuEntry::Separator);
+    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+        label: "Narrow Grid",
+        shortcut: "",
+        action: CommandAction::NarrowMidiClipGrid,
+        checked: false,
+    }));
+    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+        label: "Widen Grid",
+        shortcut: "",
+        action: CommandAction::WidenMidiClipGrid,
+        checked: false,
+    }));
+    entries.push(ContextMenuEntry::Separator);
+    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+        label: "Triplet Grid",
+        shortcut: "",
+        action: CommandAction::ToggleMidiClipTripletGrid,
+        checked: triplet_grid,
     }));
 
     entries
@@ -349,6 +442,10 @@ impl ContextMenu {
                 }),
             ],
             MenuContext::Grid => grid_entries(settings),
+            MenuContext::MidiClipEdit {
+                grid_mode,
+                triplet_grid,
+            } => midi_clip_grid_entries(grid_mode, triplet_grid),
             MenuContext::BrowserEntry => vec![ContextMenuEntry::Item(ContextMenuItem {
                 label: "Reveal in Finder",
                 shortcut: "⌥⌘R",

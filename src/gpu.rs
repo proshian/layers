@@ -11,6 +11,7 @@ use winit::window::Window;
 use crate::audio::PIXELS_PER_SECOND;
 use crate::ui::browser;
 use crate::effects;
+use crate::midi;
 use crate::settings::{Settings, SettingsWindow};
 use crate::ui::context_menu::{
     ContextMenu, ContextMenuEntry, CTX_MENU_INLINE_HEIGHT, CTX_MENU_ITEM_HEIGHT, CTX_MENU_PADDING,
@@ -299,6 +300,7 @@ pub(crate) struct Gpu {
     cached_plugin_block_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_auto_dot_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_auto_lane_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
+    cached_midi_note_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     pub(crate) auto_lane_close_rects: Vec<(usize, [f32; 4])>,
 }
 
@@ -608,6 +610,7 @@ impl Gpu {
             cached_plugin_block_bufs: Vec::new(),
             cached_auto_dot_bufs: Vec::new(),
             cached_auto_lane_bufs: Vec::new(),
+            cached_midi_note_label_bufs: Vec::new(),
             auto_lane_close_rects: Vec::new(),
         }
     }
@@ -646,6 +649,10 @@ impl Gpu {
         editing_bpm: Option<&str>,
         automation_mode: bool,
         active_automation_param: crate::automation::AutomationParam,
+        midi_clips: &[midi::MidiClip],
+        hovered_midi_clip: Option<usize>,
+        editing_midi_clip: Option<usize>,
+        mouse_world: [f32; 2],
     ) {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
@@ -1847,6 +1854,115 @@ impl Gpu {
         }
         self.cached_auto_lane_bufs = new_lane_cache;
 
+        // MIDI clip note labels (C notes + hovered pitch)
+        let mut old_midi_cache = std::mem::take(&mut self.cached_midi_note_label_bufs);
+        let mut new_midi_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
+        let mut midi_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
+        if settings_window.is_none() && command_palette.is_none() {
+            let browser_right_px = sample_browser.map_or(0.0, |b| b.panel_width(scale));
+
+            for (mc_idx, mc) in midi_clips.iter().enumerate() {
+                let mc_right = mc.position[0] + mc.size[0];
+                let mc_bottom = mc.position[1] + mc.size[1];
+                if mc_right < world_left
+                    || mc.position[0] > world_right
+                    || mc_bottom < world_top
+                    || mc.position[1] > world_bottom
+                {
+                    continue;
+                }
+
+                let is_editing = editing_midi_clip == Some(mc_idx);
+                let nh = mc.note_height_editing(is_editing);
+                let row_screen_h = nh * camera.zoom;
+                if row_screen_h < 3.0 {
+                    continue;
+                }
+
+                let label_font = (row_screen_h * 0.7).clamp(6.0, 14.0) * scale;
+                let label_line = (label_font * 1.35).min(row_screen_h * scale);
+                let max_label_w = (label_font * 4.0).max(24.0 * scale);
+
+                let clip_screen_left = (mc.position[0] - camera.position[0]) * camera.zoom;
+                let clip_screen_right = (mc_right - camera.position[0]) * camera.zoom;
+                let clip_screen_top = (mc.position[1] - camera.position[1]) * camera.zoom;
+                let clip_screen_bottom = (mc_bottom - camera.position[1]) * camera.zoom;
+
+                let bounds_left = clip_screen_left.max(browser_right_px).max(0.0);
+                let clip_bounds = TextBounds {
+                    left: bounds_left as i32,
+                    top: clip_screen_top.max(0.0) as i32,
+                    right: (clip_screen_right.min(w)) as i32,
+                    bottom: (clip_screen_bottom.min(h)) as i32,
+                };
+
+                if clip_bounds.left >= clip_bounds.right || clip_bounds.top >= clip_bounds.bottom {
+                    continue;
+                }
+
+                let sticky_x_world = mc.position[0].max(camera.position[0]);
+                let browser_right_world =
+                    camera.position[0] + browser_right_px / camera.zoom;
+                let sticky_x_world = sticky_x_world.max(browser_right_world);
+                let pad = 3.0 / camera.zoom;
+                let label_x_world = sticky_x_world + pad;
+                let label_screen_x = (label_x_world - camera.position[0]) * camera.zoom;
+
+                let hovered_pitch = if hovered_midi_clip == Some(mc_idx) && mc.contains(mouse_world)
+                {
+                    Some(mc.y_to_pitch_editing(mouse_world[1], is_editing))
+                } else {
+                    None
+                };
+
+                for pitch in mc.pitch_range.0..mc.pitch_range.1 {
+                    let is_c = pitch % 12 == 0;
+                    let is_hovered = hovered_pitch == Some(pitch);
+                    if !is_c && !is_hovered {
+                        continue;
+                    }
+
+                    let y_world = mc.pitch_to_y_editing(pitch, is_editing) + (nh - label_line / camera.zoom) * 0.5;
+                    let screen_y = (y_world - camera.position[1]) * camera.zoom;
+
+                    if screen_y + label_line < clip_screen_top || screen_y > clip_screen_bottom {
+                        continue;
+                    }
+
+                    let name = midi::note_name(pitch);
+                    let key = TextLabelCacheKey {
+                        text: name.clone(),
+                        max_width_q: (max_label_w * 2.0) as i32,
+                        font_size_q: (label_font * 2.0) as i32,
+                    };
+                    if let Some(pos) = old_midi_cache.iter().position(|(k, _)| *k == key) {
+                        new_midi_cache.push(old_midi_cache.swap_remove(pos));
+                    } else {
+                        let mut buf = TextBuffer::new(
+                            &mut self.font_system,
+                            Metrics::new(label_font, label_line),
+                        );
+                        buf.set_size(&mut self.font_system, Some(max_label_w), Some(label_line));
+                        let attrs = Attrs::new()
+                            .family(Family::Name(".AppleSystemUIFont"))
+                            .weight(glyphon::Weight(500));
+                        buf.set_text(&mut self.font_system, &name, attrs, Shaping::Advanced);
+                        buf.shape_until_scroll(&mut self.font_system, false);
+                        new_midi_cache.push((key, buf));
+                    }
+
+                    let alpha = if is_hovered { 220 } else { 130 };
+                    midi_label_meta.push((
+                        label_screen_x,
+                        screen_y,
+                        TextColor::rgba(255, 255, 255, alpha),
+                        clip_bounds,
+                    ));
+                }
+            }
+        }
+        self.cached_midi_note_label_bufs = new_midi_cache;
+
         // Transport panel time text
         {
             let (tp_pos, tp_size) = TransportPanel::panel_rect(w, h, scale);
@@ -2048,6 +2164,12 @@ impl Gpu {
             .zip(lane_label_meta.iter())
             .map(|(e, m)| cached_label_area(e, m));
 
+        let midi_note_label_areas = self
+            .cached_midi_note_label_bufs
+            .iter()
+            .zip(midi_label_meta.iter())
+            .map(|(e, m)| cached_label_area(e, m));
+
         let text_areas: Vec<TextArea> = browser_text_areas
             .into_iter()
             .chain(other_areas)
@@ -2056,6 +2178,7 @@ impl Gpu {
             .chain(plugin_areas)
             .chain(auto_dot_areas)
             .chain(auto_lane_areas)
+            .chain(midi_note_label_areas)
             .collect();
 
         self.text_renderer

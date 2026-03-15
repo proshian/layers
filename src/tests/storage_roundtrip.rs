@@ -1,5 +1,7 @@
 use crate::automation::AutomationData;
-use crate::storage::{f32_slice_to_u8, u8_slice_to_f32};
+use crate::midi;
+use crate::settings::{FixedGrid, GridMode};
+use crate::storage::{self, f32_slice_to_u8, u8_slice_to_f32};
 
 #[test]
 fn test_f32_u8_roundtrip() {
@@ -63,4 +65,71 @@ fn test_f32_u8_roundtrip_with_single_value() {
     assert_eq!(bytes.len(), 4);
     let restored = u8_slice_to_f32(&bytes);
     assert_eq!(restored, single);
+}
+
+#[test]
+fn test_midi_clip_survives_save_load_roundtrip() {
+    let original = midi::MidiClip {
+        position: [100.0, 200.0],
+        size: [480.0, 200.0],
+        color: [0.6, 0.3, 0.9, 0.7],
+        notes: vec![
+            midi::MidiNote { pitch: 60, start_px: 10.0, duration_px: 30.0, velocity: 100 },
+            midi::MidiNote { pitch: 72, start_px: 50.0, duration_px: 15.0, velocity: 80 },
+        ],
+        pitch_range: (48, 84),
+        grid_mode: GridMode::Fixed(FixedGrid::Eighth),
+        triplet_grid: true,
+        velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
+    };
+
+    // Save path: MidiClip -> StoredMidiClip
+    let (grid_tag, grid_val) = storage::grid_mode_to_stored(original.grid_mode);
+    let stored = storage::StoredMidiClip {
+        position: original.position,
+        size: original.size,
+        color: original.color,
+        notes: original.notes.iter().map(|n| storage::StoredMidiNote {
+            pitch: n.pitch as u32,
+            start_px: n.start_px,
+            duration_px: n.duration_px,
+            velocity: n.velocity as u32,
+        }).collect(),
+        pitch_low: original.pitch_range.0 as u32,
+        pitch_high: original.pitch_range.1 as u32,
+        grid_mode_tag: grid_tag,
+        grid_mode_value: grid_val,
+        triplet_grid: original.triplet_grid,
+    };
+
+    // Load path: StoredMidiClip -> MidiClip
+    let restored = midi::MidiClip {
+        position: stored.position,
+        size: stored.size,
+        color: stored.color,
+        notes: stored.notes.into_iter().map(|n| midi::MidiNote {
+            pitch: n.pitch as u8,
+            start_px: n.start_px,
+            duration_px: n.duration_px,
+            velocity: n.velocity as u8,
+        }).collect(),
+        pitch_range: (stored.pitch_low as u8, stored.pitch_high as u8),
+        grid_mode: storage::grid_mode_from_stored(&stored.grid_mode_tag, &stored.grid_mode_value),
+        triplet_grid: stored.triplet_grid,
+        velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
+    };
+
+    assert_eq!(restored.position, original.position);
+    assert_eq!(restored.size, original.size);
+    assert_eq!(restored.color, original.color);
+    assert_eq!(restored.pitch_range, original.pitch_range);
+    assert_eq!(restored.notes.len(), original.notes.len());
+    for (orig, rest) in original.notes.iter().zip(restored.notes.iter()) {
+        assert_eq!(orig.pitch, rest.pitch);
+        assert_eq!(orig.start_px, rest.start_px);
+        assert_eq!(orig.duration_px, rest.duration_px);
+        assert_eq!(orig.velocity, rest.velocity);
+    }
+    assert_eq!(restored.grid_mode, original.grid_mode);
+    assert_eq!(restored.triplet_grid, original.triplet_grid);
 }

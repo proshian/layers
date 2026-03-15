@@ -4,7 +4,51 @@ use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
 
+use crate::settings::{AdaptiveGridSize, FixedGrid, GridMode};
 use crate::CanvasObject;
+
+// ---------------------------------------------------------------------------
+// Grid mode serialisation helpers
+// ---------------------------------------------------------------------------
+
+pub fn grid_mode_to_stored(mode: GridMode) -> (String, String) {
+    match mode {
+        GridMode::Fixed(fg) => ("fixed".to_string(), fg.label().to_string()),
+        GridMode::Adaptive(ag) => ("adaptive".to_string(), ag.label().to_string()),
+    }
+}
+
+pub fn grid_mode_from_stored(tag: &str, value: &str) -> GridMode {
+    match tag {
+        "fixed" => {
+            let fg = match value {
+                "8 Bars" => FixedGrid::Bars8,
+                "4 Bars" => FixedGrid::Bars4,
+                "2 Bars" => FixedGrid::Bars2,
+                "1 Bar" => FixedGrid::Bar1,
+                "1/2" => FixedGrid::Half,
+                "1/4" => FixedGrid::Quarter,
+                "1/8" => FixedGrid::Eighth,
+                "1/16" => FixedGrid::Sixteenth,
+                "1/32" => FixedGrid::ThirtySecond,
+                _ => FixedGrid::Quarter,
+            };
+            GridMode::Fixed(fg)
+        }
+        "adaptive" => {
+            let ag = match value {
+                "Widest" => AdaptiveGridSize::Widest,
+                "Wide" => AdaptiveGridSize::Wide,
+                "Medium" => AdaptiveGridSize::Medium,
+                "Narrow" => AdaptiveGridSize::Narrow,
+                "Narrowest" => AdaptiveGridSize::Narrowest,
+                _ => AdaptiveGridSize::Medium,
+            };
+            GridMode::Adaptive(ag)
+        }
+        _ => GridMode::default(),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Per-project schema
@@ -88,6 +132,9 @@ pub struct StoredMidiClip {
     pub notes: Vec<StoredMidiNote>,
     pub pitch_low: u32,
     pub pitch_high: u32,
+    pub grid_mode_tag: String,
+    pub grid_mode_value: String,
+    pub triplet_grid: bool,
 }
 
 #[derive(Clone, SurrealValue)]
@@ -513,13 +560,15 @@ impl Storage {
     // -----------------------------------------------------------------------
 
     pub fn list_projects(&self) -> Vec<ProjectIndexEntry> {
-        self.rt
+        let mut entries = self.rt
             .block_on(async {
                 let entries: Vec<ProjectIndexEntry> =
                     self.index_db.select("projects").await.ok()?;
                 Some(entries)
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        entries
     }
 
     pub fn delete_project(&mut self, path: &str) {

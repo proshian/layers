@@ -55,6 +55,11 @@ pub enum CommandAction {
     AddInstrumentArea,
     AddMidiClip,
     AddInstrument,
+    SetMidiClipGridFixed(FixedGrid),
+    SetMidiClipGridAdaptive(AdaptiveGridSize),
+    ToggleMidiClipTripletGrid,
+    NarrowMidiClipGrid,
+    WidenMidiClipGrid,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -87,7 +92,11 @@ const DB_MAX: f32 = 6.0;
 const DB_RANGE: f32 = DB_MAX - DB_MIN; // 66.0
 
 pub fn gain_to_db(gain: f32) -> f32 {
-    if gain < 0.00001 { -100.0 } else { 20.0 * gain.log10() }
+    if gain < 0.00001 {
+        -100.0
+    } else {
+        20.0 * gain.log10()
+    }
 }
 
 pub fn db_to_gain(db: f32) -> f32 {
@@ -456,7 +465,9 @@ impl CommandPalette {
     }
 
     pub fn clamp_plugin_scroll(&mut self, scale: f32) {
-        self.plugin_scroll_offset = self.plugin_scroll_offset.clamp(0.0, self.plugin_max_scroll(scale));
+        self.plugin_scroll_offset = self
+            .plugin_scroll_offset
+            .clamp(0.0, self.plugin_max_scroll(scale));
     }
 
     pub fn move_plugin_selection(&mut self, delta: i32, scale: f32) {
@@ -511,7 +522,9 @@ impl CommandPalette {
     }
 
     pub fn selected_plugin(&self) -> Option<&PluginPickerEntry> {
-        let idx = *self.filtered_plugin_indices.get(self.plugin_selected_index)?;
+        let idx = *self
+            .filtered_plugin_indices
+            .get(self.plugin_selected_index)?;
         self.plugin_entries.get(idx)
     }
 
@@ -708,7 +721,12 @@ impl CommandPalette {
         )
     }
 
-    pub fn sample_fader_track_rect(&self, screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+    pub fn sample_fader_track_rect(
+        &self,
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+    ) -> ([f32; 2], [f32; 2]) {
         let (ppos, psize) = self.palette_rect(screen_w, screen_h, scale);
         let track_w = SAMPLE_FADER_TRACK_W * scale;
         let track_h = SAMPLE_FADER_TRACK_H * scale;
@@ -945,7 +963,10 @@ impl CommandPalette {
                 let zero_db_y = tp[1] + ts[1] * (1.0 - zero_db_pos);
                 let mark_w = 20.0 * scale;
                 out.push(InstanceRaw {
-                    position: [tp[0] - mark_w * 0.5 + ts[0] * 0.5 - mark_w * 0.5, zero_db_y - 0.5 * scale],
+                    position: [
+                        tp[0] - mark_w * 0.5 + ts[0] * 0.5 - mark_w * 0.5,
+                        zero_db_y - 0.5 * scale,
+                    ],
                     size: [mark_w, 1.0 * scale],
                     color: [1.0, 1.0, 1.0, 0.15],
                     border_radius: 0.0,

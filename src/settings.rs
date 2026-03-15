@@ -7,7 +7,7 @@ use std::path::PathBuf;
 // Grid types
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdaptiveGridSize {
     Widest,
     Wide,
@@ -58,7 +58,7 @@ impl AdaptiveGridSize {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FixedGrid {
     Bars8,
     Bars4,
@@ -129,7 +129,7 @@ impl FixedGrid {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GridMode {
     Adaptive(AdaptiveGridSize),
     Fixed(FixedGrid),
