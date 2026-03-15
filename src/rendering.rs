@@ -4,6 +4,8 @@ use crate::component;
 use crate::effects;
 use crate::grid::{grid_spacing_for_settings, pixels_per_beat};
 use crate::hit_testing::canonical_rect;
+use crate::instruments;
+use crate::midi;
 use crate::regions::{
     ExportRegion, LoopRegion, SelectArea, EXPORT_BORDER_COLOR, EXPORT_FILL_COLOR,
     EXPORT_RENDER_PILL_COLOR, EXPORT_RENDER_PILL_H, EXPORT_RENDER_PILL_W, LOOP_BADGE_COLOR,
@@ -41,6 +43,12 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) fade_curve_dragging: Option<(usize, bool)>,
     pub(crate) mouse_world: [f32; 2],
     pub(crate) bpm: f32,
+    pub(crate) automation_mode: bool,
+    pub(crate) active_automation_param: crate::automation::AutomationParam,
+    pub(crate) midi_clips: &'a [midi::MidiClip],
+    pub(crate) instrument_regions: &'a [instruments::InstrumentRegion],
+    pub(crate) editing_midi_clip: Option<usize>,
+    pub(crate) selected_midi_notes: &'a [usize],
 }
 
 pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
@@ -160,6 +168,46 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         out.extend(effects::build_plugin_block_instances(
             pb, camera, is_hov, is_sel,
         ));
+    }
+
+    // --- instrument regions ---
+    for (i, ir) in ctx.instrument_regions.iter().enumerate() {
+        let ir_right = ir.position[0] + ir.size[0];
+        let ir_bottom = ir.position[1] + ir.size[1];
+        if ir_right < world_left
+            || ir.position[0] > world_right
+            || ir_bottom < world_top
+            || ir.position[1] > world_bottom
+        {
+            continue;
+        }
+        let is_sel = ctx.selected.contains(&HitTarget::InstrumentRegion(i));
+        let is_hov = ctx.hovered == Some(HitTarget::InstrumentRegion(i));
+        let is_active = ctx.playhead_world_x.map_or(false, |px| {
+            px >= ir.position[0] && px <= ir.position[0] + ir.size[0]
+        });
+        out.extend(instruments::build_instrument_region_instances(
+            ir, camera, is_hov, is_sel, is_active,
+        ));
+    }
+
+    // --- midi clips ---
+    for (i, mc) in ctx.midi_clips.iter().enumerate() {
+        let mc_right = mc.position[0] + mc.size[0];
+        let mc_bottom = mc.position[1] + mc.size[1];
+        if mc_right < world_left
+            || mc.position[0] > world_right
+            || mc_bottom < world_top
+            || mc.position[1] > world_bottom
+        {
+            continue;
+        }
+        let is_sel = ctx.selected.contains(&HitTarget::MidiClip(i));
+        let is_hov = ctx.hovered == Some(HitTarget::MidiClip(i));
+        out.extend(midi::build_midi_clip_instances(mc, camera, is_hov, is_sel));
+        let editing = ctx.editing_midi_clip == Some(i);
+        let sel_notes = if editing { ctx.selected_midi_notes } else { &[] };
+        out.extend(midi::build_midi_note_instances(mc, camera, sel_notes, editing));
     }
 
     // --- export regions ---
@@ -351,6 +399,15 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             is_hov,
             is_sel,
         ));
+
+        // Automation breakpoint dots (only in automation mode for active param)
+        if ctx.automation_mode {
+            out.extend(ui::waveform::build_automation_dot_instances(
+                wf,
+                camera,
+                ctx.active_automation_param,
+            ));
+        }
     }
 
     // --- component definitions ---
@@ -455,6 +512,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             ctx.components,
             ctx.component_instances,
             ctx.component_map,
+            ctx.midi_clips,
+            ctx.instrument_regions,
             target,
         );
         push_border(out, pos, size, sel_bw, SEL_COLOR);
@@ -572,6 +631,21 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
             || matches!(ctx.fade_curve_hovered, Some((idx, false)) if idx == i)
             || matches!(ctx.fade_curve_dragging, Some((idx, false)) if idx == i);
         verts.extend(ui::waveform::build_fade_curve_triangles(wf, camera, show_fi_line, show_fo_line));
+
+        // Automation lines
+        use crate::automation::AutomationParam;
+        let vol_lane = &wf.automation.volume_lane();
+        let pan_lane = &wf.automation.pan_lane();
+        // Always show volume line if non-default; show with editing highlight if in automation mode + Volume
+        if !vol_lane.is_default() || (ctx.automation_mode && ctx.active_automation_param == AutomationParam::Volume) {
+            let is_editing = ctx.automation_mode && ctx.active_automation_param == AutomationParam::Volume;
+            verts.extend(ui::waveform::build_automation_triangles(wf, camera, AutomationParam::Volume, is_editing));
+        }
+        // Same for pan
+        if !pan_lane.is_default() || (ctx.automation_mode && ctx.active_automation_param == AutomationParam::Pan) {
+            let is_editing = ctx.automation_mode && ctx.active_automation_param == AutomationParam::Pan;
+            verts.extend(ui::waveform::build_automation_triangles(wf, camera, AutomationParam::Pan, is_editing));
+        }
     }
 }
 
@@ -585,6 +659,8 @@ pub(crate) fn target_rect(
     components: &[component::ComponentDef],
     component_instances: &[component::ComponentInstance],
     component_map: &HashMap<component::ComponentId, usize>,
+    midi_clips: &[midi::MidiClip],
+    instrument_regions: &[instruments::InstrumentRegion],
     target: &HitTarget,
 ) -> ([f32; 2], [f32; 2]) {
     match target {
@@ -605,6 +681,8 @@ pub(crate) fn target_rect(
                 None => (inst.position, [100.0, 100.0]),
             }
         }
+        HitTarget::MidiClip(i) => (midi_clips[*i].position, midi_clips[*i].size),
+        HitTarget::InstrumentRegion(i) => (instrument_regions[*i].position, instrument_regions[*i].size),
     }
 }
 

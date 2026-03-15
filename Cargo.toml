@@ -23,3 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 muda = "0.17"
 vst3-gui = { path = "vst3-gui" }
+
+[[bin]]
+name = "test_vst3"
+path = "src/bin/test_vst3.rs"

@@ -36,6 +36,9 @@ impl ApplicationHandler for App {
                 ms.initialized = true;
             }
         }
+
+        // Scan plugins and restore saved plugin/instrument state at startup
+        self.ensure_plugins_scanned();
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
@@ -66,6 +69,7 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => {
                 if !self.project_dirty {
+                    self.shutdown_plugins();
                     event_loop.exit();
                     return;
                 }
@@ -91,6 +95,7 @@ impl ApplicationHandler for App {
                         } else {
                             self.save_project_state();
                         }
+                        self.shutdown_plugins();
                         event_loop.exit();
                     }
                     rfd::MessageDialogResult::No => {
@@ -104,6 +109,7 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
+                        self.shutdown_plugins();
                         event_loop.exit();
                     }
                     _ => {}
@@ -173,6 +179,7 @@ impl ApplicationHandler for App {
                             volume: 1.0,
                             disabled: false,
                             sample_offset_px: 0.0,
+                            automation: crate::automation::AutomationData::new(),
                         });
                         self.audio_clips.push(AudioClipData {
                             samples: loaded.samples,
@@ -219,9 +226,9 @@ impl ApplicationHandler for App {
                             let new_val = pe.slider_drag(idx, mx, scr_w, scr_h, scale);
                             let pb_idx = pe.region_idx; // now repurposed as plugin_block index
                             if let Some(pb) = self.plugin_blocks.get(pb_idx) {
-                                if let Ok(mut guard) = pb.instance.lock() {
-                                    if let Some(inst) = guard.as_mut() {
-                                        let _ = inst.set_parameter(idx, new_val);
+                                if let Ok(guard) = pb.gui.lock() {
+                                    if let Some(gui) = guard.as_ref() {
+                                        gui.set_parameter(idx, new_val as f64);
                                     }
                                 }
                             }
@@ -378,6 +385,32 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // Resizing instrument region
+                if let DragState::ResizingInstrumentRegion { region_idx, anchor, .. } = self.drag {
+                    let world = self.camera.screen_to_world(self.mouse_pos);
+                    if region_idx < self.instrument_regions.len() {
+                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        self.instrument_regions[region_idx].position = pos;
+                        self.instrument_regions[region_idx].size = size;
+                    }
+                    self.mark_dirty();
+                    self.request_redraw();
+                    return;
+                }
+
+                // Resizing MIDI clip
+                if let DragState::ResizingMidiClip { clip_idx, anchor, .. } = self.drag {
+                    let world = self.camera.screen_to_world(self.mouse_pos);
+                    if clip_idx < self.midi_clips.len() {
+                        let (pos, size) = compute_resize(anchor, world, 40.0, true, &self.settings, self.camera.zoom, self.bpm);
+                        self.midi_clips[clip_idx].position = pos;
+                        self.midi_clips[clip_idx].size = size;
+                    }
+                    self.mark_dirty();
+                    self.request_redraw();
+                    return;
+                }
+
                 // Resizing loop region
                 if let DragState::ResizingLoopRegion { region_idx, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
@@ -456,6 +489,42 @@ impl ApplicationHandler for App {
                         }
                     }
                     self.sync_audio_clips();
+                    self.mark_dirty();
+                    self.request_redraw();
+                    return;
+                }
+
+                // Dragging automation point
+                if let DragState::DraggingAutomationPoint {
+                    waveform_idx,
+                    param,
+                    point_idx,
+                    ..
+                } = self.drag
+                {
+                    let world = self.camera.screen_to_world(self.mouse_pos);
+                    if let Some(wf) = self.waveforms.get_mut(waveform_idx) {
+                        let t = ((world[0] - wf.position[0]) / wf.size[0]).clamp(0.0, 1.0);
+                        let y_top = wf.position[1];
+                        let y_bot = wf.position[1] + wf.size[1];
+                        let value = ((world[1] - y_bot) / (y_top - y_bot)).clamp(0.0, 1.0);
+
+                        // Clamp t between neighbor points to maintain sort order
+                        let lane = wf.automation.lane_for_mut(param);
+                        let t_min = if point_idx > 0 {
+                            lane.points[point_idx - 1].t + 0.001
+                        } else {
+                            0.0
+                        };
+                        let t_max = if point_idx + 1 < lane.points.len() {
+                            lane.points[point_idx + 1].t - 0.001
+                        } else {
+                            1.0
+                        };
+                        let t = t.clamp(t_min, t_max);
+                        lane.points[point_idx].t = t;
+                        lane.points[point_idx].value = value;
+                    }
                     self.mark_dirty();
                     self.request_redraw();
                     return;
@@ -547,6 +616,8 @@ impl ApplicationHandler for App {
                                     | HitTarget::ExportRegion(_)
                                     | HitTarget::ComponentDef(_)
                                     | HitTarget::ComponentInstance(_)
+                                    | HitTarget::MidiClip(_)
+                                    | HitTarget::InstrumentRegion(_)
                             ) {
                                 needs_sync = true;
                             }
@@ -561,9 +632,10 @@ impl ApplicationHandler for App {
                         self.mark_dirty();
                     }
                     Action::Other => {
+                        let world = self.camera.screen_to_world(self.mouse_pos);
                         if let DragState::Selecting { start_world } = &self.drag {
                             let start = *start_world;
-                            let current = self.camera.screen_to_world(self.mouse_pos);
+                            let current = world;
                             let (rp, rs) = canonical_rect(start, current);
                             let min_sz = 5.0 / self.camera.zoom;
                             if rs[0] >= min_sz || rs[1] >= min_sz {
@@ -576,10 +648,46 @@ impl ApplicationHandler for App {
                                     &self.export_regions,
                                     &self.components,
                                     &self.component_instances,
+                                    &self.midi_clips,
+                                    &self.instrument_regions,
                                     self.editing_component,
                                     rp,
                                     rs,
                                 );
+                            }
+                        }
+                        if let DragState::MovingMidiNote { clip_idx, note_indices, offsets } = &self.drag {
+                            let clip_idx = *clip_idx;
+                            let note_indices = note_indices.clone();
+                            let offsets = offsets.clone();
+                            if clip_idx < self.midi_clips.len() {
+                                let mc_pos = self.midi_clips[clip_idx].position;
+                                let mc_pr = self.midi_clips[clip_idx].pitch_range;
+                                let mc_size = self.midi_clips[clip_idx].size;
+                                for (i, &ni) in note_indices.iter().enumerate() {
+                                    if ni < self.midi_clips[clip_idx].notes.len() {
+                                        let nx = world[0] - offsets[i][0];
+                                        let ny = world[1] - offsets[i][1];
+                                        let start_px = (nx - mc_pos[0]).max(0.0);
+                                        // Inline y_to_pitch
+                                        let nh = mc_size[1] / (mc_pr.1 - mc_pr.0) as f32;
+                                        let relative = mc_pos[1] + mc_size[1] - ny;
+                                        let pitch = ((relative / nh) as u8 + mc_pr.0).clamp(mc_pr.0, mc_pr.1 - 1);
+                                        self.midi_clips[clip_idx].notes[ni].start_px = start_px;
+                                        self.midi_clips[clip_idx].notes[ni].pitch = pitch;
+                                    }
+                                }
+                                self.mark_dirty();
+                            }
+                        }
+                        if let DragState::ResizingMidiNote { clip_idx, note_idx, .. } = &self.drag {
+                            let clip_idx = *clip_idx;
+                            let note_idx = *note_idx;
+                            if clip_idx < self.midi_clips.len() && note_idx < self.midi_clips[clip_idx].notes.len() {
+                                let note_x = self.midi_clips[clip_idx].position[0] + self.midi_clips[clip_idx].notes[note_idx].start_px;
+                                let new_dur = (world[0] - note_x).max(10.0);
+                                self.midi_clips[clip_idx].notes[note_idx].duration_px = new_dur;
+                                self.mark_dirty();
                             }
                         }
                     }
@@ -615,6 +723,24 @@ impl ApplicationHandler for App {
                     if state == ElementState::Pressed {
                         self.command_palette = None;
 
+                        // Right-click to delete automation point
+                        if self.automation_mode {
+                            let world = self.camera.screen_to_world(self.mouse_pos);
+                            let param = self.active_automation_param;
+                            if let Some((wf_idx, pt_idx)) =
+                                hit_test_automation_point(&self.waveforms, world, &self.camera, param)
+                            {
+                                self.push_undo();
+                                self.waveforms[wf_idx]
+                                    .automation
+                                    .lane_for_mut(param)
+                                    .remove_point(pt_idx);
+                                self.mark_dirty();
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+
                         if self.sample_browser.visible {
                             let (_, sh, scale) = self.screen_info();
                             if self.sample_browser.contains(self.mouse_pos, sh, scale) {
@@ -644,6 +770,8 @@ impl ApplicationHandler for App {
                             &self.export_regions,
                             &self.components,
                             &self.component_instances,
+                            &self.midi_clips,
+                            &self.instrument_regions,
                             self.editing_component,
                             world,
                             &self.camera,
@@ -732,9 +860,9 @@ impl ApplicationHandler for App {
                                         );
                                         let pb_idx = pe.region_idx; // repurposed as plugin_block index
                                         if let Some(pb) = self.plugin_blocks.get(pb_idx) {
-                                            if let Ok(mut guard) = pb.instance.lock() {
-                                                if let Some(inst) = guard.as_mut() {
-                                                    let _ = inst.set_parameter(idx, new_val);
+                                            if let Ok(guard) = pb.gui.lock() {
+                                                if let Some(gui) = guard.as_ref() {
+                                                    gui.set_parameter(idx, new_val as f64);
                                                 }
                                             }
                                         }
@@ -936,12 +1064,16 @@ impl ApplicationHandler for App {
                                 return;
                             }
 
-                            let is_plugin_picker = self
+                            let picker_mode = self
                                 .command_palette
                                 .as_ref()
-                                .map_or(false, |p| p.mode == PaletteMode::PluginPicker);
+                                .and_then(|p| match p.mode {
+                                    PaletteMode::PluginPicker => Some(PaletteMode::PluginPicker),
+                                    PaletteMode::InstrumentPicker => Some(PaletteMode::InstrumentPicker),
+                                    _ => None,
+                                });
 
-                            if is_plugin_picker {
+                            if let Some(mode) = picker_mode {
                                 let plugin_info = self.command_palette.as_ref().and_then(|p| {
                                     let idx = p.item_at(self.mouse_pos, sw, sh, scale)?;
                                     let entry_idx = *p.filtered_plugin_indices.get(idx)?;
@@ -950,7 +1082,11 @@ impl ApplicationHandler for App {
                                 });
                                 if let Some((plugin_id, plugin_name)) = plugin_info {
                                     self.command_palette = None;
-                                    self.add_plugin_to_selected_effect_region(&plugin_id, &plugin_name);
+                                    if mode == PaletteMode::InstrumentPicker {
+                                        self.assign_instrument_to_selected_region(&plugin_id, &plugin_name);
+                                    } else {
+                                        self.add_plugin_to_selected_effect_region(&plugin_id, &plugin_name);
+                                    }
                                 } else if !inside {
                                     self.command_palette = None;
                                 }
@@ -970,7 +1106,7 @@ impl ApplicationHandler for App {
                                 });
 
                                 if let Some(action) = clicked_action {
-                                    if matches!(action, CommandAction::SetMasterVolume | CommandAction::SetSampleVolume | CommandAction::AddPlugin) {
+                                    if matches!(action, CommandAction::SetMasterVolume | CommandAction::SetSampleVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
                                         self.execute_command(action);
                                     } else {
                                         self.command_palette = None;
@@ -1082,6 +1218,28 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        // --- instrument region corner resize ---
+                        for (i, ir) in self.instrument_regions.iter().enumerate() {
+                            if let Some((anchor, nwse)) = hit_test_corner_resize(ir.position, ir.size, world, self.camera.zoom) {
+                                self.push_undo();
+                                self.drag = DragState::ResizingInstrumentRegion { region_idx: i, anchor, nwse };
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+
+                        // --- midi clip corner resize ---
+                        for (i, mc) in self.midi_clips.iter().enumerate() {
+                            if let Some((anchor, nwse)) = hit_test_corner_resize(mc.position, mc.size, world, self.camera.zoom) {
+                                self.push_undo();
+                                self.drag = DragState::ResizingMidiClip { clip_idx: i, anchor, nwse };
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+
                         // --- export region corner resize ---
                         for (i, er) in self.export_regions.iter().enumerate() {
                             if let Some((anchor, nwse)) = hit_test_corner_resize(er.position, er.size, world, self.camera.zoom) {
@@ -1142,6 +1300,94 @@ impl ApplicationHandler for App {
                             WaveformEdgeHover::None => {}
                         }
 
+                        // Check automation lane close (×) button
+                        if self.automation_mode {
+                            if let Some(gpu) = &self.gpu {
+                                for &(wf_idx, rect) in &gpu.auto_lane_close_rects {
+                                    let [rx, ry, rw, rh] = rect;
+                                    if self.mouse_pos[0] >= rx && self.mouse_pos[0] <= rx + rw
+                                        && self.mouse_pos[1] >= ry && self.mouse_pos[1] <= ry + rh
+                                    {
+                                        self.push_undo();
+                                        let param = self.active_automation_param;
+                                        self.waveforms[wf_idx].automation.lane_for_mut(param).points.clear();
+                                        self.mark_dirty();
+                                        self.request_redraw();
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
+                        // --- automation point interaction ---
+                        if self.automation_mode {
+                            let param = self.active_automation_param;
+                            // Check existing point first
+                            if let Some((wf_idx, pt_idx)) =
+                                hit_test_automation_point(&self.waveforms, world, &self.camera, param)
+                            {
+                                let orig_t = self.waveforms[wf_idx].automation.lane_for(param).points[pt_idx].t;
+                                let orig_v = self.waveforms[wf_idx].automation.lane_for(param).points[pt_idx].value;
+                                self.push_undo();
+                                self.drag = DragState::DraggingAutomationPoint {
+                                    waveform_idx: wf_idx,
+                                    param,
+                                    point_idx: pt_idx,
+                                    original_t: orig_t,
+                                    original_value: orig_v,
+                                };
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
+                            // Check line segment for inserting new point
+                            if let Some((wf_idx, t, value)) =
+                                hit_test_automation_line(&self.waveforms, world, &self.camera, param)
+                            {
+                                self.push_undo();
+                                let pt_idx = self.waveforms[wf_idx]
+                                    .automation
+                                    .lane_for_mut(param)
+                                    .insert_point(t, value);
+                                self.drag = DragState::DraggingAutomationPoint {
+                                    waveform_idx: wf_idx,
+                                    param,
+                                    point_idx: pt_idx,
+                                    original_t: t,
+                                    original_value: value,
+                                };
+                                self.mark_dirty();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
+                            // Click inside waveform to create new point
+                            for (i, wf) in self.waveforms.iter().enumerate().rev() {
+                                if point_in_rect(world, wf.position, wf.size) {
+                                    let t = ((world[0] - wf.position[0]) / wf.size[0]).clamp(0.0, 1.0);
+                                    let y_top = wf.position[1];
+                                    let y_bot = wf.position[1] + wf.size[1];
+                                    let value = ((world[1] - y_bot) / (y_top - y_bot)).clamp(0.0, 1.0);
+                                    self.push_undo();
+                                    let pt_idx = self.waveforms[i]
+                                        .automation
+                                        .lane_for_mut(param)
+                                        .insert_point(t, value);
+                                    self.drag = DragState::DraggingAutomationPoint {
+                                        waveform_idx: i,
+                                        param,
+                                        point_idx: pt_idx,
+                                        original_t: t,
+                                        original_value: value,
+                                    };
+                                    self.mark_dirty();
+                                    self.update_cursor();
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+
                         // --- fade handle drag ---
                         if let Some((wf_idx, is_fade_in)) =
                             hit_test_fade_handle(&self.waveforms, world, &self.camera)
@@ -1183,6 +1429,8 @@ impl ApplicationHandler for App {
                             &self.export_regions,
                             &self.components,
                             &self.component_instances,
+                            &self.midi_clips,
+                            &self.instrument_regions,
                             self.editing_component,
                             world,
                             &self.camera,
@@ -1215,6 +1463,95 @@ impl ApplicationHandler for App {
                                 self.request_redraw();
                                 return;
                             }
+                            if let Some(HitTarget::MidiClip(idx)) = hit {
+                                self.editing_midi_clip = Some(idx);
+                                self.selected_midi_notes.clear();
+                                println!("Entered MIDI clip edit mode");
+                                self.request_redraw();
+                                return;
+                            }
+                            if let Some(HitTarget::InstrumentRegion(idx)) = hit {
+                                if self.instrument_regions[idx].has_plugin() {
+                                    self.open_instrument_region_gui(idx);
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+
+                        // Click outside editing MIDI clip exits edit mode
+                        if let Some(mc_idx) = self.editing_midi_clip {
+                            if mc_idx < self.midi_clips.len() {
+                                let mc = &self.midi_clips[mc_idx];
+                                if !point_in_rect(world, mc.position, mc.size) {
+                                    self.editing_midi_clip = None;
+                                    self.selected_midi_notes.clear();
+                                    println!("Exited MIDI clip edit mode");
+                                }
+                            } else {
+                                self.editing_midi_clip = None;
+                                self.selected_midi_notes.clear();
+                            }
+                        }
+
+                        // MIDI note editing when inside an editing clip
+                        if let Some(mc_idx) = self.editing_midi_clip {
+                            if mc_idx < self.midi_clips.len() {
+                                let mc_pos = self.midi_clips[mc_idx].position;
+                                let mc_size = self.midi_clips[mc_idx].size;
+                                if point_in_rect(world, mc_pos, mc_size) {
+                                    // Check if clicking on existing note
+                                    let hit_note = midi::hit_test_midi_note(&self.midi_clips[mc_idx], world, &self.camera);
+                                    if let Some((note_idx, zone)) = hit_note {
+                                        match zone {
+                                            midi::MidiNoteHitZone::RightEdge => {
+                                                let original_duration = self.midi_clips[mc_idx].notes[note_idx].duration_px;
+                                                self.drag = DragState::ResizingMidiNote {
+                                                    clip_idx: mc_idx,
+                                                    note_idx,
+                                                    original_duration,
+                                                };
+                                            }
+                                            midi::MidiNoteHitZone::Body => {
+                                                if !self.modifiers.shift_key() {
+                                                    self.selected_midi_notes.clear();
+                                                }
+                                                if !self.selected_midi_notes.contains(&note_idx) {
+                                                    self.selected_midi_notes.push(note_idx);
+                                                }
+                                                let offsets: Vec<[f32; 2]> = self.selected_midi_notes.iter().map(|&ni| {
+                                                    let n = &self.midi_clips[mc_idx].notes[ni];
+                                                    let nx = mc_pos[0] + n.start_px;
+                                                    let ny = self.midi_clips[mc_idx].pitch_to_y(n.pitch);
+                                                    [world[0] - nx, world[1] - ny]
+                                                }).collect();
+                                                self.drag = DragState::MovingMidiNote {
+                                                    clip_idx: mc_idx,
+                                                    note_indices: self.selected_midi_notes.clone(),
+                                                    offsets,
+                                                };
+                                            }
+                                        }
+                                    } else {
+                                        // Click on empty space: create new note
+                                        self.push_undo();
+                                        let pitch = self.midi_clips[mc_idx].y_to_pitch(world[1]);
+                                        let start_px = self.midi_clips[mc_idx].x_to_start_px(world[0]);
+                                        self.midi_clips[mc_idx].notes.push(midi::MidiNote {
+                                            pitch,
+                                            start_px,
+                                            duration_px: midi::DEFAULT_NOTE_DURATION_PX,
+                                            velocity: 100,
+                                        });
+                                        let note_idx = self.midi_clips[mc_idx].notes.len() - 1;
+                                        self.selected_midi_notes = vec![note_idx];
+                                        self.sync_audio_clips();
+                                    }
+                                    self.mark_dirty();
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
                         }
 
                         // Click outside the editing component exits edit mode
@@ -1234,6 +1571,8 @@ impl ApplicationHandler for App {
                                         &self.export_regions,
                                         &self.components,
                                         &self.component_instances,
+                                        &self.midi_clips,
+                                        &self.instrument_regions,
                                         None,
                                         world,
                                         &self.camera,
@@ -1307,6 +1646,15 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        // --- finish automation point drag ---
+                        if matches!(self.drag, DragState::DraggingAutomationPoint { .. }) {
+                            self.drag = DragState::None;
+                            self.sync_audio_clips();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
                         // --- finish browser resize ---
                         if matches!(self.drag, DragState::ResizingBrowser) {
                             self.drag = DragState::None;
@@ -1331,6 +1679,25 @@ impl ApplicationHandler for App {
                             self.drag = DragState::None;
                             self.sync_audio_clips();
                             self.update_hover();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // --- finish resizing instrument region ---
+                        if matches!(self.drag, DragState::ResizingInstrumentRegion { .. }) {
+                            self.drag = DragState::None;
+                            self.sync_audio_clips();
+                            self.update_hover();
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // --- finish MIDI note drag/resize ---
+                        if matches!(self.drag, DragState::MovingMidiNote { .. } | DragState::ResizingMidiNote { .. } | DragState::ResizingMidiClip { .. }) {
+                            self.drag = DragState::None;
+                            self.sync_audio_clips();
                             self.update_cursor();
                             self.request_redraw();
                             return;
@@ -1454,6 +1821,8 @@ impl ApplicationHandler for App {
                                     &self.export_regions,
                                     &self.components,
                                     &self.component_instances,
+                                    &self.midi_clips,
+                                    &self.instrument_regions,
                                     self.editing_component,
                                     rp,
                                     rs,
@@ -1477,6 +1846,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
+                    println!("[KEY] pressed: {:?} super={} shift={}", event.logical_key, self.modifiers.super_key(), self.modifiers.shift_key());
                     if self.plugin_editor.is_some() {
                         if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
                             self.plugin_editor = None;
@@ -1513,6 +1883,36 @@ impl ApplicationHandler for App {
                             println!("Exited component edit mode");
                             self.request_redraw();
                             return;
+                        }
+                    }
+
+                    if self.editing_midi_clip.is_some() {
+                        if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+                            self.editing_midi_clip = None;
+                            self.selected_midi_notes.clear();
+                            println!("Exited MIDI clip edit mode");
+                            self.request_redraw();
+                            return;
+                        }
+                        // Delete selected MIDI notes
+                        if matches!(event.logical_key, Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)) {
+                            if let Some(mc_idx) = self.editing_midi_clip {
+                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
+                                    self.push_undo();
+                                    let mut indices = self.selected_midi_notes.clone();
+                                    indices.sort_unstable_by(|a, b| b.cmp(a));
+                                    for &i in &indices {
+                                        if i < self.midi_clips[mc_idx].notes.len() {
+                                            self.midi_clips[mc_idx].notes.remove(i);
+                                        }
+                                    }
+                                    self.selected_midi_notes.clear();
+                                    self.sync_audio_clips();
+                                    self.mark_dirty();
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
                         }
                     }
 
@@ -1718,7 +2118,7 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        if matches!(fader_mode, Some(PaletteMode::PluginPicker)) {
+                        if matches!(fader_mode, Some(PaletteMode::PluginPicker | PaletteMode::InstrumentPicker)) {
                             match &event.logical_key {
                                 Key::Named(NamedKey::Escape) => {
                                     self.command_palette = None;
@@ -1742,6 +2142,7 @@ impl ApplicationHandler for App {
                                     return;
                                 }
                                 Key::Named(NamedKey::Enter) => {
+                                    let is_instrument = matches!(fader_mode, Some(PaletteMode::InstrumentPicker));
                                     let plugin_info = self
                                         .command_palette
                                         .as_ref()
@@ -1749,7 +2150,11 @@ impl ApplicationHandler for App {
                                         .map(|e| (e.unique_id.clone(), e.name.clone()));
                                     self.command_palette = None;
                                     if let Some((plugin_id, plugin_name)) = plugin_info {
-                                        self.add_plugin_to_selected_effect_region(&plugin_id, &plugin_name);
+                                        if is_instrument {
+                                            self.assign_instrument_to_selected_region(&plugin_id, &plugin_name);
+                                        } else {
+                                            self.add_plugin_to_selected_effect_region(&plugin_id, &plugin_name);
+                                        }
                                     }
                                     self.request_redraw();
                                     return;
@@ -1803,7 +2208,7 @@ impl ApplicationHandler for App {
                                     .as_ref()
                                     .and_then(|p| p.selected_action());
                                 if let Some(a) = action {
-                                    if matches!(a, CommandAction::SetMasterVolume | CommandAction::SetSampleVolume | CommandAction::AddPlugin) {
+                                    if matches!(a, CommandAction::SetMasterVolume | CommandAction::SetSampleVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
                                         self.execute_command(a);
                                     } else {
                                         self.command_palette = None;
@@ -1848,10 +2253,10 @@ impl ApplicationHandler for App {
                                     for (j, &bi) in block_indices.iter().enumerate() {
                                         let pb = &self.plugin_blocks[bi];
                                         let param_count = pb
-                                            .instance
+                                            .gui
                                             .lock()
                                             .ok()
-                                            .and_then(|g| g.as_ref().map(|p| p.parameter_count()))
+                                            .and_then(|g| g.as_ref().map(|gui| gui.parameter_count()))
                                             .unwrap_or(0);
                                         println!(
                                             "    [{}] {} ({} params)",
@@ -1953,7 +2358,17 @@ impl ApplicationHandler for App {
                                 };
                                 self.request_redraw();
                             }
-                            "k" | "t" => {
+                            "k" => {
+                                self.context_menu = None;
+                                self.settings_window = None;
+                                self.command_palette = if self.command_palette.is_some() {
+                                    None
+                                } else {
+                                    Some(CommandPalette::new(self.settings.dev_mode))
+                                };
+                                self.request_redraw();
+                            }
+                            "t" => {
                                 self.context_menu = None;
                                 self.settings_window = None;
                                 self.command_palette = if self.command_palette.is_some() {
@@ -2011,6 +2426,7 @@ impl ApplicationHandler for App {
                             }
                             "s" => self.save_project(),
                             "z" => {
+                                println!("[KEY] Cmd+Z pressed, shift={}", self.modifiers.shift_key());
                                 if self.modifiers.shift_key() {
                                     self.redo();
                                 } else {
@@ -2051,7 +2467,7 @@ impl ApplicationHandler for App {
                     s
                 };
                 if let Some(p) = &mut self.command_palette {
-                    if p.mode == PaletteMode::PluginPicker {
+                    if matches!(p.mode, PaletteMode::PluginPicker | PaletteMode::InstrumentPicker) {
                         let delta_px = if is_pixel_delta {
                             -dy_raw
                         } else {
@@ -2185,6 +2601,12 @@ impl ApplicationHandler for App {
                             },
                             mouse_world: self.camera.screen_to_world(self.mouse_pos),
                             bpm: self.bpm,
+                            automation_mode: self.automation_mode,
+                            active_automation_param: self.active_automation_param,
+                            editing_midi_clip: self.editing_midi_clip,
+                            instrument_regions: &self.instrument_regions,
+                            midi_clips: &self.midi_clips,
+                            selected_midi_notes: &self.selected_midi_notes,
                         };
                         build_instances(&mut self.cached_instances, &render_ctx);
                         build_waveform_vertices(&mut self.cached_wf_verts, &render_ctx);
@@ -2257,6 +2679,8 @@ impl ApplicationHandler for App {
                         &self.toast_manager,
                         self.bpm,
                         self.editing_bpm.as_deref(),
+                        self.automation_mode,
+                        self.active_automation_param,
                     );
                 }
                 if self.toast_manager.has_active() {

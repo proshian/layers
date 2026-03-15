@@ -49,6 +49,12 @@ pub enum CommandAction {
     AddRenderArea,
     AddPlugin,
     SetSampleColor(usize),
+    ToggleAutomation,
+    AddVolumeAutomation,
+    AddPanAutomation,
+    AddInstrumentArea,
+    AddMidiClip,
+    AddInstrument,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -57,6 +63,7 @@ pub enum PaletteMode {
     VolumeFader,
     SampleVolumeFader,
     PluginPicker,
+    InstrumentPicker,
 }
 
 pub struct PluginPickerEntry {
@@ -257,6 +264,48 @@ pub const COMMANDS: &[CommandDef] = &[
         shortcut: "",
         category: "Audio",
         action: CommandAction::AddRenderArea,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Toggle Automation",
+        shortcut: "⌘T",
+        category: "View",
+        action: CommandAction::ToggleAutomation,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Create Volume Automation",
+        shortcut: "",
+        category: "Sample",
+        action: CommandAction::AddVolumeAutomation,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Create Pan Automation",
+        shortcut: "",
+        category: "Sample",
+        action: CommandAction::AddPanAutomation,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Add Instrument Area",
+        shortcut: "",
+        category: "Audio",
+        action: CommandAction::AddInstrumentArea,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Add MIDI Clip",
+        shortcut: "",
+        category: "Audio",
+        action: CommandAction::AddMidiClip,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Add Instrument",
+        shortcut: "",
+        category: "Audio",
+        action: CommandAction::AddInstrument,
         dev_only: false,
     },
     CommandDef {
@@ -919,7 +968,7 @@ impl CommandPalette {
                     border_radius: thumb_r,
                 });
             }
-            PaletteMode::PluginPicker => {
+            PaletteMode::PluginPicker | PaletteMode::InstrumentPicker => {
                 let item_h = PALETTE_ITEM_HEIGHT * scale;
                 let y_offset = self.plugin_scroll_y_offset(scale);
                 let first_row = if item_h > 0.0 {

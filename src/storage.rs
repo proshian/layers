@@ -25,6 +25,8 @@ pub struct StoredWaveform {
     pub volume: f32,
     pub disabled: bool,
     pub sample_offset_px: f32,
+    pub automation_volume: Vec<[f32; 2]>,
+    pub automation_pan: Vec<[f32; 2]>,
 }
 
 #[derive(Clone, SurrealValue)]
@@ -70,6 +72,35 @@ pub struct StoredComponentInstance {
     pub position: [f32; 2],
 }
 
+#[derive(Clone, SurrealValue)]
+pub struct StoredMidiNote {
+    pub pitch: u32,
+    pub start_px: f32,
+    pub duration_px: f32,
+    pub velocity: u32,
+}
+
+#[derive(Clone, SurrealValue)]
+pub struct StoredMidiClip {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub color: [f32; 4],
+    pub notes: Vec<StoredMidiNote>,
+    pub pitch_low: u32,
+    pub pitch_high: u32,
+}
+
+#[derive(Clone, SurrealValue)]
+pub struct StoredInstrumentRegion {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub name: String,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub state: Vec<u8>,
+    pub params: Vec<u8>,
+}
+
 #[derive(SurrealValue)]
 pub struct ProjectState {
     pub name: String,
@@ -87,6 +118,8 @@ pub struct ProjectState {
     pub components: Vec<StoredComponent>,
     pub component_instances: Vec<StoredComponentInstance>,
     pub bpm: f32,
+    pub midi_clips: Vec<StoredMidiClip>,
+    pub instrument_regions: Vec<StoredInstrumentRegion>,
 }
 
 // ---------------------------------------------------------------------------

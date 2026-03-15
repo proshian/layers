@@ -156,7 +156,7 @@ impl PluginEditorWindow {
         out.push(InstanceRaw {
             position: wp,
             size: ws,
-            color: [0.14, 0.13, 0.18, 0.98],
+            color: [0.12, 0.14, 0.18, 0.98],
             border_radius: br,
         });
 
@@ -164,14 +164,14 @@ impl PluginEditorWindow {
         out.push(InstanceRaw {
             position: wp,
             size: [ws[0], HEADER_H * scale],
-            color: [0.18, 0.16, 0.24, 1.0],
+            color: [0.14, 0.17, 0.24, 1.0],
             border_radius: br,
         });
         // Fill bottom corners of header
         out.push(InstanceRaw {
             position: [wp[0], wp[1] + HEADER_H * scale - br],
             size: [ws[0], br],
-            color: [0.18, 0.16, 0.24, 1.0],
+            color: [0.14, 0.17, 0.24, 1.0],
             border_radius: 0.0,
         });
 
@@ -218,7 +218,7 @@ impl PluginEditorWindow {
             out.push(InstanceRaw {
                 position: tp,
                 size: [ts[0] * val, ts[1]],
-                color: [0.55, 0.28, 0.85, 0.60],
+                color: [0.25, 0.50, 0.90, 0.60],
                 border_radius: ts[1] * 0.5,
             });
 

@@ -1,0 +1,1 @@
+when alt (option) key is pressed, user can change curve of the line (like in ableton) when doing automation. implement that

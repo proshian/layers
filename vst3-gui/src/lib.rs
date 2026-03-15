@@ -6,6 +6,10 @@ extern "C" {
         uid: *const std::ffi::c_char,
         title: *const std::ffi::c_char,
     ) -> *mut std::ffi::c_void;
+    fn vst3_gui_open_headless(
+        path: *const std::ffi::c_char,
+        uid: *const std::ffi::c_char,
+    ) -> *mut std::ffi::c_void;
     fn vst3_gui_close(handle: *mut std::ffi::c_void);
     fn vst3_gui_destroy(handle: *mut std::ffi::c_void);
     fn vst3_gui_show(handle: *mut std::ffi::c_void);
@@ -16,6 +20,23 @@ extern "C" {
     fn vst3_gui_get_parameter_count(handle: *mut std::ffi::c_void) -> i32;
     fn vst3_gui_get_parameter(handle: *mut std::ffi::c_void, index: i32, value: *mut f64) -> i32;
     fn vst3_gui_set_parameter(handle: *mut std::ffi::c_void, index: i32, value: f64) -> i32;
+    fn vst3_gui_setup_processing(handle: *mut std::ffi::c_void, sample_rate: f64, block_size: i32) -> i32;
+    fn vst3_gui_process(
+        handle: *mut std::ffi::c_void,
+        inputs: *const *const f32,
+        num_input_channels: i32,
+        outputs: *mut *mut f32,
+        num_output_channels: i32,
+        num_frames: i32,
+    ) -> i32;
+    fn vst3_gui_send_midi(
+        handle: *mut std::ffi::c_void,
+        midi_data: *const u8,
+        num_events: i32,
+        sample_offsets: *const i32,
+    ) -> i32;
+    fn vst3_gui_get_audio_input_channels(handle: *mut std::ffi::c_void) -> i32;
+    fn vst3_gui_get_audio_output_channels(handle: *mut std::ffi::c_void) -> i32;
 }
 
 pub struct Vst3Gui {
@@ -36,6 +57,22 @@ impl Vst3Gui {
 
         let handle =
             unsafe { vst3_gui_open(c_path.as_ptr(), c_uid.as_ptr(), c_title.as_ptr()) };
+
+        if handle.is_null() {
+            None
+        } else {
+            Some(Vst3Gui { handle })
+        }
+    }
+
+    /// Open a VST3 plugin without a GUI window (no NSWindow, works from any thread).
+    /// For audio processing, state, and parameters only.
+    pub fn open_headless(vst3_path: &str, uid: &str) -> Option<Self> {
+        let c_path = CString::new(vst3_path).ok()?;
+        let c_uid = CString::new(uid).ok()?;
+
+        let handle =
+            unsafe { vst3_gui_open_headless(c_path.as_ptr(), c_uid.as_ptr()) };
 
         if handle.is_null() {
             None
@@ -127,6 +164,60 @@ impl Vst3Gui {
         for i in 0..count {
             self.set_parameter(i, values[i]);
         }
+    }
+
+    /// Set up audio processing (call once after open, before process).
+    pub fn setup_processing(&self, sample_rate: f64, block_size: i32) -> bool {
+        unsafe { vst3_gui_setup_processing(self.handle, sample_rate, block_size) == 0 }
+    }
+
+    /// Process one audio block. `inputs` and `outputs` are per-channel slices.
+    pub fn process(
+        &self,
+        inputs: &[&[f32]],
+        outputs: &mut [&mut [f32]],
+        num_frames: usize,
+    ) -> bool {
+        let input_ptrs: Vec<*const f32> = inputs.iter().map(|s| s.as_ptr()).collect();
+        let mut output_ptrs: Vec<*mut f32> = outputs.iter_mut().map(|s| s.as_mut_ptr()).collect();
+        unsafe {
+            vst3_gui_process(
+                self.handle,
+                if input_ptrs.is_empty() { std::ptr::null() } else { input_ptrs.as_ptr() },
+                input_ptrs.len() as i32,
+                if output_ptrs.is_empty() { std::ptr::null_mut() } else { output_ptrs.as_mut_ptr() },
+                output_ptrs.len() as i32,
+                num_frames as i32,
+            ) == 0
+        }
+    }
+
+    /// Queue a MIDI Note On for the next process() call.
+    pub fn send_midi_note_on(&self, note: u8, velocity: u8, channel: u8, sample_offset: i32) {
+        let midi_data: [u8; 3] = [0x90 | (channel & 0x0F), note, velocity];
+        unsafe {
+            vst3_gui_send_midi(self.handle, midi_data.as_ptr(), 1, &sample_offset);
+        }
+    }
+
+    /// Queue a MIDI Note Off for the next process() call.
+    pub fn send_midi_note_off(&self, note: u8, velocity: u8, channel: u8, sample_offset: i32) {
+        let midi_data: [u8; 3] = [0x80 | (channel & 0x0F), note, velocity];
+        unsafe {
+            vst3_gui_send_midi(self.handle, midi_data.as_ptr(), 1, &sample_offset);
+        }
+    }
+
+    /// Get the number of audio input channels (valid after setup_processing).
+    pub fn audio_input_channels(&self) -> usize {
+        let n = unsafe { vst3_gui_get_audio_input_channels(self.handle) };
+        if n < 0 { 0 } else { n as usize }
+    }
+
+    /// Get the number of audio output channels (valid after setup_processing).
+    pub fn audio_output_channels(&self) -> usize {
+        let n = unsafe { vst3_gui_get_audio_output_channels(self.handle) };
+        if n < 0 { 0 } else { n as usize }
     }
 }
 

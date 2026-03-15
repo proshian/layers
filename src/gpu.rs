@@ -297,6 +297,9 @@ pub(crate) struct Gpu {
     cached_wf_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_er_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_plugin_block_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
+    cached_auto_dot_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
+    cached_auto_lane_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
+    pub(crate) auto_lane_close_rects: Vec<(usize, [f32; 4])>,
 }
 
 impl Gpu {
@@ -603,6 +606,9 @@ impl Gpu {
             cached_wf_label_bufs: Vec::new(),
             cached_er_label_bufs: Vec::new(),
             cached_plugin_block_bufs: Vec::new(),
+            cached_auto_dot_bufs: Vec::new(),
+            cached_auto_lane_bufs: Vec::new(),
+            auto_lane_close_rects: Vec::new(),
         }
     }
 
@@ -638,6 +644,8 @@ impl Gpu {
         toast_manager: &toast::ToastManager,
         bpm: f32,
         editing_bpm: Option<&str>,
+        automation_mode: bool,
+        active_automation_param: crate::automation::AutomationParam,
     ) {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
@@ -801,7 +809,7 @@ impl Gpu {
                 PaletteMode::SampleVolumeFader => {
                     ("Sample Volume", TextColor::rgb(235, 235, 240))
                 }
-                PaletteMode::PluginPicker if palette.search_text.is_empty() => {
+                PaletteMode::PluginPicker | PaletteMode::InstrumentPicker if palette.search_text.is_empty() => {
                     ("Search plugins...", TextColor::rgba(140, 140, 150, 160))
                 }
                 _ if palette.search_text.is_empty() => {
@@ -1090,7 +1098,7 @@ impl Gpu {
                         }
                     }
                 }
-                PaletteMode::PluginPicker => {
+                PaletteMode::PluginPicker | PaletteMode::InstrumentPicker => {
                     let ifont = 13.5 * scale;
                     let iline = 20.0 * scale;
                     let mfont = 11.0 * scale;
@@ -1674,6 +1682,171 @@ impl Gpu {
         }
         self.cached_plugin_block_bufs = new_pb_cache;
 
+        // Automation dot gain labels
+        let mut old_auto_cache = std::mem::take(&mut self.cached_auto_dot_bufs);
+        let mut new_auto_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
+        let mut auto_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
+        if automation_mode && settings_window.is_none() && command_palette.is_none() {
+            for wf in waveforms.iter() {
+                let wf_right = wf.position[0] + wf.size[0];
+                let wf_bottom = wf.position[1] + wf.size[1];
+                if wf_right < world_left
+                    || wf.position[0] > world_right
+                    || wf_bottom < world_top
+                    || wf.position[1] > world_bottom
+                {
+                    continue;
+                }
+                let lane = wf.automation.lane_for(active_automation_param);
+                let y_top = wf.position[1];
+                let y_bot = wf.position[1] + wf.size[1];
+                for p in &lane.points {
+                    let x = wf.position[0] + p.t * wf.size[0];
+                    let y = y_bot + (y_top - y_bot) * p.value;
+                    let screen_x = (x - camera.position[0]) * camera.zoom;
+                    let screen_y = (y - camera.position[1]) * camera.zoom;
+
+                    let label_text = match active_automation_param {
+                        crate::automation::AutomationParam::Volume => {
+                            let db = crate::ui::palette::gain_to_db(crate::automation::volume_value_to_gain(p.value));
+                            if db <= -60.0 {
+                                "-inf dB".to_string()
+                            } else {
+                                format!("{:.1} dB", db)
+                            }
+                        }
+                        crate::automation::AutomationParam::Pan => {
+                            let pct = ((p.value - 0.5) * 200.0) as i32;
+                            if pct == 0 {
+                                "C".to_string()
+                            } else if pct < 0 {
+                                format!("L{}", -pct)
+                            } else {
+                                format!("R{}", pct)
+                            }
+                        }
+                    };
+
+                    let label_font = 9.0 * scale;
+                    let label_line = 12.0 * scale;
+                    let max_w = 80.0 * scale;
+
+                    let key = TextLabelCacheKey {
+                        text: label_text.clone(),
+                        max_width_q: (max_w * 2.0) as i32,
+                        font_size_q: (label_font * 2.0) as i32,
+                    };
+                    if let Some(pos) = old_auto_cache.iter().position(|(k, _)| *k == key) {
+                        new_auto_cache.push(old_auto_cache.swap_remove(pos));
+                    } else {
+                        let mut buf = TextBuffer::new(
+                            &mut self.font_system,
+                            Metrics::new(label_font, label_line),
+                        );
+                        buf.set_size(&mut self.font_system, Some(max_w), Some(label_line));
+                        let attrs = Attrs::new()
+                            .family(Family::Name(".AppleSystemUIFont"))
+                            .weight(glyphon::Weight(500));
+                        buf.set_text(&mut self.font_system, &label_text, attrs, Shaping::Advanced);
+                        buf.shape_until_scroll(&mut self.font_system, false);
+                        new_auto_cache.push((key, buf));
+                    }
+
+                    let dot_screen_sz = (8.0 + camera.zoom * 2.0).min(40.0);
+                    auto_label_meta.push((
+                        screen_x + dot_screen_sz * 0.5 + 4.0,
+                        screen_y - label_line / scale * 0.5,
+                        TextColor::rgba(255, 255, 255, 220),
+                        full_bounds,
+                    ));
+                }
+            }
+        }
+        self.cached_auto_dot_bufs = new_auto_cache;
+
+        // Automation lane label (e.g. "Volume" / "Pan") in top-left of each waveform
+        let mut old_lane_cache = std::mem::take(&mut self.cached_auto_lane_bufs);
+        let mut new_lane_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
+        let mut lane_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
+        self.auto_lane_close_rects.clear();
+        if automation_mode && settings_window.is_none() && command_palette.is_none() {
+            for (wf_i, wf) in waveforms.iter().enumerate() {
+                let wf_right = wf.position[0] + wf.size[0];
+                let wf_bottom = wf.position[1] + wf.size[1];
+                if wf_right < world_left
+                    || wf.position[0] > world_right
+                    || wf_bottom < world_top
+                    || wf.position[1] > world_bottom
+                {
+                    continue;
+                }
+                let clip_screen_w = wf.size[0] * camera.zoom;
+                if clip_screen_w < 30.0 {
+                    continue;
+                }
+
+                let lane_text = match active_automation_param {
+                    crate::automation::AutomationParam::Volume => "Volume  \u{00d7}",
+                    crate::automation::AutomationParam::Pan => "Pan  \u{00d7}",
+                };
+                let (lr, lg, lb) = match active_automation_param {
+                    crate::automation::AutomationParam::Volume => (255u8, 179u8, 51u8),
+                    crate::automation::AutomationParam::Pan => (77u8, 153u8, 255u8),
+                };
+
+                let pad = 6.0 / camera.zoom;
+                let name_x_world = wf.position[0] + pad;
+                let name_y_world = wf.position[1] + pad + 14.0 / camera.zoom;
+                let screen_x = (name_x_world - camera.position[0]) * camera.zoom;
+                let screen_y = (name_y_world - camera.position[1]) * camera.zoom;
+
+                let label_font = 9.0 * scale;
+                let label_line = 12.0 * scale;
+                let max_w = (clip_screen_w - 12.0 * scale).max(20.0);
+
+                let key = TextLabelCacheKey {
+                    text: lane_text.to_string(),
+                    max_width_q: (max_w * 2.0) as i32,
+                    font_size_q: (label_font * 2.0) as i32,
+                };
+                if let Some(pos) = old_lane_cache.iter().position(|(k, _)| *k == key) {
+                    new_lane_cache.push(old_lane_cache.swap_remove(pos));
+                } else {
+                    let mut buf = TextBuffer::new(
+                        &mut self.font_system,
+                        Metrics::new(label_font, label_line),
+                    );
+                    buf.set_size(&mut self.font_system, Some(max_w), Some(label_line));
+                    let attrs = Attrs::new()
+                        .family(Family::Name(".AppleSystemUIFont"))
+                        .weight(glyphon::Weight(500));
+                    buf.set_text(&mut self.font_system, lane_text, attrs, Shaping::Advanced);
+                    buf.shape_until_scroll(&mut self.font_system, false);
+                    new_lane_cache.push((key, buf));
+                }
+
+                // Compute × close button hit rect
+                let base_text_len = match active_automation_param {
+                    crate::automation::AutomationParam::Volume => 6, // "Volume"
+                    crate::automation::AutomationParam::Pan => 3,    // "Pan"
+                };
+                let x_icon_offset = (base_text_len as f32 + 2.0) * label_font * 0.55;
+                let close_size = 12.0 * scale;
+                self.auto_lane_close_rects.push((
+                    wf_i,
+                    [screen_x + x_icon_offset, screen_y - close_size * 0.8, close_size, close_size],
+                ));
+
+                lane_label_meta.push((
+                    screen_x,
+                    screen_y,
+                    TextColor::rgba(lr, lg, lb, 200),
+                    full_bounds,
+                ));
+            }
+        }
+        self.cached_auto_lane_bufs = new_lane_cache;
+
         // Transport panel time text
         {
             let (tp_pos, tp_size) = TransportPanel::panel_rect(w, h, scale);
@@ -1863,12 +2036,26 @@ impl Gpu {
             .zip(pb_label_meta.iter())
             .map(|(e, m)| cached_label_area(e, m));
 
+        let auto_dot_areas = self
+            .cached_auto_dot_bufs
+            .iter()
+            .zip(auto_label_meta.iter())
+            .map(|(e, m)| cached_label_area(e, m));
+
+        let auto_lane_areas = self
+            .cached_auto_lane_bufs
+            .iter()
+            .zip(lane_label_meta.iter())
+            .map(|(e, m)| cached_label_area(e, m));
+
         let text_areas: Vec<TextArea> = browser_text_areas
             .into_iter()
             .chain(other_areas)
             .chain(wf_areas)
             .chain(er_areas)
             .chain(plugin_areas)
+            .chain(auto_dot_areas)
+            .chain(auto_lane_areas)
             .collect();
 
         self.text_renderer

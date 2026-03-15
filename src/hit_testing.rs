@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
+use crate::automation::AutomationParam;
 use crate::component;
 use crate::effects;
 use crate::grid::snap_to_grid;
+use crate::instruments;
+use crate::midi;
 use crate::regions::{ExportRegion, LoopRegion};
 use crate::settings::Settings;
 use crate::ui;
@@ -174,6 +177,8 @@ pub(crate) fn hit_test(
     export_regions: &[ExportRegion],
     components: &[component::ComponentDef],
     component_instances: &[component::ComponentInstance],
+    midi_clips: &[midi::MidiClip],
+    instrument_regions: &[instruments::InstrumentRegion],
     editing_component: Option<usize>,
     world_pos: [f32; 2],
     camera: &Camera,
@@ -238,9 +243,19 @@ pub(crate) fn hit_test(
             return Some(HitTarget::PluginBlock(i));
         }
     }
+    for (i, mc) in midi_clips.iter().enumerate().rev() {
+        if mc.contains(world_pos) {
+            return Some(HitTarget::MidiClip(i));
+        }
+    }
     for (i, er) in effect_regions.iter().enumerate().rev() {
         if er.hit_test_border(world_pos, camera) {
             return Some(HitTarget::EffectRegion(i));
+        }
+    }
+    for (i, ir) in instrument_regions.iter().enumerate().rev() {
+        if ir.hit_test_border(world_pos, camera) {
+            return Some(HitTarget::InstrumentRegion(i));
         }
     }
     for (i, lr) in loop_regions.iter().enumerate().rev() {
@@ -265,6 +280,8 @@ pub(crate) fn targets_in_rect(
     export_regions: &[ExportRegion],
     components: &[component::ComponentDef],
     component_instances: &[component::ComponentInstance],
+    midi_clips: &[midi::MidiClip],
+    instrument_regions: &[instruments::InstrumentRegion],
     editing_component: Option<usize>,
     rect_pos: [f32; 2],
     rect_size: [f32; 2],
@@ -346,5 +363,96 @@ pub(crate) fn targets_in_rect(
             }
         }
     }
+    for (i, mc) in midi_clips.iter().enumerate() {
+        if rects_overlap(rect_pos, rect_size, mc.position, mc.size) {
+            result.push(HitTarget::MidiClip(i));
+        }
+    }
+    for (i, ir) in instrument_regions.iter().enumerate() {
+        if rects_overlap(rect_pos, rect_size, ir.position, ir.size) {
+            result.push(HitTarget::InstrumentRegion(i));
+        }
+    }
     result
+}
+
+/// Returns (waveform_idx, point_idx) if cursor is near an automation breakpoint.
+pub(crate) fn hit_test_automation_point(
+    waveforms: &[WaveformView],
+    world_pos: [f32; 2],
+    camera: &Camera,
+    param: AutomationParam,
+) -> Option<(usize, usize)> {
+    let hit_radius = 8.0 / camera.zoom;
+    for (i, wf) in waveforms.iter().enumerate().rev() {
+        let lane = wf.automation.lane_for(param);
+        let y_top = wf.position[1];
+        let y_bot = wf.position[1] + wf.size[1];
+        for (pi, p) in lane.points.iter().enumerate() {
+            let px = wf.position[0] + p.t * wf.size[0];
+            let py = y_bot + (y_top - y_bot) * p.value;
+            if (world_pos[0] - px).abs() < hit_radius && (world_pos[1] - py).abs() < hit_radius {
+                return Some((i, pi));
+            }
+        }
+    }
+    None
+}
+
+/// Returns (waveform_idx, t, value) if cursor is near an automation line segment (for inserting).
+pub(crate) fn hit_test_automation_line(
+    waveforms: &[WaveformView],
+    world_pos: [f32; 2],
+    camera: &Camera,
+    param: AutomationParam,
+) -> Option<(usize, f32, f32)> {
+    let threshold = 4.0 / camera.zoom;
+    for (i, wf) in waveforms.iter().enumerate().rev() {
+        // Check if point is inside waveform rect first
+        if !point_in_rect(world_pos, wf.position, wf.size) {
+            continue;
+        }
+        let lane = wf.automation.lane_for(param);
+        if lane.points.len() < 2 {
+            continue;
+        }
+        let y_top = wf.position[1];
+        let y_bot = wf.position[1] + wf.size[1];
+
+        // Check each segment
+        for seg in 0..lane.points.len() - 1 {
+            let a = &lane.points[seg];
+            let b = &lane.points[seg + 1];
+            let ax = wf.position[0] + a.t * wf.size[0];
+            let ay = y_bot + (y_top - y_bot) * a.value;
+            let bx = wf.position[0] + b.t * wf.size[0];
+            let by = y_bot + (y_top - y_bot) * b.value;
+
+            // Check if world_pos.x is between ax and bx
+            if world_pos[0] < ax.min(bx) - threshold || world_pos[0] > ax.max(bx) + threshold {
+                continue;
+            }
+
+            // Distance from point to line segment
+            let dx = bx - ax;
+            let dy = by - ay;
+            let len_sq = dx * dx + dy * dy;
+            if len_sq < 1e-6 {
+                continue;
+            }
+            let t_proj = ((world_pos[0] - ax) * dx + (world_pos[1] - ay) * dy) / len_sq;
+            let t_proj = t_proj.clamp(0.0, 1.0);
+            let proj_x = ax + t_proj * dx;
+            let proj_y = ay + t_proj * dy;
+            let dist = ((world_pos[0] - proj_x).powi(2) + (world_pos[1] - proj_y).powi(2)).sqrt();
+
+            if dist < threshold {
+                // Convert world_pos to (t, value) in automation space
+                let t = ((world_pos[0] - wf.position[0]) / wf.size[0]).clamp(0.0, 1.0);
+                let value = ((world_pos[1] - y_bot) / (y_top - y_bot)).clamp(0.0, 1.0);
+                return Some((i, t, value));
+            }
+        }
+    }
+    None
 }

@@ -1,4 +1,5 @@
 mod audio;
+mod automation;
 mod component;
 mod effects;
 mod events;
@@ -6,6 +7,8 @@ mod gpu;
 mod grid;
 mod history;
 mod hit_testing;
+mod instruments;
+mod midi;
 mod plugins;
 mod regions;
 mod rendering;
@@ -13,14 +16,18 @@ mod settings;
 mod storage;
 mod ui;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use gpu::{push_border, Camera, Gpu, InstanceRaw};
 pub(crate) use ui::transport::{TransportPanel, TRANSPORT_WIDTH};
 
 use grid::{grid_spacing_for_settings, snap_to_grid, DEFAULT_BPM};
 use hit_testing::{
     canonical_rect, compute_resize, full_audio_width_px, hit_test, hit_test_corner_resize,
-    hit_test_fade_curve_dot, hit_test_fade_handle, hit_test_waveform_edge, point_in_rect,
-    rects_overlap, targets_in_rect, WaveformEdgeHover, WAVEFORM_MIN_WIDTH_PX,
+    hit_test_fade_curve_dot, hit_test_fade_handle, hit_test_waveform_edge,
+    hit_test_automation_point, hit_test_automation_line,
+    point_in_rect, rects_overlap, targets_in_rect, WaveformEdgeHover, WAVEFORM_MIN_WIDTH_PX,
 };
 use regions::{
     ExportHover, ExportRegion, LoopHover, LoopRegion, SelectArea,
@@ -59,7 +66,7 @@ use winit::{
 // Canvas objects
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, PartialEq, SurrealValue)]
+#[derive(Clone, Debug, PartialEq, SurrealValue)]
 pub struct CanvasObject {
     pub position: [f32; 2],
     pub size: [f32; 2],
@@ -67,7 +74,7 @@ pub struct CanvasObject {
     pub border_radius: f32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum HitTarget {
     Object(usize),
     Waveform(usize),
@@ -77,8 +84,11 @@ pub(crate) enum HitTarget {
     ExportRegion(usize),
     ComponentDef(usize),
     ComponentInstance(usize),
+    MidiClip(usize),
+    InstrumentRegion(usize),
 }
 
+use automation::{AutomationData, AutomationParam};
 use history::Snapshot;
 
 
@@ -140,6 +150,33 @@ enum DragState {
         initial_size_w: f32,
         initial_offset_px: f32,
     },
+    DraggingAutomationPoint {
+        waveform_idx: usize,
+        param: AutomationParam,
+        point_idx: usize,
+        original_t: f32,
+        original_value: f32,
+    },
+    ResizingInstrumentRegion {
+        region_idx: usize,
+        anchor: [f32; 2],
+        nwse: bool,
+    },
+    ResizingMidiClip {
+        clip_idx: usize,
+        anchor: [f32; 2],
+        nwse: bool,
+    },
+    MovingMidiNote {
+        clip_idx: usize,
+        note_indices: Vec<usize>,
+        offsets: Vec<[f32; 2]>,
+    },
+    ResizingMidiNote {
+        clip_idx: usize,
+        note_idx: usize,
+        original_duration: f32,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -153,6 +190,15 @@ enum ComponentDefHover {
 
 #[derive(Clone, Copy, PartialEq)]
 enum EffectRegionHover {
+    None,
+    CornerNW(usize),
+    CornerNE(usize),
+    CornerSW(usize),
+    CornerSE(usize),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum InstrumentRegionHover {
     None,
     CornerNW(usize),
     CornerNE(usize),
@@ -174,6 +220,8 @@ enum ClipboardItem {
         Vec<(WaveformView, Option<AudioClipData>)>,
     ),
     ComponentInstance(component::ComponentInstance),
+    MidiClip(midi::MidiClip),
+    InstrumentRegion(instruments::InstrumentRegionSnapshot),
 }
 
 struct Clipboard {
@@ -246,6 +294,11 @@ struct MenuState {
     new_project: MenuId,
     save_project: MenuId,
     settings: MenuId,
+    undo: MenuId,
+    redo: MenuId,
+    copy: MenuId,
+    paste: MenuId,
+    select_all: MenuId,
     open_project_items: Vec<(MenuId, String)>,
     open_submenu: MudaSubmenu,
     initialized: bool,
@@ -293,6 +346,11 @@ struct App {
     select_area: Option<SelectArea>,
     component_def_hover: ComponentDefHover,
     effect_region_hover: EffectRegionHover,
+    instrument_region_hover: InstrumentRegionHover,
+    midi_clips: Vec<midi::MidiClip>,
+    instrument_regions: Vec<instruments::InstrumentRegion>,
+    editing_midi_clip: Option<usize>,
+    selected_midi_notes: Vec<usize>,
     editing_component: Option<usize>,
     editing_effect_name: Option<(usize, String)>,
     editing_waveform_name: Option<(usize, String)>,
@@ -307,6 +365,8 @@ struct App {
     plugin_editor: Option<ui::plugin_editor::PluginEditorWindow>,
     menu_state: Option<MenuState>,
     toast_manager: ui::toast::ToastManager,
+    automation_mode: bool,
+    active_automation_param: AutomationParam,
     cached_instances: Vec<InstanceRaw>,
     cached_wf_verts: Vec<WaveformVertex>,
     render_generation: u64,
@@ -318,9 +378,106 @@ struct App {
 }
 
 impl App {
+    #[cfg(test)]
+    pub(crate) fn new_headless() -> Self {
+        Self {
+            gpu: None,
+            camera: Camera::new(),
+            objects: Vec::new(),
+            waveforms: Vec::new(),
+            audio_clips: Vec::new(),
+            audio_engine: None,
+            recorder: None,
+            recording_waveform_idx: None,
+            last_canvas_click_world: [0.0; 2],
+            selected: Vec::new(),
+            drag: DragState::None,
+            mouse_pos: [0.0; 2],
+            hovered: None,
+            fade_handle_hovered: None,
+            fade_curve_hovered: None,
+            waveform_edge_hover: WaveformEdgeHover::None,
+            file_hovering: false,
+            modifiers: ModifiersState::empty(),
+            command_palette: None,
+            context_menu: None,
+            browser_context_path: None,
+            sample_browser: ui::browser::SampleBrowser::new(),
+            storage: None,
+            has_saved_state: false,
+            project_dirty: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            current_project_name: "test".into(),
+            effect_regions: Vec::new(),
+            plugin_blocks: Vec::new(),
+            components: Vec::new(),
+            component_instances: Vec::new(),
+            next_component_id: 1,
+            plugin_registry: effects::PluginRegistry::new(),
+            export_regions: Vec::new(),
+            export_hover: ExportHover::None,
+            loop_regions: Vec::new(),
+            loop_hover: LoopHover::None,
+            select_area: None,
+            component_def_hover: ComponentDefHover::None,
+            effect_region_hover: EffectRegionHover::None,
+            instrument_region_hover: InstrumentRegionHover::None,
+            midi_clips: Vec::new(),
+            instrument_regions: Vec::new(),
+            editing_midi_clip: None,
+            selected_midi_notes: Vec::new(),
+            editing_component: None,
+            editing_effect_name: None,
+            editing_waveform_name: None,
+            bpm: 120.0,
+            editing_bpm: None,
+            dragging_bpm: None,
+            last_click_time: std::time::Instant::now(),
+            last_click_world: [0.0; 2],
+            clipboard: Clipboard::new(),
+            settings: Settings::default(),
+            settings_window: None,
+            plugin_editor: None,
+            menu_state: None,
+            toast_manager: ui::toast::ToastManager::new(),
+            automation_mode: false,
+            active_automation_param: AutomationParam::Volume,
+            cached_instances: Vec::new(),
+            cached_wf_verts: Vec::new(),
+            render_generation: 1,
+            last_rendered_generation: 0,
+            last_rendered_camera_pos: [f32::NAN, f32::NAN],
+            last_rendered_camera_zoom: f32::NAN,
+            last_rendered_hovered: None,
+            last_rendered_selected_len: 0,
+        }
+    }
+
     fn mark_dirty(&mut self) {
         self.render_generation = self.render_generation.wrapping_add(1);
         self.project_dirty = true;
+    }
+
+    /// Tear down plugin GUIs and instances in the correct order before exit.
+    /// GUIs must be destroyed before plugin instances they reference.
+    fn shutdown_plugins(&mut self) {
+        // Stop audio engine first so the audio thread releases plugin locks
+        self.audio_engine = None;
+
+        // Destroy instrument region GUIs (single instance handles both GUI + audio)
+        for ir in &mut self.instrument_regions {
+            if let Ok(mut g) = ir.gui.lock() {
+                *g = None;
+            }
+        }
+
+        // Destroy plugin block GUIs
+        for pb in &mut self.plugin_blocks {
+            if let Ok(mut g) = pb.gui.lock() {
+                *g = None;
+            }
+        }
     }
 
     fn new(skip_load: bool) -> Self {
@@ -381,6 +538,8 @@ impl App {
             stored_component_instances,
             audio_clips,
             loaded_bpm,
+            stored_midi_clips,
+            stored_instrument_regions,
         ) = match loaded {
             Some(state) => {
                 println!(
@@ -434,6 +593,7 @@ impl App {
                         volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
                         disabled: sw.disabled,
                         sample_offset_px: sw.sample_offset_px,
+                        automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
                     })
                     .collect();
 
@@ -500,6 +660,8 @@ impl App {
                     state.component_instances,
                     audio_clips,
                     if state.bpm > 0.0 { state.bpm } else { DEFAULT_BPM },
+                    state.midi_clips,
+                    state.instrument_regions,
                 )
             }
             None => {
@@ -520,18 +682,51 @@ impl App {
                     Vec::new(),
                     Vec::new(),
                     DEFAULT_BPM,
+                    Vec::new(),
+                    Vec::new(),
                 )
             }
         };
 
-        let mut sample_browser = if let Some(expanded) = browser_expanded {
+        let settings = Settings::load();
+
+        // Sample library folders are stored globally in settings so they
+        // persist across restarts regardless of project save state.
+        // Merge: use settings folders as the authoritative source, but keep
+        // any project-specific folders that aren't already in settings.
+        let global_folders: Vec<PathBuf> = settings
+            .sample_library_folders
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let mut merged_folders = global_folders.clone();
+        for f in &browser_folders {
+            if !merged_folders.contains(f) {
+                merged_folders.push(f.clone());
+            }
+        }
+        let use_global = !settings.sample_library_folders.is_empty();
+        let mut sample_browser = if use_global {
+            // Rebuild expanded set: keep project expanded state, add any new global folders as expanded
+            let mut expanded = browser_expanded.unwrap_or_default();
+            for f in &global_folders {
+                if !browser_folders.contains(f) {
+                    expanded.insert(f.clone());
+                }
+            }
+            ui::browser::SampleBrowser::from_state(
+                merged_folders,
+                expanded,
+                browser_visible || !global_folders.is_empty(),
+            )
+        } else if let Some(expanded) = browser_expanded {
             ui::browser::SampleBrowser::from_state(browser_folders, expanded, browser_visible)
         } else {
             ui::browser::SampleBrowser::from_folders(browser_folders)
         };
         sample_browser.width = browser_width;
 
-        let mut settings = Settings::load();
+        let mut settings = settings;
 
         let device_name = if settings.audio_output_device == "No Device" {
             None
@@ -657,6 +852,43 @@ impl App {
             .collect();
         let next_component_id = restored_components.iter().map(|c| c.id).max().unwrap_or(0) + 1;
 
+        let restored_midi_clips: Vec<midi::MidiClip> = stored_midi_clips
+            .into_iter()
+            .map(|smc| midi::MidiClip {
+                position: smc.position,
+                size: smc.size,
+                color: smc.color,
+                notes: smc.notes.into_iter().map(|n| midi::MidiNote {
+                    pitch: n.pitch as u8,
+                    start_px: n.start_px,
+                    duration_px: n.duration_px,
+                    velocity: n.velocity as u8,
+                }).collect(),
+                pitch_range: (smc.pitch_low as u8, smc.pitch_high as u8),
+            })
+            .collect();
+
+        let restored_instrument_regions: Vec<instruments::InstrumentRegion> = stored_instrument_regions
+            .into_iter()
+            .map(|sir| {
+                let mut ir = instruments::InstrumentRegion::new(sir.position, sir.size);
+                ir.name = sir.name;
+                ir.plugin_id = sir.plugin_id;
+                ir.plugin_name = sir.plugin_name;
+                if !sir.state.is_empty() {
+                    ir.pending_state = Some(sir.state);
+                }
+                if !sir.params.is_empty() {
+                    ir.pending_params = Some(sir.params.chunks(8).map(|chunk| {
+                        let mut bytes = [0u8; 8];
+                        bytes[..chunk.len()].copy_from_slice(chunk);
+                        f64::from_le_bytes(bytes)
+                    }).collect());
+                }
+                ir
+            })
+            .collect();
+
         Self {
             gpu: None,
             camera,
@@ -699,6 +931,11 @@ impl App {
             select_area: None,
             component_def_hover: ComponentDefHover::None,
             effect_region_hover: EffectRegionHover::None,
+            instrument_region_hover: InstrumentRegionHover::None,
+            midi_clips: restored_midi_clips,
+            instrument_regions: restored_instrument_regions,
+            editing_midi_clip: None,
+            selected_midi_notes: Vec::new(),
             editing_component: None,
             editing_effect_name: None,
             editing_waveform_name: None,
@@ -713,6 +950,8 @@ impl App {
             plugin_editor: None,
             menu_state: None,
             toast_manager: ui::toast::ToastManager::new(),
+            automation_mode: false,
+            active_automation_param: AutomationParam::Volume,
             cached_instances: Vec::with_capacity(2048),
             cached_wf_verts: Vec::with_capacity(32768),
             render_generation: 1,
@@ -750,8 +989,6 @@ impl App {
                     bypass: pb.bypass,
                     state: pb.gui.lock().ok()
                         .and_then(|g| g.as_ref().and_then(|gui| gui.get_state()))
-                        .or_else(|| pb.instance.lock().ok()
-                            .and_then(|g| g.as_ref().and_then(|inst| inst.get_state().ok())))
                         .unwrap_or_default(),
                     params: {
                         let vals = pb.gui.lock().ok()
@@ -799,6 +1036,8 @@ impl App {
                     volume: wf.volume,
                     disabled: wf.disabled,
                     sample_offset_px: wf.sample_offset_px,
+                    automation_volume: wf.automation.volume_lane().points.iter().map(|p| [p.t, p.value]).collect(),
+                    automation_pan: wf.automation.pan_lane().points.iter().map(|p| [p.t, p.value]).collect(),
                 })
                 .collect();
 
@@ -836,6 +1075,35 @@ impl App {
                 components: stored_components,
                 component_instances: stored_instances,
                 bpm: self.bpm,
+                midi_clips: self.midi_clips.iter().map(|mc| storage::StoredMidiClip {
+                    position: mc.position,
+                    size: mc.size,
+                    color: mc.color,
+                    notes: mc.notes.iter().map(|n| storage::StoredMidiNote {
+                        pitch: n.pitch as u32,
+                        start_px: n.start_px,
+                        duration_px: n.duration_px,
+                        velocity: n.velocity as u32,
+                    }).collect(),
+                    pitch_low: mc.pitch_range.0 as u32,
+                    pitch_high: mc.pitch_range.1 as u32,
+                }).collect(),
+                instrument_regions: self.instrument_regions.iter().map(|ir| storage::StoredInstrumentRegion {
+                    position: ir.position,
+                    size: ir.size,
+                    name: ir.name.clone(),
+                    plugin_id: ir.plugin_id.clone(),
+                    plugin_name: ir.plugin_name.clone(),
+                    state: ir.gui.lock().ok()
+                        .and_then(|g| g.as_ref().and_then(|gui| gui.get_state()))
+                        .unwrap_or_default(),
+                    params: {
+                        let vals = ir.gui.lock().ok()
+                            .and_then(|g| g.as_ref().map(|gui| gui.get_all_parameters()))
+                            .unwrap_or_default();
+                        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+                    },
+                }).collect(),
             };
             storage.save_project_state(state);
 
@@ -929,6 +1197,19 @@ impl App {
             } else {
                 Some(SettingsWindow::new())
             };
+            self.request_redraw();
+        } else if id == menu.undo {
+            self.undo();
+        } else if id == menu.redo {
+            self.redo();
+        } else if id == menu.copy {
+            self.copy_selected();
+            self.request_redraw();
+        } else if id == menu.paste {
+            self.paste_clipboard();
+            self.request_redraw();
+        } else if id == menu.select_all {
+            self.execute_command(CommandAction::SelectAll);
             self.request_redraw();
         } else if let Some(project_path) = menu
             .open_project_items
@@ -1054,6 +1335,7 @@ impl App {
                 volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
                 disabled: sw.disabled,
                 sample_offset_px: sw.sample_offset_px,
+                automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
             })
             .collect();
 
@@ -1191,31 +1473,32 @@ impl App {
         self.command_palette = None;
         self.context_menu = None;
 
-        // If plugins are already scanned, load instances for restored plugin blocks now
+        // If plugins are already scanned, open vst3-gui instances for restored plugin blocks
         if self.plugin_registry.is_scanned() {
             for pb in &mut self.plugin_blocks {
-                let has_instance = pb.instance.lock().ok().map_or(false, |g| g.is_some());
-                if !has_instance {
-                    if let Some(instance) =
-                        self.plugin_registry
-                            .load_plugin(&pb.plugin_id, 48000.0, 512)
-                    {
-                        {
-                            let mut g = pb.instance.lock().unwrap();
-                            *g = Some(instance);
+                let has_gui = pb.gui.lock().ok().map_or(false, |g| g.is_some());
+                if !has_gui {
+                    if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
+                        pb.plugin_path = entry.info.path.clone();
+                    }
+                    let path = pb.plugin_path.to_string_lossy().to_string();
+                    if !path.is_empty() {
+                        if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &pb.plugin_id, &pb.plugin_name) {
+                            gui.hide();
+                            gui.setup_processing(48000.0, 512);
                             if let Some(state) = &pb.pending_state {
-                                if let Some(inst) = g.as_mut() {
-                                    match inst.set_state(state) {
-                                        Ok(()) => println!("  Restored plugin state ({} bytes)", state.len()),
-                                        Err(e) => println!("  Failed to restore rack state: {} (will restore via GUI)", e),
-                                    }
-                                }
+                                gui.set_state(state);
+                                println!("  Restored plugin state ({} bytes)", state.len());
                             }
+                            if let Some(params) = &pb.pending_params {
+                                gui.set_all_parameters(params);
+                                println!("  Restored {} plugin parameters", params.len());
+                            }
+                            if let Ok(mut g) = pb.gui.lock() {
+                                *g = Some(gui);
+                            }
+                            println!("  Loaded plugin '{}', path='{}'", pb.plugin_name, pb.plugin_path.display());
                         }
-                        if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
-                            pb.plugin_path = entry.info.path.clone();
-                        }
-                        println!("  Loaded plugin '{}', path='{}'", pb.plugin_name, pb.plugin_path.display());
                     }
                 }
             }
@@ -1273,6 +1556,8 @@ impl App {
             let mut fade_out_curves: Vec<f32> = Vec::new();
             let mut volumes: Vec<f32> = Vec::new();
             let mut sample_offsets: Vec<f32> = Vec::new();
+            let mut vol_autos: Vec<Vec<(f32, f32)>> = Vec::new();
+            let mut pan_autos: Vec<Vec<(f32, f32)>> = Vec::new();
 
             for (i, wf) in self.waveforms.iter().enumerate() {
                 if wf.disabled || i >= self.audio_clips.len() {
@@ -1287,6 +1572,8 @@ impl App {
                 fade_out_curves.push(wf.fade_out_curve);
                 volumes.push(wf.volume);
                 sample_offsets.push(wf.sample_offset_px);
+                vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
+                pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
             }
 
             // Add virtual clips for each component instance
@@ -1318,13 +1605,15 @@ impl App {
                             fade_out_curves.push(wf.fade_out_curve);
                             volumes.push(wf.volume);
                             sample_offsets.push(wf.sample_offset_px);
+                            vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
+                            pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
                         }
                     }
                 }
             }
 
             let owned_clips: Vec<AudioClipData> = clips.iter().map(|c| (*c).clone()).collect();
-            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &sample_offsets);
+            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &sample_offsets, &vol_autos, &pan_autos);
 
             let regions: Vec<audio::AudioEffectRegion> = self
                 .effect_regions
@@ -1338,13 +1627,14 @@ impl App {
                         y_end: er.position[1] + er.size[1],
                         plugins: block_indices
                             .iter()
-                            .map(|&i| self.plugin_blocks[i].instance.clone())
+                            .map(|&i| self.plugin_blocks[i].gui.clone())
                             .collect(),
                     }
                 })
                 .collect();
             engine.update_effect_regions(regions);
         }
+        self.sync_instrument_regions();
     }
 
     fn add_loop_area(&mut self) {
@@ -1427,6 +1717,93 @@ impl App {
         self.selected.push(HitTarget::ExportRegion(idx));
         self.mark_dirty();
         self.request_redraw();
+    }
+
+    fn add_instrument_area(&mut self) {
+        self.push_undo();
+        let (pos, size) = if let Some(sa) = self.select_area.take() {
+            let x0 = snap_to_grid(sa.position[0], &self.settings, self.camera.zoom, self.bpm);
+            let x1 = snap_to_grid(
+                sa.position[0] + sa.size[0],
+                &self.settings,
+                self.camera.zoom,
+                self.bpm,
+            );
+            ([x0, sa.position[1]], [x1 - x0, sa.size[1]])
+        } else {
+            let (sw, sh, _) = self.screen_info();
+            let center = self.camera.screen_to_world([sw * 0.5, sh * 0.5]);
+            let w = instruments::INSTRUMENT_REGION_DEFAULT_WIDTH;
+            let h = instruments::INSTRUMENT_REGION_DEFAULT_HEIGHT;
+            ([center[0] - w * 0.5, center[1] - h * 0.5], [w, h])
+        };
+        self.instrument_regions
+            .push(instruments::InstrumentRegion::new(pos, size));
+        let idx = self.instrument_regions.len() - 1;
+        self.selected.clear();
+        self.selected.push(HitTarget::InstrumentRegion(idx));
+        self.mark_dirty();
+        self.request_redraw();
+    }
+
+    fn add_midi_clip(&mut self) {
+        self.push_undo();
+        let (sw, sh, _) = self.screen_info();
+        let center = self.camera.screen_to_world([sw * 0.5, sh * 0.5]);
+        let size = midi::MIDI_CLIP_DEFAULT_SIZE;
+        let pos = [center[0] - size[0] * 0.5, center[1] - size[1] * 0.5];
+        self.midi_clips.push(midi::MidiClip::new(pos));
+        let idx = self.midi_clips.len() - 1;
+        self.selected.clear();
+        self.selected.push(HitTarget::MidiClip(idx));
+        self.mark_dirty();
+        self.request_redraw();
+    }
+
+    fn sync_instrument_regions(&self) {
+        if let Some(engine) = &self.audio_engine {
+            let mut instrument_regions = Vec::new();
+            for ir in &self.instrument_regions {
+                if !ir.has_plugin() {
+                    continue;
+                }
+                let mut midi_events = Vec::new();
+                // Find MIDI clips that spatially overlap this region
+                for mc in &self.midi_clips {
+                    if !rects_overlap(ir.position, ir.size, mc.position, mc.size) {
+                        continue;
+                    }
+                    for note in &mc.notes {
+                        let note_on_time = (mc.position[0] + note.start_px) as f64
+                            / PIXELS_PER_SECOND as f64;
+                        let note_off_time = note_on_time
+                            + note.duration_px as f64 / PIXELS_PER_SECOND as f64;
+                        midi_events.push(audio::TimedMidiEvent {
+                            time_secs: note_on_time,
+                            note: note.pitch,
+                            velocity: note.velocity,
+                            is_note_on: true,
+                        });
+                        midi_events.push(audio::TimedMidiEvent {
+                            time_secs: note_off_time,
+                            note: note.pitch,
+                            velocity: 0,
+                            is_note_on: false,
+                        });
+                    }
+                }
+                midi_events.sort_by(|a, b| a.time_secs.partial_cmp(&b.time_secs).unwrap());
+                instrument_regions.push(audio::AudioInstrumentRegion {
+                    x_start_px: ir.position[0],
+                    x_end_px: ir.position[0] + ir.size[0],
+                    y_start: ir.position[1],
+                    y_end: ir.position[1] + ir.size[1],
+                    gui: ir.gui.clone(),
+                    midi_events,
+                });
+            }
+            engine.update_instrument_regions(instrument_regions);
+        }
     }
 
     fn sync_loop_region(&self) {
@@ -1519,6 +1896,7 @@ impl App {
                 volume: 1.0,
                 disabled: false,
                 sample_offset_px: 0.0,
+                automation: AutomationData::new(),
             });
             self.audio_clips.push(AudioClipData {
                 samples: Arc::new(Vec::new()),
@@ -1618,7 +1996,7 @@ impl App {
                     y_end: er.position[1] + er.size[1],
                     plugins: block_indices
                         .iter()
-                        .map(|&i| self.plugin_blocks[i].instance.clone())
+                        .map(|&i| self.plugin_blocks[i].gui.clone())
                         .collect(),
                 }
             })
@@ -1664,6 +2042,7 @@ impl App {
                     DragState::DraggingFade { .. } => CursorIcon::EwResize,
                     DragState::ResizingWaveform { .. } => CursorIcon::EwResize,
                     DragState::DraggingFadeCurve { .. } => CursorIcon::NsResize,
+                    DragState::DraggingAutomationPoint { .. } => CursorIcon::Grabbing,
                     DragState::ResizingComponentDef { nwse, .. } => {
                         if *nwse {
                             CursorIcon::NwseResize
@@ -1709,7 +2088,12 @@ impl App {
                                 ComponentDefHover::CornerNE(_) | ComponentDefHover::CornerSW(_) => {
                                     CursorIcon::NeswResize
                                 }
-                                ComponentDefHover::None => match self.effect_region_hover {
+                                ComponentDefHover::None => match self.instrument_region_hover {
+                                    InstrumentRegionHover::CornerNW(_)
+                                    | InstrumentRegionHover::CornerSE(_) => CursorIcon::NwseResize,
+                                    InstrumentRegionHover::CornerNE(_)
+                                    | InstrumentRegionHover::CornerSW(_) => CursorIcon::NeswResize,
+                                    InstrumentRegionHover::None => match self.effect_region_hover {
                                     EffectRegionHover::CornerNW(_)
                                     | EffectRegionHover::CornerSE(_) => CursorIcon::NwseResize,
                                     EffectRegionHover::CornerNE(_)
@@ -1739,9 +2123,11 @@ impl App {
                                         },
                                     },
                                 },
+                                },
                             }
                         }
                     }
+                    _ => CursorIcon::Default,
                 };
             gpu.window.set_cursor(icon);
         }
@@ -1779,6 +2165,8 @@ impl App {
             &self.export_regions,
             &self.components,
             &self.component_instances,
+            &self.midi_clips,
+            &self.instrument_regions,
             self.editing_component,
             world,
             &self.camera,
@@ -1805,6 +2193,31 @@ impl App {
                 [handle_sz, handle_sz],
             ) {
                 self.component_def_hover = ComponentDefHover::CornerSE(ci);
+                break;
+            }
+        }
+
+        self.instrument_region_hover = InstrumentRegionHover::None;
+        for (i, ir) in self.instrument_regions.iter().enumerate() {
+            let handle_sz = 24.0 / self.camera.zoom;
+            let hs = handle_sz * 0.5;
+            let p = ir.position;
+            let s = ir.size;
+            if point_in_rect(world, [p[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
+                self.instrument_region_hover = InstrumentRegionHover::CornerNW(i);
+                break;
+            } else if point_in_rect(world, [p[0] + s[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
+                self.instrument_region_hover = InstrumentRegionHover::CornerNE(i);
+                break;
+            } else if point_in_rect(world, [p[0] - hs, p[1] + s[1] - hs], [handle_sz, handle_sz]) {
+                self.instrument_region_hover = InstrumentRegionHover::CornerSW(i);
+                break;
+            } else if point_in_rect(
+                world,
+                [p[0] + s[0] - hs, p[1] + s[1] - hs],
+                [handle_sz, handle_sz],
+            ) {
+                self.instrument_region_hover = InstrumentRegionHover::CornerSE(i);
                 break;
             }
         }
@@ -1928,6 +2341,8 @@ impl App {
                 }
             }
             HitTarget::ComponentInstance(i) => self.component_instances[*i].position = pos,
+            HitTarget::MidiClip(i) => self.midi_clips[*i].position = pos,
+            HitTarget::InstrumentRegion(i) => self.instrument_regions[*i].position = pos,
         }
     }
 
@@ -1941,6 +2356,8 @@ impl App {
             HitTarget::ExportRegion(i) => self.export_regions[*i].position,
             HitTarget::ComponentDef(i) => self.components[*i].position,
             HitTarget::ComponentInstance(i) => self.component_instances[*i].position,
+            HitTarget::MidiClip(i) => self.midi_clips[*i].position,
+            HitTarget::InstrumentRegion(i) => self.instrument_regions[*i].position,
         }
     }
 
@@ -2009,6 +2426,20 @@ impl App {
                             new_selected.push(HitTarget::ComponentInstance(
                                 self.component_instances.len() - 1,
                             ));
+                        }
+                    }
+                    HitTarget::MidiClip(i) => {
+                        if i < self.midi_clips.len() {
+                            let mc = self.midi_clips[i].clone();
+                            self.midi_clips.push(mc);
+                            new_selected.push(HitTarget::MidiClip(self.midi_clips.len() - 1));
+                        }
+                    }
+                    HitTarget::InstrumentRegion(i) => {
+                        if i < self.instrument_regions.len() {
+                            let ir = self.instrument_regions[i].clone();
+                            self.instrument_regions.push(ir);
+                            new_selected.push(HitTarget::InstrumentRegion(self.instrument_regions.len() - 1));
                         }
                     }
                     HitTarget::ComponentDef(i) => {
@@ -2247,6 +2678,23 @@ impl App {
                 self.settings.triplet_grid = !self.settings.triplet_grid;
                 self.settings.save();
             }
+            CommandAction::ToggleAutomation => {
+                self.automation_mode = !self.automation_mode;
+                if self.automation_mode {
+                    self.active_automation_param = crate::automation::AutomationParam::Volume;
+                }
+                self.mark_dirty();
+            }
+            CommandAction::AddVolumeAutomation => {
+                self.automation_mode = true;
+                self.active_automation_param = crate::automation::AutomationParam::Volume;
+                self.mark_dirty();
+            }
+            CommandAction::AddPanAutomation => {
+                self.automation_mode = true;
+                self.active_automation_param = crate::automation::AutomationParam::Pan;
+                self.mark_dirty();
+            }
             CommandAction::TestToast => {
                 self.toast_manager
                     .push("This is an error toast", ui::toast::ToastKind::Error);
@@ -2311,6 +2759,32 @@ impl App {
             CommandAction::AddEffectsArea => {
                 self.add_effect_area();
             }
+            CommandAction::AddInstrumentArea => {
+                self.add_instrument_area();
+            }
+            CommandAction::AddMidiClip => {
+                self.add_midi_clip();
+            }
+            CommandAction::AddInstrument => {
+                self.ensure_plugins_scanned();
+                let entries: Vec<PluginPickerEntry> = self
+                    .plugin_registry
+                    .instruments
+                    .iter()
+                    .map(|e| PluginPickerEntry {
+                        name: e.info.name.clone(),
+                        manufacturer: e.info.manufacturer.clone(),
+                        unique_id: e.info.unique_id.clone(),
+                    })
+                    .collect();
+                if let Some(p) = &mut self.command_palette {
+                    p.mode = PaletteMode::InstrumentPicker;
+                    p.search_text.clear();
+                    p.set_plugin_entries(entries);
+                }
+                self.request_redraw();
+                return;
+            }
             CommandAction::AddPlugin => {
                 self.ensure_plugins_scanned();
                 let entries: Vec<PluginPickerEntry> = self
@@ -2358,6 +2832,8 @@ impl App {
             &self.export_regions,
             &self.components,
             &self.component_instances,
+            &self.midi_clips,
+            &self.instrument_regions,
             self.editing_component,
             world,
             &self.camera,
@@ -2451,6 +2927,7 @@ impl App {
             volume: orig_volume,
             disabled: false,
             sample_offset_px: 0.0,
+            automation: AutomationData::new(),
         };
 
         let right_clip = AudioClipData {
@@ -2479,6 +2956,7 @@ impl App {
             volume: orig_volume,
             disabled: false,
             sample_offset_px: 0.0,
+            automation: AutomationData::new(),
         };
 
         self.waveforms[wf_idx] = left_waveform;
@@ -2749,6 +3227,22 @@ impl App {
                         new_selected.push(HitTarget::Object(self.objects.len() - 1));
                     }
                 }
+                HitTarget::MidiClip(i) => {
+                    if i < self.midi_clips.len() {
+                        let mut mc = self.midi_clips[i].clone();
+                        mc.position[0] += mc.size[0];
+                        self.midi_clips.push(mc);
+                        new_selected.push(HitTarget::MidiClip(self.midi_clips.len() - 1));
+                    }
+                }
+                HitTarget::InstrumentRegion(i) => {
+                    if i < self.instrument_regions.len() {
+                        let mut ir = self.instrument_regions[i].clone();
+                        ir.position[0] += ir.size[0];
+                        self.instrument_regions.push(ir);
+                        new_selected.push(HitTarget::InstrumentRegion(self.instrument_regions.len() - 1));
+                    }
+                }
             }
         }
 
@@ -2838,6 +3332,28 @@ impl App {
                         ));
                     }
                 }
+                HitTarget::MidiClip(i) => {
+                    if *i < self.midi_clips.len() {
+                        self.clipboard.items.push(ClipboardItem::MidiClip(
+                            self.midi_clips[*i].clone(),
+                        ));
+                    }
+                }
+                HitTarget::InstrumentRegion(i) => {
+                    if *i < self.instrument_regions.len() {
+                        let ir = &self.instrument_regions[*i];
+                        self.clipboard.items.push(ClipboardItem::InstrumentRegion(
+                            instruments::InstrumentRegionSnapshot {
+                                position: ir.position,
+                                size: ir.size,
+                                name: ir.name.clone(),
+                                plugin_id: ir.plugin_id.clone(),
+                                plugin_name: ir.plugin_name.clone(),
+                                plugin_path: ir.plugin_path.clone(),
+                            },
+                        ));
+                    }
+                }
             }
         }
     }
@@ -2861,6 +3377,8 @@ impl App {
                 ClipboardItem::ExportRegion(x) => x.position,
                 ClipboardItem::ComponentDef(d, _) => d.position,
                 ClipboardItem::ComponentInstance(ci) => ci.position,
+                ClipboardItem::MidiClip(mc) => mc.position,
+                ClipboardItem::InstrumentRegion(ir) => ir.position,
             };
             if pos[0] < min_x {
                 min_x = pos[0];
@@ -2960,6 +3478,23 @@ impl App {
                         self.component_instances.len() - 1,
                     ));
                 }
+                ClipboardItem::MidiClip(mut mc) => {
+                    mc.position[0] += dx;
+                    mc.position[1] += dy;
+                    self.midi_clips.push(mc);
+                    new_selected.push(HitTarget::MidiClip(self.midi_clips.len() - 1));
+                }
+                ClipboardItem::InstrumentRegion(snap) => {
+                    let mut ir = instruments::InstrumentRegion::new(snap.position, snap.size);
+                    ir.position[0] += dx;
+                    ir.position[1] += dy;
+                    ir.name = snap.name;
+                    ir.plugin_id = snap.plugin_id;
+                    ir.plugin_name = snap.plugin_name;
+                    ir.plugin_path = snap.plugin_path;
+                    self.instrument_regions.push(ir);
+                    new_selected.push(HitTarget::InstrumentRegion(self.instrument_regions.len() - 1));
+                }
             }
         }
 
@@ -3036,6 +3571,22 @@ impl App {
                 _ => None,
             })
             .collect();
+        let mut mc_indices: Vec<usize> = self
+            .selected
+            .iter()
+            .filter_map(|t| match t {
+                HitTarget::MidiClip(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
+        let mut ir_indices: Vec<usize> = self
+            .selected
+            .iter()
+            .filter_map(|t| match t {
+                HitTarget::InstrumentRegion(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
 
         obj_indices.sort_unstable_by(|a, b| b.cmp(a));
         wf_indices.sort_unstable_by(|a, b| b.cmp(a));
@@ -3045,6 +3596,8 @@ impl App {
         xr_indices.sort_unstable_by(|a, b| b.cmp(a));
         comp_indices.sort_unstable_by(|a, b| b.cmp(a));
         inst_indices.sort_unstable_by(|a, b| b.cmp(a));
+        mc_indices.sort_unstable_by(|a, b| b.cmp(a));
+        ir_indices.sort_unstable_by(|a, b| b.cmp(a));
 
         // Delete instances first
         for &i in &inst_indices {
@@ -3117,6 +3670,16 @@ impl App {
                 self.export_regions.remove(i);
             }
         }
+        for &i in &mc_indices {
+            if i < self.midi_clips.len() {
+                self.midi_clips.remove(i);
+            }
+        }
+        for &i in &ir_indices {
+            if i < self.instrument_regions.len() {
+                self.instrument_regions.remove(i);
+            }
+        }
 
         self.selected.clear();
         self.sync_audio_clips();
@@ -3173,6 +3736,7 @@ impl App {
                 volume: 1.0,
                 disabled: false,
                 sample_offset_px: 0.0,
+                automation: AutomationData::new(),
             });
             self.audio_clips.push(AudioClipData {
                 samples: loaded.samples,
@@ -3258,13 +3822,41 @@ fn build_app_menu(storage: Option<&Storage>) -> MenuState {
 
     // -- Edit menu --
     let edit_menu = Submenu::new("Edit", true);
-    let _ = edit_menu.append(&PredefinedMenuItem::undo(None));
-    let _ = edit_menu.append(&PredefinedMenuItem::redo(None));
+    let undo_item = MenuItem::new(
+        "Undo",
+        true,
+        Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyZ)),
+    );
+    let redo_item = MenuItem::new(
+        "Redo",
+        true,
+        Some(Accelerator::new(
+            Some(Modifiers::SUPER | Modifiers::SHIFT),
+            Code::KeyZ,
+        )),
+    );
+    let copy_item = MenuItem::new(
+        "Copy",
+        true,
+        Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyC)),
+    );
+    let paste_item = MenuItem::new(
+        "Paste",
+        true,
+        Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyV)),
+    );
+    let select_all_item = MenuItem::new(
+        "Select All",
+        true,
+        Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyA)),
+    );
+    let _ = edit_menu.append(&undo_item);
+    let _ = edit_menu.append(&redo_item);
     let _ = edit_menu.append(&PredefinedMenuItem::separator());
-    let _ = edit_menu.append(&PredefinedMenuItem::copy(None));
-    let _ = edit_menu.append(&PredefinedMenuItem::paste(None));
+    let _ = edit_menu.append(&copy_item);
+    let _ = edit_menu.append(&paste_item);
     let _ = edit_menu.append(&PredefinedMenuItem::separator());
-    let _ = edit_menu.append(&PredefinedMenuItem::select_all(None));
+    let _ = edit_menu.append(&select_all_item);
     let _ = menu.append(&edit_menu);
 
     MenuState {
@@ -3272,6 +3864,11 @@ fn build_app_menu(storage: Option<&Storage>) -> MenuState {
         new_project: new_project_item.id().clone(),
         save_project: save_project_item.id().clone(),
         settings: settings_item.id().clone(),
+        undo: undo_item.id().clone(),
+        redo: redo_item.id().clone(),
+        copy: copy_item.id().clone(),
+        paste: paste_item.id().clone(),
+        select_all: select_all_item.id().clone(),
         open_project_items: open_items,
         open_submenu,
         initialized: false,

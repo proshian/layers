@@ -22,9 +22,9 @@ const CHEVRON_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
 const ADD_BTN_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.50];
 const ADD_BTN_HOVER: [f32; 4] = [1.0, 1.0, 1.0, 0.80];
 
-const PLUGIN_SECTION_BG: [f32; 4] = [0.12, 0.10, 0.16, 1.0];
-const PLUGIN_SECTION_HEADER_BG: [f32; 4] = [0.14, 0.11, 0.20, 1.0];
-const PLUGIN_FX_BADGE: [f32; 4] = [0.55, 0.28, 0.85, 0.60];
+const PLUGIN_SECTION_BG: [f32; 4] = [0.10, 0.12, 0.16, 1.0];
+const PLUGIN_SECTION_HEADER_BG: [f32; 4] = [0.11, 0.14, 0.20, 1.0];
+const PLUGIN_FX_BADGE: [f32; 4] = [0.25, 0.50, 0.90, 0.60];
 
 #[derive(Clone)]
 pub enum EntryKind {
@@ -450,14 +450,14 @@ impl SampleBrowser {
                         });
                     }
 
-                    // Purple dot
+                    // Blue dot
                     let dot_sz = 5.0 * scale;
                     let dot_x = 12.0 * scale;
                     let dot_y = y + (item_h - dot_sz) * 0.5;
                     out.push(InstanceRaw {
                         position: [dot_x, dot_y],
                         size: [dot_sz, dot_sz],
-                        color: [0.60, 0.35, 0.90, 0.70],
+                        color: [0.30, 0.55, 0.95, 0.70],
                         border_radius: dot_sz * 0.5,
                     });
                 }
@@ -595,7 +595,7 @@ impl SampleBrowser {
                         font_size: 10.0 * scale,
                         line_height: 12.0 * scale,
                         max_width: w * 0.6,
-                        color: [160, 140, 190, 200],
+                        color: [140, 160, 200, 200],
                         weight: 600,
                         is_header: false,
                     });
@@ -611,7 +611,7 @@ impl SampleBrowser {
                         font_size: font_sz,
                         line_height: line_h,
                         max_width: w - text_x - 12.0 * scale,
-                        color: [190, 170, 210, 255],
+                        color: [170, 190, 220, 255],
                         weight: 400,
                         is_header: false,
                     });

@@ -5,8 +5,21 @@ impl App {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
             self.sample_browser.add_folder(folder);
             self.sample_browser.visible = true;
+            self.save_browser_folders_to_settings();
+            self.mark_dirty();
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn save_browser_folders_to_settings(&self) {
+        let mut settings = crate::settings::Settings::load();
+        settings.sample_library_folders = self
+            .sample_browser
+            .root_folders
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        settings.save();
     }
 
     pub(crate) fn ensure_plugins_scanned(&mut self) {
@@ -27,32 +40,59 @@ impl App {
             .collect();
         self.sample_browser.set_plugins(entries);
 
-        // Reload any saved plugin blocks that were waiting for the scanner
+        // Reload any saved plugin blocks that were waiting for the scanner.
+        // Open with full GUI but immediately hide — state is restored, user can show() later.
         for pb in &mut self.plugin_blocks {
-            let has_instance = pb.instance.lock().ok().map_or(false, |g| g.is_some());
-            if !has_instance {
-                if let Some(instance) =
-                    self.plugin_registry
-                        .load_plugin(&pb.plugin_id, 48000.0, 512)
-                {
-                    {
-                        let mut g = pb.instance.lock().unwrap();
-                        *g = Some(instance);
-                        // Try to restore rack instance state (keep pending_state for GUI)
+            let has_gui = pb.gui.lock().ok().map_or(false, |g| g.is_some());
+            if !has_gui {
+                // Update plugin_path from registry
+                if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
+                    pb.plugin_path = entry.info.path.clone();
+                }
+                let path = pb.plugin_path.to_string_lossy().to_string();
+                if !path.is_empty() {
+                    if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &pb.plugin_id, &pb.plugin_name) {
+                        gui.hide();
+                        gui.setup_processing(48000.0, 512);
                         if let Some(state) = &pb.pending_state {
-                            if let Some(inst) = g.as_mut() {
-                                match inst.set_state(state) {
-                                    Ok(()) => println!("  Restored plugin state ({} bytes)", state.len()),
-                                    Err(e) => println!("  Failed to restore rack state: {} (will restore via GUI)", e),
-                                }
-                            }
+                            gui.set_state(state);
+                            println!("  Restored plugin state ({} bytes)", state.len());
                         }
+                        if let Some(params) = &pb.pending_params {
+                            gui.set_all_parameters(params);
+                            println!("  Restored {} plugin parameters", params.len());
+                        }
+                        if let Ok(mut g) = pb.gui.lock() {
+                            *g = Some(gui);
+                        }
+                        println!("  Reloaded plugin '{}'", pb.plugin_name);
                     }
-                    // Also update plugin_path from registry
-                    if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
-                        pb.plugin_path = entry.info.path.clone();
+                }
+            }
+        }
+        // Reload any saved instrument regions that were waiting for the scanner
+        for ir in &mut self.instrument_regions {
+            if ir.plugin_id.is_empty() {
+                continue;
+            }
+            let has_gui = ir.gui.lock().ok().map_or(false, |g| g.is_some());
+            if !has_gui {
+                if let Some(entry) = self.plugin_registry.instruments.iter().find(|e| e.info.unique_id == ir.plugin_id) {
+                    ir.plugin_path = entry.info.path.clone();
+                }
+                let path = ir.plugin_path.to_string_lossy().to_string();
+                if !path.is_empty() {
+                    if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &ir.plugin_id, &ir.plugin_name) {
+                        gui.hide();
+                        gui.setup_processing(48000.0, 512);
+                        if let Some(state) = &ir.pending_state {
+                            gui.set_state(state);
+                        }
+                        if let Ok(mut g) = ir.gui.lock() {
+                            *g = Some(gui);
+                        }
+                        println!("  Reloaded instrument '{}'", ir.plugin_name);
                     }
-                    println!("  Reloaded plugin '{}'", pb.plugin_name);
                 }
             }
         }
@@ -73,38 +113,28 @@ impl App {
             .map(|e| e.info.path.clone())
             .unwrap_or_default();
 
-        let mut pb = effects::PluginBlock::new(
+        let pb = effects::PluginBlock::new(
             position,
             plugin_id.to_string(),
             plugin_name.to_string(),
             plugin_path,
         );
 
-        if let Some(instance) = self
-            .plugin_registry
-            .load_plugin(plugin_id, sample_rate, block_size)
-        {
-            pb.instance = Arc::new(std::sync::Mutex::new(Some(instance)));
-        }
-
-        self.plugin_blocks.push(pb);
-        let idx = self.plugin_blocks.len() - 1;
-        println!("  Added plugin block '{}'", plugin_name);
-        self.sync_audio_clips();
-
-        // Try to open native VST3 GUI
-        let pb = &self.plugin_blocks[idx];
+        // Open vst3-gui instance (single instance for both GUI and audio)
         let path = pb.plugin_path.to_string_lossy().to_string();
         if !path.is_empty() {
-            let uid = pb.plugin_id.clone();
-            let name = pb.plugin_name.clone();
-            if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &uid, &name) {
-                println!("  Opened native GUI for '{}'", name);
+            if let Some(gui) = vst3_gui::Vst3Gui::open(&path, plugin_id, plugin_name) {
+                gui.setup_processing(sample_rate, block_size as i32);
+                println!("  Opened native GUI for '{}'", plugin_name);
                 if let Ok(mut g) = pb.gui.lock() {
                     *g = Some(gui);
                 }
             }
         }
+
+        self.plugin_blocks.push(pb);
+        println!("  Added plugin block '{}'", plugin_name);
+        self.sync_audio_clips();
     }
 
     pub(crate) fn add_plugin_to_selected_effect_region(&mut self, plugin_id: &str, plugin_name: &str) {
@@ -158,20 +188,6 @@ impl App {
                     pb.plugin_path = entry.info.path.clone();
                 }
             }
-            let has_instance = pb.instance.lock().ok().map_or(false, |g| g.is_some());
-            if !has_instance {
-                if let Some(instance) = self.plugin_registry.load_plugin(&pb.plugin_id, 48000.0, 512) {
-                    let mut g = pb.instance.lock().unwrap();
-                    *g = Some(instance);
-                    // Try to restore rack instance state (may fail for some plugins, that's ok —
-                    // the GUI will get state directly from pending_state)
-                    if let Some(state) = &pb.pending_state {
-                        if let Some(inst) = g.as_mut() {
-                            let _ = inst.set_state(state);
-                        }
-                    }
-                }
-            }
         }
 
         let saved_state = self.plugin_blocks[idx].pending_state.take();
@@ -189,25 +205,22 @@ impl App {
                     .ok()
                     .map_or(false, |g| g.as_ref().map_or(false, |gui| gui.is_open()));
                 if !is_visible {
-                    // GUI exists but hidden — just show it again
+                    // GUI exists but hidden — just show it
                     if let Ok(g) = pb.gui.lock() {
                         if let Some(gui) = g.as_ref() {
                             gui.show();
-                            println!("  Re-showed native GUI for '{}'", name);
+                            println!("  Showed native GUI for '{}'", name);
                         }
                     }
                 }
-                // Already visible or just shown — done
                 return;
             }
 
             // No GUI yet — create one
             if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &uid, &name) {
+                gui.setup_processing(48000.0, 512);
                 // Restore saved state blob first (handles preset name, etc.)
-                let state_to_restore = saved_state
-                    .or_else(|| pb.instance.lock().ok()
-                        .and_then(|g| g.as_ref().and_then(|inst| inst.get_state().ok())));
-                if let Some(state) = state_to_restore {
+                if let Some(state) = saved_state {
                     if !state.is_empty() {
                         gui.set_state(&state);
                     }
@@ -225,23 +238,18 @@ impl App {
             }
         }
 
-        // Fallback: open parameter editor
+        // Fallback: open parameter editor using gui instance
         let mut params = Vec::new();
-        if let Ok(guard) = pb.instance.lock() {
-            if let Some(inst) = guard.as_ref() {
-                let count = inst.parameter_count();
+        if let Ok(guard) = pb.gui.lock() {
+            if let Some(gui) = guard.as_ref() {
+                let count = gui.parameter_count();
                 for param_idx in 0..count {
-                    let info = inst.parameter_info(param_idx);
-                    let val = inst.get_parameter(param_idx).unwrap_or(0.0);
-                    let (pname, unit, default) = match info {
-                        Ok(pi) => (pi.name, pi.unit, pi.default),
-                        Err(_) => (format!("Param {}", param_idx), String::new(), 0.0),
-                    };
+                    let val = gui.get_parameter(param_idx).unwrap_or(0.0);
                     params.push(ui::plugin_editor::ParamEntry {
-                        name: pname,
-                        unit,
-                        value: val,
-                        default,
+                        name: format!("Param {}", param_idx),
+                        unit: String::new(),
+                        value: val as f32,
+                        default: 0.0,
                     });
                 }
             }
@@ -249,5 +257,98 @@ impl App {
         self.plugin_editor = Some(ui::plugin_editor::PluginEditorWindow::new(
             idx, 0, name, params,
         ));
+    }
+
+    pub(crate) fn assign_instrument_to_selected_region(&mut self, plugin_id: &str, plugin_name: &str) {
+        let region_idx = self.selected.iter().find_map(|t| {
+            if let HitTarget::InstrumentRegion(i) = t {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        let Some(region_idx) = region_idx else {
+            println!("  No instrument region selected");
+            return;
+        };
+        if region_idx >= self.instrument_regions.len() {
+            return;
+        }
+
+        self.ensure_plugins_scanned();
+        let sample_rate = 48000.0;
+        let block_size = 512;
+
+        let plugin_path = self
+            .plugin_registry
+            .instruments
+            .iter()
+            .find(|e| e.info.unique_id == plugin_id)
+            .map(|e| e.info.path.clone())
+            .unwrap_or_default();
+
+        {
+            let ir = &mut self.instrument_regions[region_idx];
+            ir.plugin_id = plugin_id.to_string();
+            ir.plugin_name = plugin_name.to_string();
+            ir.plugin_path = plugin_path.clone();
+        }
+
+        // Open vst3-gui instance (single instance for both GUI and audio)
+        let path_str = plugin_path.to_string_lossy().to_string();
+        if !path_str.is_empty() {
+            if let Some(gui) = vst3_gui::Vst3Gui::open(&path_str, plugin_id, plugin_name) {
+                if gui.setup_processing(sample_rate, block_size as i32) {
+                    println!("  Set up audio processing for instrument '{}'", plugin_name);
+                } else {
+                    println!("  Warning: audio processing setup failed for '{}'", plugin_name);
+                }
+                println!("  Opened native GUI for instrument '{}'", plugin_name);
+                let ir = &self.instrument_regions[region_idx];
+                if let Ok(mut g) = ir.gui.lock() {
+                    *g = Some(gui);
+                }
+            }
+        }
+
+        println!("  Assigned instrument '{}' to region", plugin_name);
+    }
+
+    pub(crate) fn open_instrument_region_gui(&mut self, idx: usize) {
+        if idx >= self.instrument_regions.len() {
+            return;
+        }
+        let ir = &self.instrument_regions[idx];
+        if ir.plugin_id.is_empty() {
+            return;
+        }
+
+        let path = ir.plugin_path.to_string_lossy().to_string();
+        let uid = ir.plugin_id.clone();
+        let name = ir.plugin_name.clone();
+
+        if !path.is_empty() {
+            let has_gui = ir.gui.lock().ok().map_or(false, |g| g.is_some());
+            if has_gui {
+                let is_visible = ir.gui.lock()
+                    .ok()
+                    .map_or(false, |g| g.as_ref().map_or(false, |gui| gui.is_open()));
+                if !is_visible {
+                    if let Ok(g) = ir.gui.lock() {
+                        if let Some(gui) = g.as_ref() {
+                            gui.show();
+                        }
+                    }
+                }
+                return;
+            }
+
+            if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &uid, &name) {
+                println!("  Opened native GUI for instrument '{}'", name);
+                if let Ok(mut g) = ir.gui.lock() {
+                    *g = Some(gui);
+                }
+            }
+        }
     }
 }

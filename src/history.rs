@@ -3,6 +3,8 @@ use std::sync::Arc;
 use crate::audio::AudioClipData;
 use crate::component;
 use crate::effects;
+use crate::instruments;
+use crate::midi;
 use crate::regions::{ExportRegion, LoopRegion};
 use crate::{App, CanvasObject, WaveformView};
 
@@ -39,6 +41,8 @@ pub(crate) struct Snapshot {
     pub(crate) export_regions: Vec<ExportRegionSnapshot>,
     pub(crate) components: Vec<component::ComponentDef>,
     pub(crate) component_instances: Vec<component::ComponentInstance>,
+    pub(crate) midi_clips: Vec<midi::MidiClip>,
+    pub(crate) instrument_regions: Vec<instruments::InstrumentRegionSnapshot>,
 }
 
 impl App {
@@ -88,11 +92,33 @@ impl App {
                 .collect(),
             components: self.components.clone(),
             component_instances: self.component_instances.clone(),
+            midi_clips: self.midi_clips.clone(),
+            instrument_regions: self
+                .instrument_regions
+                .iter()
+                .map(|ir| instruments::InstrumentRegionSnapshot {
+                    position: ir.position,
+                    size: ir.size,
+                    name: ir.name.clone(),
+                    plugin_id: ir.plugin_id.clone(),
+                    plugin_name: ir.plugin_name.clone(),
+                    plugin_path: ir.plugin_path.clone(),
+                })
+                .collect(),
         }
     }
 
     pub(crate) fn push_undo(&mut self) {
+        // Debug: print automation state being saved
+        for (i, wf) in self.waveforms.iter().enumerate() {
+            let vol_pts = wf.automation.volume_lane().points.len();
+            let pan_pts = wf.automation.pan_lane().points.len();
+            if vol_pts > 0 || pan_pts > 0 {
+                println!("[push_undo] saving wf[{}]: vol={} pan={}", i, vol_pts, pan_pts);
+            }
+        }
         self.undo_stack.push(self.snapshot());
+        println!("[push_undo] stack size now = {}", self.undo_stack.len());
         if self.undo_stack.len() > MAX_UNDO_HISTORY {
             self.undo_stack.remove(0);
         }
@@ -101,7 +127,23 @@ impl App {
     }
 
     pub(crate) fn undo(&mut self) {
+        println!("[undo] stack size = {}", self.undo_stack.len());
         if let Some(prev) = self.undo_stack.pop() {
+            // Debug: print automation point counts before/after
+            for (i, wf) in self.waveforms.iter().enumerate() {
+                let vol_pts = wf.automation.volume_lane().points.len();
+                let pan_pts = wf.automation.pan_lane().points.len();
+                if vol_pts > 0 || pan_pts > 0 {
+                    println!("[undo] wf[{}] BEFORE: vol={} pan={}", i, vol_pts, pan_pts);
+                }
+            }
+            for (i, wf) in prev.waveforms.iter().enumerate() {
+                let vol_pts = wf.automation.volume_lane().points.len();
+                let pan_pts = wf.automation.pan_lane().points.len();
+                if vol_pts > 0 || pan_pts > 0 {
+                    println!("[undo] wf[{}] AFTER:  vol={} pan={}", i, vol_pts, pan_pts);
+                }
+            }
             self.redo_stack.push(self.snapshot());
             self.objects = prev.objects;
             self.waveforms = prev.waveforms;
@@ -112,6 +154,8 @@ impl App {
             self.restore_export_regions(prev.export_regions);
             self.components = prev.components;
             self.component_instances = prev.component_instances;
+            self.midi_clips = prev.midi_clips;
+            self.restore_instrument_regions(prev.instrument_regions);
             self.selected.clear();
             self.mark_dirty();
             self.sync_audio_clips();
@@ -132,6 +176,8 @@ impl App {
             self.restore_export_regions(next.export_regions);
             self.components = next.components;
             self.component_instances = next.component_instances;
+            self.midi_clips = next.midi_clips;
+            self.restore_instrument_regions(next.instrument_regions);
             self.selected.clear();
             self.mark_dirty();
             self.sync_audio_clips();
@@ -155,8 +201,18 @@ impl App {
         self.plugin_blocks = snapshots
             .into_iter()
             .map(|snap| {
-                let instance = if self.plugin_registry.is_scanned() {
-                    self.plugin_registry.load_plugin(&snap.plugin_id, 48000.0, 512)
+                let gui = if self.plugin_registry.is_scanned() {
+                    let path = snap.plugin_path.to_string_lossy().to_string();
+                    if !path.is_empty() {
+                        if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &snap.plugin_id, &snap.plugin_name) {
+                            gui.setup_processing(48000.0, 512);
+                            Some(gui)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -168,8 +224,7 @@ impl App {
                     plugin_name: snap.plugin_name,
                     plugin_path: snap.plugin_path,
                     bypass: snap.bypass,
-                    instance: Arc::new(std::sync::Mutex::new(instance)),
-                    gui: Arc::new(std::sync::Mutex::new(None)),
+                    gui: Arc::new(std::sync::Mutex::new(gui)),
                     pending_state: None,
                     pending_params: None,
                 }
@@ -194,6 +249,32 @@ impl App {
             .map(|snap| ExportRegion {
                 position: snap.position,
                 size: snap.size,
+            })
+            .collect();
+    }
+
+    fn restore_instrument_regions(&mut self, snapshots: Vec<instruments::InstrumentRegionSnapshot>) {
+        self.instrument_regions = snapshots
+            .into_iter()
+            .map(|snap| {
+                let mut ir = instruments::InstrumentRegion::new(snap.position, snap.size);
+                ir.name = snap.name;
+                ir.plugin_id = snap.plugin_id.clone();
+                ir.plugin_name = snap.plugin_name.clone();
+                ir.plugin_path = snap.plugin_path;
+                // Re-open instrument via vst3-gui if registry is scanned
+                if !snap.plugin_id.is_empty() && self.plugin_registry.is_scanned() {
+                    let path = ir.plugin_path.to_string_lossy().to_string();
+                    if !path.is_empty() {
+                        if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &snap.plugin_id, &ir.plugin_name) {
+                            gui.setup_processing(48000.0, 512);
+                            if let Ok(mut g) = ir.gui.lock() {
+                                *g = Some(gui);
+                            }
+                        }
+                    }
+                }
+                ir
             })
             .collect();
     }

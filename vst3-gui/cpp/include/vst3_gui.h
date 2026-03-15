@@ -11,6 +11,10 @@ typedef struct Vst3GuiHandle Vst3GuiHandle;
 // Returns NULL if plugin has no GUI or loading fails.
 Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid, const char* title);
 
+// Open plugin without GUI window (no NSWindow/NSView, works from any thread).
+// For audio processing, state, and parameters only. Call vst3_gui_open to get a window later.
+Vst3GuiHandle* vst3_gui_open_headless(const char* vst3_path, const char* uid);
+
 // Hide the GUI window (does NOT destroy the plugin instance).
 void vst3_gui_close(Vst3GuiHandle* handle);
 
@@ -42,6 +46,28 @@ int vst3_gui_get_parameter(Vst3GuiHandle* handle, int index, double* value);
 
 // Set normalized parameter value by index. Returns 0 on success, -1 on error.
 int vst3_gui_set_parameter(Vst3GuiHandle* handle, int index, double value);
+
+// --- Audio processing (instruments) ---
+
+// Set up audio processing. Returns 0 on success, -1 on error.
+int vst3_gui_setup_processing(Vst3GuiHandle* handle, double sample_rate, int block_size);
+
+// Process audio. Returns 0 on success, -1 on error.
+int vst3_gui_process(Vst3GuiHandle* handle,
+                     const float* const* inputs, int num_input_channels,
+                     float** outputs, int num_output_channels,
+                     int num_frames);
+
+// Queue MIDI events for the next process() call.
+// midi_data: packed [status, data1, data2] triples (3 bytes per event).
+// sample_offsets: per-event sample offset within the next block.
+int vst3_gui_send_midi(Vst3GuiHandle* handle,
+                       const unsigned char* midi_data, int num_events,
+                       const int* sample_offsets);
+
+// Query audio bus channel counts (valid after setup_processing).
+int vst3_gui_get_audio_input_channels(Vst3GuiHandle* handle);
+int vst3_gui_get_audio_output_channels(Vst3GuiHandle* handle);
 
 #ifdef __cplusplus
 }

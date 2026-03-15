@@ -107,8 +107,8 @@ fn save_cache(plugins: &[PluginInfo]) {
 
 pub const EFFECT_REGION_DEFAULT_WIDTH: f32 = 600.0;
 pub const EFFECT_REGION_DEFAULT_HEIGHT: f32 = 250.0;
-const EFFECT_BORDER_COLOR: [f32; 4] = [0.60, 0.30, 0.90, 0.50];
-const EFFECT_ACTIVE_BORDER: [f32; 4] = [0.70, 0.40, 1.00, 0.70];
+const EFFECT_BORDER_COLOR: [f32; 4] = [0.25, 0.50, 0.90, 0.50];
+const EFFECT_ACTIVE_BORDER: [f32; 4] = [0.35, 0.60, 1.00, 0.70];
 
 // ---------------------------------------------------------------------------
 // EffectRegion — spatial zone that controls when plugins sound
@@ -176,7 +176,7 @@ impl EffectRegion {
 // ---------------------------------------------------------------------------
 
 pub const PLUGIN_BLOCK_DEFAULT_SIZE: [f32; 2] = [120.0, 40.0];
-pub const PLUGIN_BLOCK_DEFAULT_COLOR: [f32; 4] = [0.55, 0.28, 0.85, 0.70];
+pub const PLUGIN_BLOCK_DEFAULT_COLOR: [f32; 4] = [0.25, 0.50, 0.90, 0.70];
 pub const PLUGIN_BLOCK_BORDER_RADIUS: f32 = 6.0;
 
 #[derive(Clone)]
@@ -188,7 +188,6 @@ pub struct PluginBlock {
     pub plugin_name: String,
     pub plugin_path: PathBuf,
     pub bypass: bool,
-    pub instance: Arc<Mutex<Option<Box<dyn PluginInstance>>>>,
     pub gui: Arc<Mutex<Option<vst3_gui::Vst3Gui>>>,
     pub pending_state: Option<Vec<u8>>,
     pub pending_params: Option<Vec<f64>>,
@@ -204,7 +203,6 @@ impl PluginBlock {
             plugin_name,
             plugin_path,
             bypass: false,
-            instance: Arc::new(Mutex::new(None)),
             gui: Arc::new(Mutex::new(None)),
             pending_state: None,
             pending_params: None,
@@ -320,7 +318,7 @@ pub fn build_effect_region_instances(
         out.push(InstanceRaw {
             position: [x, y],
             size: [w, dash_h],
-            color: [0.60, 0.30, 0.90, 0.40],
+            color: [0.25, 0.50, 0.90, 0.40],
             border_radius: 1.0 / camera.zoom,
         });
         x += dash_w + gap;
@@ -335,13 +333,13 @@ pub fn build_effect_region_instances(
             region.position[1] + 4.0 / camera.zoom,
         ],
         size: [badge_w, badge_h],
-        color: [0.55, 0.28, 0.85, 0.70],
+        color: [0.25, 0.50, 0.90, 0.70],
         border_radius: 3.0 / camera.zoom,
     });
 
     if is_selected {
         let handle_sz = 8.0 / camera.zoom;
-        let handle_color = [0.55, 0.28, 0.85, 0.90];
+        let handle_color = [0.25, 0.50, 0.90, 0.90];
         for &hx in &[region.position[0] - handle_sz * 0.5, region.position[0] + region.size[0] - handle_sz * 0.5] {
             for &hy in &[region.position[1] - handle_sz * 0.5, region.position[1] + region.size[1] - handle_sz * 0.5] {
                 out.push(InstanceRaw {
@@ -367,6 +365,7 @@ pub struct PluginRegistryEntry {
 
 pub struct PluginRegistry {
     pub plugins: Vec<PluginRegistryEntry>,
+    pub instruments: Vec<PluginRegistryEntry>,
     scanner: Option<Vst3Scanner>,
     scanned: bool,
 }
@@ -375,6 +374,7 @@ impl PluginRegistry {
     pub fn new() -> Self {
         Self {
             plugins: Vec::new(),
+            instruments: Vec::new(),
             scanner: None,
             scanned: false,
         }
@@ -393,16 +393,33 @@ impl PluginRegistry {
     pub fn scan(&mut self) {
         self.scanned = true;
 
+        let split_plugins = |all: Vec<PluginInfo>| -> (Vec<PluginInfo>, Vec<PluginInfo>) {
+            let mut effects = Vec::new();
+            let mut instruments = Vec::new();
+            for p in all {
+                if matches!(p.plugin_type, PluginType::Instrument) {
+                    instruments.push(p);
+                } else if matches!(p.plugin_type, PluginType::Effect | PluginType::Other) {
+                    effects.push(p);
+                }
+            }
+            (effects, instruments)
+        };
+
         if let Some(cached) = load_cache() {
-            let effects: Vec<_> = cached
-                .into_iter()
-                .filter(|p| matches!(p.plugin_type, PluginType::Effect | PluginType::Other))
-                .collect();
-            println!("  VST3 (cached): found {} effect plugins", effects.len());
+            let (effects, instruments) = split_plugins(cached);
+            println!("  VST3 (cached): found {} effect, {} instrument plugins", effects.len(), instruments.len());
             for p in &effects {
                 println!("    - {} ({})", p.name, p.manufacturer);
             }
+            for p in &instruments {
+                println!("    - [INST] {} ({})", p.name, p.manufacturer);
+            }
             self.plugins = effects
+                .into_iter()
+                .map(|info| PluginRegistryEntry { info })
+                .collect();
+            self.instruments = instruments
                 .into_iter()
                 .map(|info| PluginRegistryEntry { info })
                 .collect();
@@ -417,17 +434,19 @@ impl PluginRegistry {
                 match scanner.scan() {
                     Ok(plugins) => {
                         save_cache(&plugins);
-                        let effects: Vec<_> = plugins
-                            .into_iter()
-                            .filter(|p| {
-                                matches!(p.plugin_type, PluginType::Effect | PluginType::Other)
-                            })
-                            .collect();
-                        println!("  VST3: found {} effect plugins", effects.len());
+                        let (effects, instruments) = split_plugins(plugins);
+                        println!("  VST3: found {} effect, {} instrument plugins", effects.len(), instruments.len());
                         for p in &effects {
                             println!("    - {} ({})", p.name, p.manufacturer);
                         }
+                        for p in &instruments {
+                            println!("    - [INST] {} ({})", p.name, p.manufacturer);
+                        }
                         self.plugins = effects
+                            .into_iter()
+                            .map(|info| PluginRegistryEntry { info })
+                            .collect();
+                        self.instruments = instruments
                             .into_iter()
                             .map(|info| PluginRegistryEntry { info })
                             .collect();
@@ -448,6 +467,7 @@ impl PluginRegistry {
         let _ = std::fs::remove_file(cache_path());
         self.scanned = false;
         self.plugins.clear();
+        self.instruments.clear();
         self.scanner = None;
         self.scan();
     }
@@ -474,6 +494,33 @@ impl PluginRegistry {
             }
             Err(e) => {
                 println!("  VST3 plugin load error: {}", e);
+                None
+            }
+        }
+    }
+
+    pub fn load_instrument(
+        &self,
+        plugin_id: &str,
+        sample_rate: f64,
+        block_size: usize,
+    ) -> Option<Box<dyn PluginInstance>> {
+        let scanner = self.scanner.as_ref()?;
+        let entry = self
+            .instruments
+            .iter()
+            .find(|e| e.info.unique_id == plugin_id)?;
+        match scanner.load(&entry.info) {
+            Ok(mut plugin) => {
+                if let Err(e) = plugin.initialize(sample_rate, block_size) {
+                    println!("  VST3 instrument init error: {}", e);
+                    return None;
+                }
+                println!("  VST3 instrument loaded: {}", entry.info.name);
+                Some(Box::new(plugin))
+            }
+            Err(e) => {
+                println!("  VST3 instrument load error: {}", e);
                 None
             }
         }

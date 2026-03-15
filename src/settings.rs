@@ -171,6 +171,8 @@ pub struct Settings {
     pub triplet_grid: bool,
     #[serde(default)]
     pub dev_mode: bool,
+    #[serde(default)]
+    pub sample_library_folders: Vec<String>,
 }
 
 fn default_driver_type() -> String {
@@ -209,6 +211,7 @@ impl Default for Settings {
             grid_mode: GridMode::default(),
             triplet_grid: false,
             dev_mode: false,
+            sample_library_folders: Vec::new(),
         }
     }
 }

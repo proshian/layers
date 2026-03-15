@@ -1,5 +1,4 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use rack::traits::PluginInstance;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -40,6 +39,8 @@ struct PlaybackClip {
     fade_out_curve: f32,
     volume: f32,
     buffer_offset_secs: f64,
+    volume_automation: Vec<(f32, f32)>,
+    pan_automation: Vec<(f32, f32)>,
 }
 
 pub struct AudioEffectRegion {
@@ -47,7 +48,23 @@ pub struct AudioEffectRegion {
     pub x_end_px: f32,
     pub y_start: f32,
     pub y_end: f32,
-    pub plugins: Vec<Arc<Mutex<Option<Box<dyn PluginInstance>>>>>,
+    pub plugins: Vec<Arc<Mutex<Option<vst3_gui::Vst3Gui>>>>,
+}
+
+pub struct AudioInstrumentRegion {
+    pub x_start_px: f32,
+    pub x_end_px: f32,
+    pub y_start: f32,
+    pub y_end: f32,
+    pub gui: Arc<Mutex<Option<vst3_gui::Vst3Gui>>>,
+    pub midi_events: Vec<TimedMidiEvent>,
+}
+
+pub struct TimedMidiEvent {
+    pub time_secs: f64,
+    pub note: u8,
+    pub velocity: u8,
+    pub is_note_on: bool,
 }
 
 pub struct AudioEngine {
@@ -57,6 +74,7 @@ pub struct AudioEngine {
     position_bits: Arc<AtomicU64>,
     clips: Arc<Mutex<Vec<PlaybackClip>>>,
     effect_regions: Arc<Mutex<Vec<AudioEffectRegion>>>,
+    instrument_regions: Arc<Mutex<Vec<AudioInstrumentRegion>>>,
     master_volume: Arc<AtomicU64>,
     rms_peak: Arc<AtomicU64>,
     loop_enabled: Arc<AtomicBool>,
@@ -137,6 +155,7 @@ impl AudioEngine {
         let position_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
         let clips: Arc<Mutex<Vec<PlaybackClip>>> = Arc::new(Mutex::new(Vec::new()));
         let effect_regions: Arc<Mutex<Vec<AudioEffectRegion>>> = Arc::new(Mutex::new(Vec::new()));
+        let instrument_regions: Arc<Mutex<Vec<AudioInstrumentRegion>>> = Arc::new(Mutex::new(Vec::new()));
         let master_volume = Arc::new(AtomicU64::new(1.0f64.to_bits()));
         let rms_peak = Arc::new(AtomicU64::new(0.0f64.to_bits()));
         let loop_enabled = Arc::new(AtomicBool::new(false));
@@ -147,6 +166,7 @@ impl AudioEngine {
         let pos = position_bits.clone();
         let c = clips.clone();
         let er = effect_regions.clone();
+        let inst_r = instrument_regions.clone();
         let vol = master_volume.clone();
         let rms = rms_peak.clone();
         let lp_en = loop_enabled.clone();
@@ -158,12 +178,21 @@ impl AudioEngine {
         let mut fx_buf_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
         let mut fx_out_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
         let mut fx_out_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
+        let mut inst_out_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
+        let mut inst_out_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
 
         let stream = device
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    if !p.load(Ordering::Relaxed) {
+                    let is_playing = p.load(Ordering::Relaxed);
+
+                    // Even when stopped, process instruments for GUI keyboard preview
+                    let has_instruments = inst_r.try_lock()
+                        .ok()
+                        .map_or(false, |g| !g.is_empty());
+
+                    if !is_playing && !has_instruments {
                         data.fill(0.0);
                         store_f64(&rms, 0.0);
                         return;
@@ -171,25 +200,26 @@ impl AudioEngine {
 
                     let current_time = load_f64(&pos);
                     let gain = load_f64(&vol) as f32;
-                    let clips_guard = match c.try_lock() {
-                        Ok(guard) => guard,
-                        Err(_) => {
-                            data.fill(0.0);
-                            return;
-                        }
-                    };
-
-                    let regions_guard = er.try_lock().ok();
-
                     let frames = data.len() / channels;
                     let mut sum_sq = 0.0f64;
 
-                    // Mix all clips per-sample first (dry mix)
-                    let mut dry_mix = vec![0.0f32; frames];
+                    let clips_guard = c.try_lock().ok();
+                    let regions_guard = er.try_lock().ok();
+
+                    let empty_clips: Vec<PlaybackClip> = Vec::new();
+                    let clips_ref: &[PlaybackClip] = clips_guard
+                        .as_ref()
+                        .map(|g| g.as_slice())
+                        .unwrap_or(&empty_clips);
+
+                    // Mix all clips per-sample first (dry mix) with stereo pan
+                    let mut dry_mix = vec![[0.0f32; 2]; frames];
+                    if is_playing {
                     for i in 0..frames {
                         let t = current_time + i as f64 / sr;
-                        let mut mix = 0.0f32;
-                        for clip in clips_guard.iter() {
+                        let mut mix_l = 0.0f32;
+                        let mut mix_r = 0.0f32;
+                        for clip in clips_ref.iter() {
                             let clip_t = t - clip.start_time_secs;
                             if clip_t >= 0.0 && clip_t < clip.duration_secs {
                                 let source_idx = ((clip_t + clip.buffer_offset_secs) * clip.source_sample_rate as f64) as usize;
@@ -202,11 +232,30 @@ impl AudioEngine {
                                         clip.fade_in_curve,
                                         clip.fade_out_curve,
                                     );
-                                    mix += clip.buffer[source_idx] * fg * clip.volume;
+                                    let norm_t = if clip.duration_secs > 0.0 {
+                                        (clip_t / clip.duration_secs) as f32
+                                    } else {
+                                        0.0
+                                    };
+                                    let auto_vol = crate::automation::volume_value_to_gain(
+                                        crate::automation::interp_automation(
+                                            norm_t, &clip.volume_automation, 0.5,
+                                        ),
+                                    );
+                                    let auto_pan = crate::automation::interp_automation(
+                                        norm_t, &clip.pan_automation, 0.5,
+                                    );
+                                    let sample = clip.buffer[source_idx] * fg * clip.volume * auto_vol;
+                                    // Constant-power panning
+                                    let pan_angle = auto_pan * std::f32::consts::FRAC_PI_2;
+                                    let pan_l = pan_angle.cos();
+                                    let pan_r = pan_angle.sin();
+                                    mix_l += sample * pan_l;
+                                    mix_r += sample * pan_r;
                                 }
                             }
                         }
-                        dry_mix[i] = mix;
+                        dry_mix[i] = [mix_l, mix_r];
                     }
 
                     // Process through effect regions if any are active
@@ -218,7 +267,7 @@ impl AudioEngine {
                                 let region_end_secs =
                                     region.x_end_px as f64 / PIXELS_PER_SECOND as f64;
 
-                                let any_overlap = clips_guard.iter().any(|clip| {
+                                let any_overlap = clips_ref.iter().any(|clip| {
                                     let clip_y_end = clip.position_y + clip.height;
                                     clip.position_y < region.y_end && clip_y_end > region.y_start
                                 });
@@ -244,7 +293,7 @@ impl AudioEngine {
                                     for j in 0..block_len {
                                         let t = current_time + (offset + j) as f64 / sr;
                                         let mut region_mix = 0.0f32;
-                                        for clip in clips_guard.iter() {
+                                        for clip in clips_ref.iter() {
                                             let clip_y_end = clip.position_y + clip.height;
                                             if clip.position_y >= region.y_end
                                                 || clip_y_end <= region.y_start
@@ -285,15 +334,15 @@ impl AudioEngine {
                                     for plugin_mutex in &region.plugins {
                                         dst_l[..block_len].fill(0.0);
                                         dst_r[..block_len].fill(0.0);
-                                        if let Ok(mut guard) = plugin_mutex.try_lock() {
-                                            if let Some(ref mut plugin) = *guard {
-                                                let inputs: [&[f32]; 2] =
-                                                    [&src_l[..block_len], &src_r[..block_len]];
-                                                let mut outputs: [&mut [f32]; 2] = [
+                                        if let Ok(guard) = plugin_mutex.try_lock() {
+                                            if let Some(ref gui) = *guard {
+                                                let inputs: Vec<&[f32]> =
+                                                    vec![&src_l[..block_len], &src_r[..block_len]];
+                                                let mut outputs: Vec<&mut [f32]> = vec![
                                                     &mut dst_l[..block_len],
                                                     &mut dst_r[..block_len],
                                                 ];
-                                                let _ = plugin.process(
+                                                gui.process(
                                                     &inputs,
                                                     &mut outputs,
                                                     block_len,
@@ -309,7 +358,7 @@ impl AudioEngine {
                                         let wet = (src_l[j] + src_r[j]) * 0.5;
                                         let t = current_time + (offset + j) as f64 / sr;
                                         let mut overlap_dry = 0.0f32;
-                                        for clip in clips_guard.iter() {
+                                        for clip in clips_ref.iter() {
                                             let clip_y_end = clip.position_y + clip.height;
                                             if clip.position_y >= region.y_end
                                                 || clip_y_end <= region.y_start
@@ -335,8 +384,9 @@ impl AudioEngine {
                                                 }
                                             }
                                         }
-                                        dry_mix[offset + j] =
-                                            dry_mix[offset + j] - overlap_dry + wet;
+                                        let mono = (dry_mix[offset + j][0] + dry_mix[offset + j][1]) * 0.5;
+                                        let new_mono = mono - overlap_dry + wet;
+                                        dry_mix[offset + j] = [new_mono, new_mono];
                                     }
 
                                     offset += block_len;
@@ -345,13 +395,86 @@ impl AudioEngine {
                         }
                     }
 
-                    // Write final output
+                    } // end if is_playing (clips + effects)
+
+                    // Process instrument regions (MIDI → VST3 → audio, additive)
+                    // Always process — instruments need continuous process() for GUI keyboard preview
+                    if let Ok(inst_guard) = inst_r.try_lock() {
+                        for region in inst_guard.iter() {
+                            let region_start_secs = region.x_start_px as f64 / PIXELS_PER_SECOND as f64;
+                            let region_end_secs = region.x_end_px as f64 / PIXELS_PER_SECOND as f64;
+
+                            let mut offset = 0;
+                            while offset < frames {
+                                let block_len = (frames - offset).min(EFFECT_BLOCK_SIZE);
+                                let t_start = current_time + offset as f64 / sr;
+                                let t_end = t_start + block_len as f64 / sr;
+                                let mid_t = (t_start + t_end) * 0.5;
+                                let in_region = is_playing
+                                    && mid_t >= region_start_secs
+                                    && mid_t <= region_end_secs;
+
+                                if let Ok(gui_guard) = region.gui.try_lock() {
+                                    if let Some(ref gui) = *gui_guard {
+                                        // Send scheduled MIDI events only when playing within region
+                                        if in_region {
+                                            for ev in &region.midi_events {
+                                                if ev.time_secs >= t_start && ev.time_secs < t_end {
+                                                    let so = ((ev.time_secs - t_start) * sr) as i32;
+                                                    if ev.is_note_on {
+                                                        gui.send_midi_note_on(ev.note, ev.velocity, 0, so);
+                                                    } else {
+                                                        gui.send_midi_note_off(ev.note, 0, 0, so);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Always call process() — needed for GUI keyboard + sustain
+                                        inst_out_l[..block_len].fill(0.0);
+                                        inst_out_r[..block_len].fill(0.0);
+
+                                        let in_ch = gui.audio_input_channels();
+                                        let silent_buf = [0.0f32; EFFECT_BLOCK_SIZE];
+                                        let silent_ref: &[f32] = &silent_buf[..block_len];
+
+                                        let inputs: Vec<&[f32]> = (0..in_ch).map(|_| silent_ref).collect();
+                                        let mut outputs: Vec<&mut [f32]> = vec![
+                                            &mut inst_out_l[..block_len],
+                                            &mut inst_out_r[..block_len],
+                                        ];
+
+                                        gui.process(&inputs, &mut outputs, block_len);
+
+                                        for j in 0..block_len {
+                                            dry_mix[offset + j][0] += inst_out_l[j];
+                                            dry_mix[offset + j][1] += inst_out_r[j];
+                                        }
+                                    }
+                                }
+
+                                offset += block_len;
+                            }
+                        }
+                    }
+
+                    // Write final output (stereo)
                     for i in 0..frames {
-                        let mixed = (dry_mix[i] * gain).clamp(-1.0, 1.0);
-                        sum_sq += (mixed as f64) * (mixed as f64);
                         let base = i * channels;
-                        for ch in 0..channels {
-                            data[base + ch] = mixed;
+                        if channels >= 2 {
+                            let l = (dry_mix[i][0] * gain).clamp(-1.0, 1.0);
+                            let r = (dry_mix[i][1] * gain).clamp(-1.0, 1.0);
+                            data[base] = l;
+                            data[base + 1] = r;
+                            let mono = (l + r) * 0.5;
+                            sum_sq += (mono as f64) * (mono as f64);
+                            for ch in 2..channels {
+                                data[base + ch] = mono;
+                            }
+                        } else {
+                            let mono = ((dry_mix[i][0] + dry_mix[i][1]) * 0.5 * gain).clamp(-1.0, 1.0);
+                            data[base] = mono;
+                            sum_sq += (mono as f64) * (mono as f64);
                         }
                     }
 
@@ -360,16 +483,18 @@ impl AudioEngine {
                         store_f64(&rms, rms_val);
                     }
 
-                    let mut new_time = current_time + frames as f64 / sr;
-                    if lp_en.load(Ordering::Relaxed) {
-                        let ls = load_f64(&lp_s);
-                        let le = load_f64(&lp_e);
-                        if le > ls && current_time >= ls && current_time < le && new_time >= le {
-                            let len = le - ls;
-                            new_time = ls + (new_time - le).rem_euclid(len);
+                    if is_playing {
+                        let mut new_time = current_time + frames as f64 / sr;
+                        if lp_en.load(Ordering::Relaxed) {
+                            let ls = load_f64(&lp_s);
+                            let le = load_f64(&lp_e);
+                            if le > ls && current_time >= ls && current_time < le && new_time >= le {
+                                let len = le - ls;
+                                new_time = ls + (new_time - le).rem_euclid(len);
+                            }
                         }
+                        store_f64(&pos, new_time);
                     }
-                    store_f64(&pos, new_time);
                 },
                 |err| eprintln!("Audio stream error: {}", err),
                 None,
@@ -385,6 +510,7 @@ impl AudioEngine {
             position_bits,
             clips,
             effect_regions,
+            instrument_regions,
             master_volume,
             rms_peak,
             loop_enabled,
@@ -426,6 +552,8 @@ impl AudioEngine {
         fade_out_curves: &[f32],
         volumes: &[f32],
         sample_offsets_px: &[f32],
+        volume_automations: &[Vec<(f32, f32)>],
+        pan_automations: &[Vec<(f32, f32)>],
     ) {
         let mut clips = self.clips.lock().unwrap();
         clips.clear();
@@ -444,6 +572,8 @@ impl AudioEngine {
             let offset_px = sample_offsets_px.get(i).copied().unwrap_or(0.0);
             let offset_secs = offset_px as f64 / PIXELS_PER_SECOND as f64;
             let visible_duration = size[0] as f64 / PIXELS_PER_SECOND as f64;
+            let vol_auto = volume_automations.get(i).cloned().unwrap_or_default();
+            let pan_auto = pan_automations.get(i).cloned().unwrap_or_default();
             clips.push(PlaybackClip {
                 buffer: clip_data.samples.clone(),
                 source_sample_rate: clip_data.sample_rate,
@@ -457,12 +587,20 @@ impl AudioEngine {
                 fade_out_curve: fo_curve,
                 volume: vol,
                 buffer_offset_secs: offset_secs,
+                volume_automation: vol_auto,
+                pan_automation: pan_auto,
             });
         }
     }
 
     pub fn update_effect_regions(&self, regions: Vec<AudioEffectRegion>) {
         if let Ok(mut guard) = self.effect_regions.lock() {
+            *guard = regions;
+        }
+    }
+
+    pub fn update_instrument_regions(&self, regions: Vec<AudioInstrumentRegion>) {
+        if let Ok(mut guard) = self.instrument_regions.lock() {
             *guard = regions;
         }
     }
@@ -860,12 +998,12 @@ pub fn render_to_wav(
             for plugin_mutex in &region.plugins {
                 dst_l[..block_len].fill(0.0);
                 dst_r[..block_len].fill(0.0);
-                if let Ok(mut guard) = plugin_mutex.try_lock() {
-                    if let Some(ref mut plugin) = *guard {
-                        let inputs: [&[f32]; 2] = [&src_l[..block_len], &src_r[..block_len]];
-                        let mut outputs: [&mut [f32]; 2] =
-                            [&mut dst_l[..block_len], &mut dst_r[..block_len]];
-                        let _ = plugin.process(&inputs, &mut outputs, block_len);
+                if let Ok(guard) = plugin_mutex.try_lock() {
+                    if let Some(ref gui) = *guard {
+                        let inputs: Vec<&[f32]> = vec![&src_l[..block_len], &src_r[..block_len]];
+                        let mut outputs: Vec<&mut [f32]> =
+                            vec![&mut dst_l[..block_len], &mut dst_r[..block_len]];
+                        gui.process(&inputs, &mut outputs, block_len);
                     }
                 }
                 std::mem::swap(src_l, dst_l);

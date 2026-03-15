@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 
 use crate::audio::PIXELS_PER_SECOND;
+use crate::automation::{AutomationData, AutomationParam};
 use crate::{push_border, Camera, InstanceRaw};
 
 const PEAK_BLOCK_SIZE: usize = 256;
@@ -82,6 +83,7 @@ pub struct WaveformView {
     pub volume: f32,
     pub disabled: bool,
     pub sample_offset_px: f32,
+    pub automation: AutomationData,
 }
 
 
@@ -404,6 +406,7 @@ fn channel_triangles(
     fade_out_curve: f32,
     volume: f32,
     sample_offset_px: f32,
+    volume_automation: &crate::automation::AutomationLane,
 ) -> Vec<WaveformVertex> {
     let mut verts = Vec::new();
     if samples.is_empty() || wf_size[0] <= 0.0 {
@@ -448,7 +451,9 @@ fn channel_triangles(
 
             let x_in_clip = wx - wf_pos[0];
             let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px, fade_in_curve, fade_out_curve);
-            let amp = peak * fg * volume;
+            let t_norm = if wf_size[0] > 0.0 { x_in_clip / wf_size[0] } else { 0.0 };
+            let auto_vol = volume_automation.value_at(t_norm);
+            let amp = peak * fg * volume * auto_vol;
 
             if first {
                 prev_x = wx;
@@ -481,13 +486,17 @@ fn channel_triangles(
         let mut prev_x = wf_pos[0] + (vis_start_sample as f32 * world_per_sample - sample_offset_px);
         let x_in_clip = prev_x - wf_pos[0];
         let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px, fade_in_curve, fade_out_curve);
-        let mut prev_val = samples[vis_start_sample] * fg * volume;
+        let t_norm = if wf_size[0] > 0.0 { x_in_clip / wf_size[0] } else { 0.0 };
+        let auto_vol = volume_automation.value_at(t_norm);
+        let mut prev_val = samples[vis_start_sample] * fg * volume * auto_vol;
 
         for si in (vis_start_sample + 1)..vis_end_sample {
             let wx = wf_pos[0] + (si as f32 * world_per_sample - sample_offset_px);
             let x_in_clip = wx - wf_pos[0];
             let fg = fade_gain_at(x_in_clip, wf_size[0], fade_in_px, fade_out_px, fade_in_curve, fade_out_curve);
-            let val = samples[si] * fg * volume;
+            let t_norm = if wf_size[0] > 0.0 { x_in_clip / wf_size[0] } else { 0.0 };
+            let auto_vol = volume_automation.value_at(t_norm);
+            let val = samples[si] * fg * volume * auto_vol;
 
             push_wave_quad(
                 &mut verts, prev_x, prev_val, wx, val, center_y, half_h, direction, feather, color,
@@ -697,6 +706,8 @@ pub fn build_waveform_triangles(
 
     let mut all_verts = Vec::new();
 
+    let vol_lane = wf.automation.volume_lane();
+
     all_verts.extend(channel_triangles(
         &wf.audio.left_samples,
         &wf.audio.left_peaks,
@@ -716,6 +727,7 @@ pub fn build_waveform_triangles(
         wf.fade_out_curve,
         wf.volume,
         wf.sample_offset_px,
+        vol_lane,
     ));
 
     all_verts.extend(channel_triangles(
@@ -737,7 +749,108 @@ pub fn build_waveform_triangles(
         wf.fade_out_curve,
         wf.volume,
         wf.sample_offset_px,
+        vol_lane,
     ));
 
     all_verts
+}
+
+pub fn build_automation_triangles(
+    wf: &WaveformView,
+    camera: &Camera,
+    param: AutomationParam,
+    is_editing: bool,
+) -> Vec<WaveformVertex> {
+    let mut verts = Vec::new();
+    let lane = wf.automation.lane_for(param);
+    if lane.is_default() && !is_editing {
+        return verts;
+    }
+
+    let line_half_w = 1.0 / camera.zoom;
+    let feather = 0.5 / camera.zoom;
+    let y_top = wf.position[1];
+    let y_bot = wf.position[1] + wf.size[1];
+
+    let (color, line_y_fn): ([f32; 4], Box<dyn Fn(f32) -> f32>) = match param {
+        AutomationParam::Volume => {
+            let alpha = if is_editing { 0.8 } else { 0.4 };
+            let c = [1.0, 0.7, 0.2, alpha];
+            // Volume: top=1.0, bottom=0.0
+            let yt = y_top;
+            let yb = y_bot;
+            (c, Box::new(move |v: f32| yb + (yt - yb) * v))
+        }
+        AutomationParam::Pan => {
+            let alpha = if is_editing { 0.8 } else { 0.4 };
+            let c = [0.3, 0.6, 1.0, alpha];
+            // Pan: center=0.5, top=1.0, bottom=0.0
+            let yt = y_top;
+            let yb = y_bot;
+            (c, Box::new(move |v: f32| yb + (yt - yb) * v))
+        }
+    };
+
+    // Build points to draw: if lane has points use them, else draw default flat line
+    let draw_points: Vec<(f32, f32)> = if lane.points.is_empty() {
+        vec![(0.0, lane.default_value), (1.0, lane.default_value)]
+    } else {
+        let mut pts = Vec::new();
+        // Extend to left edge if first point isn't at 0
+        if lane.points[0].t > 0.0 {
+            pts.push((0.0, lane.points[0].value));
+        }
+        for p in &lane.points {
+            pts.push((p.t, p.value));
+        }
+        // Extend to right edge if last point isn't at 1
+        if lane.points.last().unwrap().t < 1.0 {
+            pts.push((1.0, lane.points.last().unwrap().value));
+        }
+        pts
+    };
+
+    // Draw line segments
+    for i in 1..draw_points.len() {
+        let (t0, v0) = draw_points[i - 1];
+        let (t1, v1) = draw_points[i];
+        let x0 = wf.position[0] + t0 * wf.size[0];
+        let x1 = wf.position[0] + t1 * wf.size[0];
+        let y0 = line_y_fn(v0);
+        let y1 = line_y_fn(v1);
+        push_line_quad(&mut verts, x0, y0, x1, y1, line_half_w, feather, color);
+    }
+
+    verts
+}
+
+pub fn build_automation_dot_instances(
+    wf: &WaveformView,
+    camera: &Camera,
+    param: AutomationParam,
+) -> Vec<InstanceRaw> {
+    let mut out = Vec::new();
+    let lane = wf.automation.lane_for(param);
+
+    let dot_sz = (8.0 + camera.zoom * 2.0).min(40.0) / camera.zoom;
+    let dot_br = dot_sz * 0.5;
+    let dot_color = match param {
+        AutomationParam::Volume => [1.0, 0.7, 0.2, 1.0],
+        AutomationParam::Pan => [0.3, 0.6, 1.0, 1.0],
+    };
+    let y_top = wf.position[1];
+    let y_bot = wf.position[1] + wf.size[1];
+
+    for p in &lane.points {
+        let x = wf.position[0] + p.t * wf.size[0];
+        let y = y_bot + (y_top - y_bot) * p.value;
+        out.push(InstanceRaw {
+            position: [x - dot_sz * 0.5, y - dot_sz * 0.5],
+            size: [dot_sz, dot_sz],
+            color: dot_color,
+            border_radius: dot_br,
+        });
+    }
+
+    out
 }
