@@ -126,6 +126,66 @@ fn test_move_instrument_region() {
     assert_eq!(app.instrument_regions[0].position, [50.0, 75.0]);
 }
 
+#[test]
+fn test_add_instrument_one_step() {
+    let mut app = App::new_headless();
+    assert!(app.instrument_regions.is_empty());
+    assert!(app.midi_clips.is_empty());
+
+    // Single-step: add_instrument creates region + MIDI clip with plugin assigned
+    app.add_instrument("test-synth", "Test Synth");
+    assert_eq!(app.instrument_regions.len(), 1);
+    assert_eq!(app.midi_clips.len(), 1);
+    assert_eq!(app.selected, vec![HitTarget::InstrumentRegion(0)]);
+    // Should enter MIDI edit mode on the clip
+    assert_eq!(app.editing_midi_clip, Some(0));
+
+    let ir = &app.instrument_regions[0];
+    assert!(ir.has_plugin());
+    assert_eq!(ir.plugin_id, "test-synth");
+    assert_eq!(ir.plugin_name, "Test Synth");
+
+    // MIDI clip should be inside the region with padding
+    let mc = &app.midi_clips[0];
+    let padding = instruments::INSTRUMENT_REGION_PADDING;
+    assert!((mc.position[0] - (ir.position[0] + padding)).abs() < 0.01);
+    assert!((mc.position[1] - (ir.position[1] + padding)).abs() < 0.01);
+    // Region should be clip + 2*padding
+    assert!((ir.size[0] - (mc.size[0] + padding * 2.0)).abs() < 0.01);
+    assert!((ir.size[1] - (mc.size[1] + padding * 2.0)).abs() < 0.01);
+}
+
+#[test]
+fn test_instrument_region_auto_extends_on_clip_resize() {
+    let mut app = App::new_headless();
+    app.add_instrument_area();
+    let ir = &mut app.instrument_regions[0];
+    ir.position = [100.0, 100.0];
+    ir.size = [400.0, 300.0];
+    ir.plugin_id = "test-synth".to_string();
+
+    // Place a MIDI clip inside
+    app.midi_clips.push(midi::MidiClip::new([120.0, 120.0], &app.settings.clone()));
+    app.midi_clips[0].size = [360.0, 260.0];
+
+    // Simulate resizing the clip to be wider than the region
+    let new_clip_size = [600.0, 260.0];
+    app.midi_clips[0].size = new_clip_size;
+    let cp = app.midi_clips[0].position;
+    let cs = app.midi_clips[0].size;
+    let padding = instruments::INSTRUMENT_REGION_PADDING;
+    for ir in &mut app.instrument_regions {
+        if crate::hit_testing::rects_overlap(ir.position, ir.size, cp, cs) {
+            instruments::ensure_region_contains_clip(ir, cp, cs, padding);
+        }
+    }
+
+    // Region should have grown to contain the clip + padding
+    let ir = &app.instrument_regions[0];
+    assert!(ir.position[0] + ir.size[0] >= cp[0] + cs[0] + padding);
+    assert!(ir.position[1] + ir.size[1] >= cp[1] + cs[1] + padding);
+}
+
 // ---------------------------------------------------------------------------
 // MIDI Audio Sync
 // ---------------------------------------------------------------------------

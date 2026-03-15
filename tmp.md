@@ -1,1 +1,1 @@
-when alt (option) key is pressed, user can change curve of the line (like in ableton) when doing automation. implement that
+for a pallete okease add all vst instruments for the index. so the scenario is the following: user opens command pallete, typing "ser" it should find all instruments or effects starting with "ser" for example serum and if instrument it shpould add it or for effects it should also add it to the grid. this feature should simplify e user experience on adding instruemnts and plugins to the project.

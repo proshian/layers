@@ -1840,6 +1840,7 @@ impl App {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn add_instrument_area(&mut self) {
         self.push_undo();
         let (pos, size) = if let Some(sa) = self.select_area.take() {
@@ -2994,9 +2995,6 @@ impl App {
             }
             CommandAction::AddEffectsArea => {
                 self.add_effect_area();
-            }
-            CommandAction::AddInstrumentArea => {
-                self.add_instrument_area();
             }
             CommandAction::AddMidiClip => {
                 self.add_midi_clip();

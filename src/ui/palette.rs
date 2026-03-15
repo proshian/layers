@@ -52,7 +52,6 @@ pub enum CommandAction {
     ToggleAutomation,
     AddVolumeAutomation,
     AddPanAutomation,
-    AddInstrumentArea,
     AddMidiClip,
     AddInstrument,
     SetMidiClipGridFixed(FixedGrid),
@@ -294,13 +293,6 @@ pub const COMMANDS: &[CommandDef] = &[
         shortcut: "",
         category: "Sample",
         action: CommandAction::AddPanAutomation,
-        dev_only: false,
-    },
-    CommandDef {
-        name: "Add Instrument Area",
-        shortcut: "",
-        category: "Audio",
-        action: CommandAction::AddInstrumentArea,
         dev_only: false,
     },
     CommandDef {

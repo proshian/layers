@@ -405,6 +405,13 @@ impl ApplicationHandler for App {
                         let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
                         self.midi_clips[clip_idx].position = pos;
                         self.midi_clips[clip_idx].size = size;
+                        // Auto-extend any overlapping instrument region
+                        let padding = instruments::INSTRUMENT_REGION_PADDING;
+                        for ir in &mut self.instrument_regions {
+                            if rects_overlap(ir.position, ir.size, pos, size) {
+                                instruments::ensure_region_contains_clip(ir, pos, size, padding);
+                            }
+                        }
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -632,6 +639,21 @@ impl ApplicationHandler for App {
                                     | HitTarget::InstrumentRegion(_)
                             ) {
                                 needs_sync = true;
+                            }
+                        }
+                        // Auto-extend instrument regions for moved MIDI clips
+                        let padding = instruments::INSTRUMENT_REGION_PADDING;
+                        for (target, _) in &offsets {
+                            if let HitTarget::MidiClip(ci) = target {
+                                if *ci < self.midi_clips.len() {
+                                    let cp = self.midi_clips[*ci].position;
+                                    let cs = self.midi_clips[*ci].size;
+                                    for ir in &mut self.instrument_regions {
+                                        if rects_overlap(ir.position, ir.size, cp, cs) {
+                                            instruments::ensure_region_contains_clip(ir, cp, cs, padding);
+                                        }
+                                    }
+                                }
                             }
                         }
                         if let Some(ec_idx) = self.editing_component {
@@ -1246,7 +1268,7 @@ impl ApplicationHandler for App {
                                 if let Some((plugin_id, plugin_name)) = plugin_info {
                                     self.command_palette = None;
                                     if mode == PaletteMode::InstrumentPicker {
-                                        self.assign_instrument_to_selected_region(&plugin_id, &plugin_name);
+                                        self.add_instrument(&plugin_id, &plugin_name);
                                     } else {
                                         self.add_plugin_to_selected_effect_region(&plugin_id, &plugin_name);
                                     }
@@ -1721,6 +1743,13 @@ impl ApplicationHandler for App {
                                 if point_in_rect(world, mc_pos, mc_size) {
                                     self.select_area = None;
                                     self.selected.clear();
+
+                                    // Seek playback to clicked position
+                                    let snapped_x = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
+                                    if let Some(engine) = &self.audio_engine {
+                                        let secs = snapped_x as f64 / PIXELS_PER_SECOND as f64;
+                                        engine.seek_to_seconds(secs);
+                                    }
 
                                     // Check velocity lane divider first (for resizing)
                                     if midi::hit_test_velocity_divider(&self.midi_clips[mc_idx], world, &self.camera) {
@@ -2497,7 +2526,7 @@ impl ApplicationHandler for App {
                                     self.command_palette = None;
                                     if let Some((plugin_id, plugin_name)) = plugin_info {
                                         if is_instrument {
-                                            self.assign_instrument_to_selected_region(&plugin_id, &plugin_name);
+                                            self.add_instrument(&plugin_id, &plugin_name);
                                         } else {
                                             self.add_plugin_to_selected_effect_region(&plugin_id, &plugin_name);
                                         }

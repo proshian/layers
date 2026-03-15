@@ -1,3 +1,7 @@
+- 2026-03-15: fix: clicking inside MIDI clip in edit mode now seeks playback cursor to clicked position (22.8k loc)
+- feat: "Add Instrument" now creates MIDI clip inside region with 40px padding, auto-extends region when clip is resized or moved (22.8k loc)
+- refactor: single-step "Add Instrument" — pick from palette and it creates region with plugin ready to play (22.7k loc)
+- fix: sample browser text missing on toggle — reset GPU text cache generation when browser hidden (22.7k loc)
 - feat: MIDI clip default width is now 4 bars (16 beats) at current BPM instead of hardcoded pixels (22.7k loc)
 - feat: MIDI clip default pitch range expanded to C0-C8 (full 8 octaves), clip height 540px (22.7k loc)
 - fix: velocity indicators now render as Ableton-style stem lines with circle at top instead of wide bars (22.7k loc)

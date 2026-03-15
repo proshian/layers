@@ -259,26 +259,35 @@ impl App {
         ));
     }
 
-    pub(crate) fn assign_instrument_to_selected_region(&mut self, plugin_id: &str, plugin_name: &str) {
-        let region_idx = self.selected.iter().find_map(|t| {
-            if let HitTarget::InstrumentRegion(i) = t {
-                Some(*i)
-            } else {
-                None
-            }
-        });
-        let Some(region_idx) = region_idx else {
-            println!("  No instrument region selected");
-            return;
-        };
-        if region_idx >= self.instrument_regions.len() {
-            return;
-        }
-
+    /// Create a new instrument region with the given plugin already assigned,
+    /// plus an empty MIDI clip inside it ready for editing.
+    pub(crate) fn add_instrument(&mut self, plugin_id: &str, plugin_name: &str) {
+        self.push_undo();
         self.ensure_plugins_scanned();
-        let sample_rate = 48000.0;
-        let block_size = 512;
 
+        let padding = instruments::INSTRUMENT_REGION_PADDING;
+
+        // Compute MIDI clip dimensions (same logic as add_midi_clip)
+        let ppb = grid::pixels_per_beat(self.bpm);
+        let beats_per_bar = 4.0;
+        let clip_w = ppb * beats_per_bar * midi::MIDI_CLIP_DEFAULT_BARS as f32;
+        let clip_h = midi::MIDI_CLIP_DEFAULT_HEIGHT;
+
+        // Region = clip + padding on each side
+        let region_w = clip_w + padding * 2.0;
+        let region_h = clip_h + padding * 2.0;
+
+        let (sw, sh, _) = self.screen_info();
+        let center = self.camera.screen_to_world([sw * 0.5, sh * 0.5]);
+        let region_pos = [center[0] - region_w * 0.5, center[1] - region_h * 0.5];
+        let clip_pos = [region_pos[0] + padding, region_pos[1] + padding];
+
+        // Create instrument region
+        let mut ir = instruments::InstrumentRegion::new(region_pos, [region_w, region_h]);
+        ir.plugin_id = plugin_id.to_string();
+        ir.plugin_name = plugin_name.to_string();
+
+        // Look up plugin path from registry
         let plugin_path = self
             .plugin_registry
             .instruments
@@ -286,32 +295,42 @@ impl App {
             .find(|e| e.info.unique_id == plugin_id)
             .map(|e| e.info.path.clone())
             .unwrap_or_default();
+        ir.plugin_path = plugin_path.clone();
 
-        {
-            let ir = &mut self.instrument_regions[region_idx];
-            ir.plugin_id = plugin_id.to_string();
-            ir.plugin_name = plugin_name.to_string();
-            ir.plugin_path = plugin_path.clone();
-        }
-
-        // Open vst3-gui instance (single instance for both GUI and audio)
+        // Open vst3-gui instance
         let path_str = plugin_path.to_string_lossy().to_string();
         if !path_str.is_empty() {
             if let Some(gui) = vst3_gui::Vst3Gui::open(&path_str, plugin_id, plugin_name) {
-                if gui.setup_processing(sample_rate, block_size as i32) {
+                if gui.setup_processing(48000.0, 512) {
                     println!("  Set up audio processing for instrument '{}'", plugin_name);
                 } else {
                     println!("  Warning: audio processing setup failed for '{}'", plugin_name);
                 }
                 println!("  Opened native GUI for instrument '{}'", plugin_name);
-                let ir = &self.instrument_regions[region_idx];
                 if let Ok(mut g) = ir.gui.lock() {
                     *g = Some(gui);
                 }
             }
         }
 
-        println!("  Assigned instrument '{}' to region", plugin_name);
+        self.instrument_regions.push(ir);
+        let region_idx = self.instrument_regions.len() - 1;
+
+        // Create MIDI clip inside the region
+        let mut clip = midi::MidiClip::new(clip_pos, &self.settings);
+        clip.size = [clip_w, clip_h];
+        self.midi_clips.push(clip);
+        let clip_idx = self.midi_clips.len() - 1;
+
+        // Select the region and enter MIDI edit mode on the clip
+        self.selected.clear();
+        self.selected.push(HitTarget::InstrumentRegion(region_idx));
+        self.editing_midi_clip = Some(clip_idx);
+        self.selected_midi_notes.clear();
+
+        self.mark_dirty();
+        self.request_redraw();
+        println!("  Added instrument '{}'", plugin_name);
     }
 
     pub(crate) fn open_instrument_region_gui(&mut self, idx: usize) {

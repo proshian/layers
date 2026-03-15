@@ -781,6 +781,7 @@ impl Gpu {
             }
         } else if !self.browser_text_buffers.is_empty() {
             self.browser_text_buffers.clear();
+            self.browser_text_generation = 0;
         }
 
         // Drag ghost text

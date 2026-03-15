@@ -10,6 +10,7 @@ use crate::{push_border, Camera, InstanceRaw};
 
 pub const INSTRUMENT_REGION_DEFAULT_WIDTH: f32 = 600.0;
 pub const INSTRUMENT_REGION_DEFAULT_HEIGHT: f32 = 250.0;
+pub const INSTRUMENT_REGION_PADDING: f32 = 40.0;
 const INSTRUMENT_BORDER_COLOR: [f32; 4] = [0.60, 0.30, 0.90, 0.50];
 const INSTRUMENT_ACTIVE_BORDER: [f32; 4] = [0.70, 0.40, 1.00, 0.70];
 
@@ -88,6 +89,38 @@ impl InstrumentRegion {
 
     pub fn has_plugin(&self) -> bool {
         !self.plugin_id.is_empty()
+    }
+}
+
+/// Grow `region` so that the rectangle `clip_pos`/`clip_size` fits inside with `padding` on each side.
+/// Only grows — never shrinks the region.
+pub fn ensure_region_contains_clip(
+    region: &mut InstrumentRegion,
+    clip_pos: [f32; 2],
+    clip_size: [f32; 2],
+    padding: f32,
+) {
+    let needed_x0 = clip_pos[0] - padding;
+    let needed_y0 = clip_pos[1] - padding;
+    let needed_x1 = clip_pos[0] + clip_size[0] + padding;
+    let needed_y1 = clip_pos[1] + clip_size[1] + padding;
+
+    let cur_x1 = region.position[0] + region.size[0];
+    let cur_y1 = region.position[1] + region.size[1];
+
+    if needed_x0 < region.position[0] {
+        region.size[0] += region.position[0] - needed_x0;
+        region.position[0] = needed_x0;
+    }
+    if needed_y0 < region.position[1] {
+        region.size[1] += region.position[1] - needed_y0;
+        region.position[1] = needed_y0;
+    }
+    if needed_x1 > cur_x1 {
+        region.size[0] = needed_x1 - region.position[0];
+    }
+    if needed_y1 > cur_y1 {
+        region.size[1] = needed_y1 - region.position[1];
     }
 }
 
