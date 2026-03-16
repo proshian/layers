@@ -302,7 +302,7 @@ pub(crate) struct Gpu {
     cached_auto_lane_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_midi_note_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_midi_per_note_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
-    pub(crate) auto_lane_close_rects: Vec<(usize, [f32; 4])>,
+    pub(crate) auto_lane_close_rects: Vec<(crate::entity_id::EntityId, [f32; 4])>,
 }
 
 impl Gpu {
@@ -637,12 +637,12 @@ impl Gpu {
         is_playing: bool,
         is_recording: bool,
         playback_position: f64,
-        export_regions: &[ExportRegion],
-        effect_regions: &[effects::EffectRegion],
-        plugin_blocks: &[effects::PluginBlock],
-        editing_effect_name: Option<(usize, &str)>,
-        waveforms: &[waveform::WaveformView],
-        editing_waveform_name: Option<(usize, &str)>,
+        export_regions: &indexmap::IndexMap<crate::entity_id::EntityId, ExportRegion>,
+        effect_regions: &indexmap::IndexMap<crate::entity_id::EntityId, effects::EffectRegion>,
+        plugin_blocks: &indexmap::IndexMap<crate::entity_id::EntityId, effects::PluginBlock>,
+        editing_effect_name: Option<(crate::entity_id::EntityId, &str)>,
+        waveforms: &indexmap::IndexMap<crate::entity_id::EntityId, waveform::WaveformView>,
+        editing_waveform_name: Option<(crate::entity_id::EntityId, &str)>,
         plugin_editor: Option<&plugin_editor::PluginEditorWindow>,
         settings_window: Option<&SettingsWindow>,
         settings: &Settings,
@@ -651,11 +651,11 @@ impl Gpu {
         editing_bpm: Option<&str>,
         automation_mode: bool,
         active_automation_param: crate::automation::AutomationParam,
-        midi_clips: &[midi::MidiClip],
-        hovered_midi_clip: Option<usize>,
-        editing_midi_clip: Option<usize>,
+        midi_clips: &indexmap::IndexMap<crate::entity_id::EntityId, midi::MidiClip>,
+        hovered_midi_clip: Option<crate::entity_id::EntityId>,
+        editing_midi_clip: Option<crate::entity_id::EntityId>,
         mouse_world: [f32; 2],
-        cmd_velocity_hover_note: Option<(usize, usize)>,
+        cmd_velocity_hover_note: Option<(crate::entity_id::EntityId, usize)>,
     ) {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
@@ -739,9 +739,10 @@ impl Gpu {
 
         // Velocity tooltip background pill
         if let Some((mc_idx, note_idx)) = cmd_velocity_hover_note {
-            if mc_idx < midi_clips.len() && note_idx < midi_clips[mc_idx].notes.len() {
+            if let Some(mc) = midi_clips.get(&mc_idx) {
+                if note_idx < mc.notes.len() {
                 let s = self.scale_factor;
-                let vel_text = format!("{}", midi_clips[mc_idx].notes[note_idx].velocity);
+                let vel_text = format!("{}", mc.notes[note_idx].velocity);
                 let vel_font = 11.0 * s;
                 let vel_line = 14.0 * s;
                 let text_w = vel_font * vel_text.len() as f32 * 0.6;
@@ -759,6 +760,7 @@ impl Gpu {
                     color: [0.15, 0.15, 0.20, 0.92],
                     border_radius: 4.0 * s,
                 });
+            }
             }
         }
 
@@ -1471,7 +1473,7 @@ impl Gpu {
             context_menu.map(|cm| cm.menu_rect(w, h, scale));
 
         // Export region "Render" label with duration (world-space -> screen-space)
-        for er in export_regions {
+        for (_er_id, er) in export_regions {
             if settings_window.is_none() && command_palette.is_none() {
                 let pill_world_x = er.position[0] + 4.0 / camera.zoom;
                 let pill_world_y = er.position[1] + 4.0 / camera.zoom;
@@ -1537,7 +1539,7 @@ impl Gpu {
         let mut old_er_cache = std::mem::take(&mut self.cached_er_label_bufs);
         let mut new_er_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut er_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        for (er_idx, er) in effect_regions.iter().enumerate() {
+        for (er_idx, er) in effect_regions.iter() {
             let er_right = er.position[0] + er.size[0];
             let er_bottom = er.position[1] + er.size[1];
             if er_right < world_left
@@ -1574,7 +1576,7 @@ impl Gpu {
             }
 
             let display_name = if let Some((idx, ref text)) = editing_effect_name {
-                if idx == er_idx {
+                if idx == *er_idx {
                     format!("{}|", text)
                 } else {
                     er.name.clone()
@@ -1611,7 +1613,7 @@ impl Gpu {
                 new_er_cache.push((key, buf));
             }
 
-            let is_editing = editing_effect_name.map_or(false, |(idx, _)| idx == er_idx);
+            let is_editing = editing_effect_name.map_or(false, |(idx, _)| idx == *er_idx);
             let alpha = if is_editing { 255 } else { 180 };
             er_label_meta.push((
                 name_screen_x,
@@ -1633,7 +1635,7 @@ impl Gpu {
         let mut old_wf_cache = std::mem::take(&mut self.cached_wf_label_bufs);
         let mut new_wf_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut wf_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        for (wf_idx, wf) in waveforms.iter().enumerate() {
+        for (wf_idx, wf) in waveforms.iter() {
             let wf_right = wf.position[0] + wf.size[0];
             let wf_bottom = wf.position[1] + wf.size[1];
             if wf_right < world_left
@@ -1670,7 +1672,7 @@ impl Gpu {
             }
 
             let display_name = if let Some((idx, ref text)) = editing_waveform_name {
-                if idx == wf_idx {
+                if idx == *wf_idx {
                     format!("{}|", text)
                 } else {
                     wf.audio.filename.clone()
@@ -1707,7 +1709,7 @@ impl Gpu {
                 new_wf_cache.push((key, buf));
             }
 
-            let is_editing = editing_waveform_name.map_or(false, |(idx, _)| idx == wf_idx);
+            let is_editing = editing_waveform_name.map_or(false, |(idx, _)| idx == *wf_idx);
             let alpha = if is_editing { 255 } else { 180 };
             wf_label_meta.push((
                 name_screen_x,
@@ -1723,7 +1725,7 @@ impl Gpu {
         let mut new_pb_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut pb_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
         if settings_window.is_none() && command_palette.is_none() {
-            for pb in plugin_blocks {
+            for (_pb_id, pb) in plugin_blocks {
                 let pb_right = pb.position[0] + pb.size[0];
                 let pb_bottom = pb.position[1] + pb.size[1];
                 if pb_right < world_left
@@ -1790,7 +1792,7 @@ impl Gpu {
         let mut new_auto_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut auto_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
         if automation_mode && settings_window.is_none() && command_palette.is_none() {
-            for wf in waveforms.iter() {
+            for (_wf_id, wf) in waveforms.iter() {
                 let wf_right = wf.position[0] + wf.size[0];
                 let wf_bottom = wf.position[1] + wf.size[1];
                 if wf_right < world_left
@@ -1873,7 +1875,7 @@ impl Gpu {
         let mut lane_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
         self.auto_lane_close_rects.clear();
         if automation_mode && settings_window.is_none() && command_palette.is_none() {
-            for (wf_i, wf) in waveforms.iter().enumerate() {
+            for (wf_id, wf) in waveforms.iter() {
                 let wf_right = wf.position[0] + wf.size[0];
                 let wf_bottom = wf.position[1] + wf.size[1];
                 if wf_right < world_left
@@ -1936,7 +1938,7 @@ impl Gpu {
                 let x_icon_offset = (base_text_len as f32 + 2.0) * label_font * 0.55;
                 let close_size = 12.0 * scale;
                 self.auto_lane_close_rects.push((
-                    wf_i,
+                    *wf_id,
                     [screen_x + x_icon_offset, screen_y - close_size * 0.8, close_size, close_size],
                 ));
 
@@ -1957,7 +1959,7 @@ impl Gpu {
         if settings_window.is_none() && command_palette.is_none() {
             let browser_right_px = sample_browser.map_or(0.0, |b| b.panel_width(scale));
 
-            for (mc_idx, mc) in midi_clips.iter().enumerate() {
+            for (mc_idx, mc) in midi_clips.iter() {
                 let mc_right = mc.position[0] + mc.size[0];
                 let mc_bottom = mc.position[1] + mc.size[1];
                 if mc_right < world_left
@@ -1968,7 +1970,7 @@ impl Gpu {
                     continue;
                 }
 
-                let is_editing = editing_midi_clip == Some(mc_idx);
+                let is_editing = editing_midi_clip == Some(*mc_idx);
                 let nh = mc.note_height_editing(is_editing);
                 let row_screen_h = nh * camera.zoom;
                 if row_screen_h < 3.0 {
@@ -2004,7 +2006,7 @@ impl Gpu {
                 let label_x_world = sticky_x_world + pad;
                 let label_screen_x = (label_x_world - camera.position[0]) * camera.zoom;
 
-                let hovered_pitch = if hovered_midi_clip == Some(mc_idx) && mc.contains(mouse_world)
+                let hovered_pitch = if hovered_midi_clip == Some(*mc_idx) && mc.contains(mouse_world)
                 {
                     Some(mc.y_to_pitch_editing(mouse_world[1], is_editing))
                 } else {
@@ -2064,7 +2066,7 @@ impl Gpu {
         let mut new_pn_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut pn_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
         if settings_window.is_none() && command_palette.is_none() {
-            for (mc_idx, mc) in midi_clips.iter().enumerate() {
+            for (mc_idx, mc) in midi_clips.iter() {
                 let mc_right = mc.position[0] + mc.size[0];
                 let mc_bottom = mc.position[1] + mc.size[1];
                 if mc_right < world_left
@@ -2075,7 +2077,7 @@ impl Gpu {
                     continue;
                 }
 
-                let is_editing = editing_midi_clip == Some(mc_idx);
+                let is_editing = editing_midi_clip == Some(*mc_idx);
                 let nh = mc.note_height_editing(is_editing);
                 let row_screen_h = nh * camera.zoom;
                 if row_screen_h >= 6.0 {
@@ -2177,8 +2179,9 @@ impl Gpu {
 
         // Velocity label on Cmd+hovered note
         if let Some((mc_idx, note_idx)) = cmd_velocity_hover_note {
-            if mc_idx < midi_clips.len() && note_idx < midi_clips[mc_idx].notes.len() {
-                let note = &midi_clips[mc_idx].notes[note_idx];
+            if let Some(mc) = midi_clips.get(&mc_idx) {
+                if note_idx < mc.notes.len() {
+                let note = &mc.notes[note_idx];
 
                 let vel_font = 11.0 * scale;
                 let vel_line = 14.0 * scale;
@@ -2208,6 +2211,7 @@ impl Gpu {
                     TextColor::rgba(255, 255, 255, 255),
                     full_bounds,
                 ));
+            }
             }
         }
 

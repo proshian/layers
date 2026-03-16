@@ -2,6 +2,7 @@
 name = "layers"
 version = "0.1.0"
 edition = "2021"
+default-run = "layers"
 
 [dependencies]
 wgpu = "24"
@@ -14,7 +15,9 @@ symphonia = { version = "0.5", features = ["mp3", "wav", "ogg", "flac", "isomp4"
 env_logger = "0.11"
 log = "0.4"
 surrealdb = { version = "3", features = ["kv-rocksdb"] }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+futures-util = "0.3"
 dirs = "6"
 glyphon = "0.8"
 rfd = "0.15"
@@ -22,8 +25,14 @@ rack = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 muda = "0.17"
+uuid = { version = "1", features = ["v4", "serde"] }
+indexmap = { version = "2", features = ["serde"] }
 vst3-gui = { path = "vst3-gui" }
 
 [[bin]]
 name = "test_vst3"
 path = "src/bin/test_vst3.rs"
+
+[[bin]]
+name = "relay_server"
+path = "src/bin/relay_server.rs"

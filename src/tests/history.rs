@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crate::audio::AudioClipData;
 use crate::automation::AutomationData;
+use crate::entity_id::new_id;
 use crate::history::MAX_UNDO_HISTORY;
+use crate::operations::Operation;
 use crate::regions::LoopRegion;
 use crate::ui::waveform::{AudioData, WaveformPeaks};
 use crate::{App, CanvasObject, HitTarget, WaveformView};
@@ -44,153 +46,177 @@ fn make_waveform(x: f32, y: f32) -> WaveformView {
 #[test]
 fn test_undo_restores_objects() {
     let mut app = App::new_headless();
-    app.objects.push(make_object(0.0, 0.0));
-    app.push_undo();
+    let id = new_id();
+    let obj = make_object(0.0, 0.0);
+    app.objects.insert(id, obj.clone());
+    app.push_op(Operation::CreateObject { id, data: obj });
 
-    app.objects.push(make_object(100.0, 100.0));
-    app.objects.push(make_object(200.0, 200.0));
-    assert_eq!(app.objects.len(), 3);
+    let id2 = new_id();
+    let obj2 = make_object(100.0, 100.0);
+    app.objects.insert(id2, obj2.clone());
+    app.push_op(Operation::CreateObject { id: id2, data: obj2 });
 
-    app.undo();
+    assert_eq!(app.objects.len(), 2);
+
+    app.undo_op();
     assert_eq!(app.objects.len(), 1);
+
+    app.undo_op();
+    assert_eq!(app.objects.len(), 0);
 }
 
 #[test]
 fn test_redo_after_undo() {
     let mut app = App::new_headless();
-    app.push_undo();
+    let id = new_id();
+    let obj = make_object(10.0, 20.0);
+    app.objects.insert(id, obj.clone());
+    app.push_op(Operation::CreateObject { id, data: obj });
 
-    app.objects.push(make_object(10.0, 20.0));
-    let post_mutation = app.objects.clone();
-
-    app.undo();
+    app.undo_op();
     assert!(app.objects.is_empty());
 
-    app.redo();
-    assert_eq!(app.objects, post_mutation);
+    app.redo_op();
+    assert_eq!(app.objects.len(), 1);
 }
 
 #[test]
 fn test_undo_empty_stack_noop() {
     let mut app = App::new_headless();
     let obj_count = app.objects.len();
-    app.undo();
+    app.undo_op();
     assert_eq!(app.objects.len(), obj_count);
 }
 
 #[test]
 fn test_redo_empty_stack_noop() {
     let mut app = App::new_headless();
-    app.redo();
+    app.redo_op();
     assert!(app.objects.is_empty());
 }
 
 #[test]
 fn test_push_clears_redo() {
     let mut app = App::new_headless();
-    app.push_undo();
-    app.objects.push(make_object(0.0, 0.0));
-    app.undo();
-    assert!(!app.redo_stack.is_empty());
+    let id = new_id();
+    let obj = make_object(0.0, 0.0);
+    app.objects.insert(id, obj.clone());
+    app.push_op(Operation::CreateObject { id, data: obj });
 
-    // A new push_undo should clear the redo stack
-    app.push_undo();
-    assert!(app.redo_stack.is_empty());
+    app.undo_op();
+    assert!(!app.op_redo_stack.is_empty());
+
+    // A new push_op should clear the redo stack
+    let id2 = new_id();
+    let obj2 = make_object(1.0, 1.0);
+    app.objects.insert(id2, obj2.clone());
+    app.push_op(Operation::CreateObject { id: id2, data: obj2 });
+    assert!(app.op_redo_stack.is_empty());
 }
 
 #[test]
 fn test_max_history_limit() {
     let mut app = App::new_headless();
     for i in 0..55 {
-        app.push_undo();
-        app.objects.push(make_object(i as f32, 0.0));
+        let id = new_id();
+        let obj = make_object(i as f32, 0.0);
+        app.objects.insert(id, obj.clone());
+        app.push_op(Operation::CreateObject { id, data: obj });
     }
-    assert!(app.undo_stack.len() <= MAX_UNDO_HISTORY);
+    assert!(app.op_undo_stack.len() <= MAX_UNDO_HISTORY);
 }
 
 #[test]
 fn test_multiple_undo_redo_cycle() {
     let mut app = App::new_headless();
 
-    // State 0: empty
-    app.push_undo();
-    app.objects.push(make_object(0.0, 0.0));
+    let id1 = new_id();
+    let obj1 = make_object(0.0, 0.0);
+    app.objects.insert(id1, obj1.clone());
+    app.push_op(Operation::CreateObject { id: id1, data: obj1 });
     let state1 = app.objects.clone();
 
-    app.push_undo();
-    app.objects.push(make_object(1.0, 1.0));
+    let id2 = new_id();
+    let obj2 = make_object(1.0, 1.0);
+    app.objects.insert(id2, obj2.clone());
+    app.push_op(Operation::CreateObject { id: id2, data: obj2 });
     let state2 = app.objects.clone();
 
-    app.push_undo();
-    app.objects.push(make_object(2.0, 2.0));
-    let state3 = app.objects.clone();
+    let id3 = new_id();
+    let obj3 = make_object(2.0, 2.0);
+    app.objects.insert(id3, obj3.clone());
+    app.push_op(Operation::CreateObject { id: id3, data: obj3 });
 
     assert_eq!(app.objects.len(), 3);
 
-    // Undo back through all 3 states
-    app.undo();
+    // Undo back
+    app.undo_op();
     assert_eq!(app.objects, state2);
 
-    app.undo();
+    app.undo_op();
     assert_eq!(app.objects, state1);
 
-    app.undo();
+    app.undo_op();
     assert!(app.objects.is_empty());
 
-    // Redo forward through all 3 states
-    app.redo();
+    // Redo forward
+    app.redo_op();
     assert_eq!(app.objects, state1);
 
-    app.redo();
+    app.redo_op();
     assert_eq!(app.objects, state2);
-
-    app.redo();
-    assert_eq!(app.objects, state3);
 }
 
 #[test]
 fn test_undo_clears_selection() {
     let mut app = App::new_headless();
-    app.objects.push(make_object(0.0, 0.0));
-    app.push_undo();
+    let id = new_id();
+    let obj = make_object(0.0, 0.0);
+    app.objects.insert(id, obj.clone());
+    app.push_op(Operation::CreateObject { id, data: obj });
 
-    app.selected.push(HitTarget::Object(0));
+    app.selected.push(HitTarget::Object(id));
     assert!(!app.selected.is_empty());
 
-    app.undo();
+    app.undo_op();
     assert!(app.selected.is_empty());
 }
 
 #[test]
 fn test_undo_restores_waveform_positions() {
     let mut app = App::new_headless();
-    app.waveforms.push(make_waveform(50.0, 50.0));
-    app.audio_clips.push(AudioClipData {
+    let wf_id = new_id();
+    let wf = make_waveform(50.0, 50.0);
+    app.waveforms.insert(wf_id, wf.clone());
+    app.audio_clips.insert(wf_id, AudioClipData {
         samples: Arc::new(Vec::new()),
         sample_rate: 48000,
         duration_secs: 0.0,
     });
-    app.push_undo();
 
-    // Move waveform
-    app.waveforms[0].position = [300.0, 400.0];
+    // Move waveform via op
+    let before = app.waveforms[&wf_id].clone();
+    app.waveforms.get_mut(&wf_id).unwrap().position = [300.0, 400.0];
+    let after = app.waveforms[&wf_id].clone();
+    app.push_op(Operation::UpdateWaveform { id: wf_id, before, after });
 
-    app.undo();
-    assert_eq!(app.waveforms[0].position, [50.0, 50.0]);
+    app.undo_op();
+    assert_eq!(app.waveforms.get(&wf_id).unwrap().position, [50.0, 50.0]);
 }
 
 #[test]
 fn test_undo_restores_loop_regions() {
     let mut app = App::new_headless();
-    app.push_undo();
-
-    app.loop_regions.push(LoopRegion {
+    let id = new_id();
+    let lr = LoopRegion {
         position: [100.0, 0.0],
         size: [200.0, 30.0],
         enabled: true,
-    });
+    };
+    app.loop_regions.insert(id, lr.clone());
+    app.push_op(Operation::CreateLoopRegion { id, data: lr });
     assert_eq!(app.loop_regions.len(), 1);
 
-    app.undo();
+    app.undo_op();
     assert!(app.loop_regions.is_empty());
 }

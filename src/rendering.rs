@@ -1,7 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+
+use indexmap::IndexMap;
 
 use crate::component;
 use crate::effects;
+use crate::entity_id::EntityId;
 use crate::grid::{grid_spacing_for_settings, pixels_per_beat};
 use crate::hit_testing::canonical_rect;
 use crate::instruments;
@@ -22,34 +25,35 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) camera: &'a Camera,
     pub(crate) screen_w: f32,
     pub(crate) screen_h: f32,
-    pub(crate) objects: &'a [CanvasObject],
-    pub(crate) waveforms: &'a [WaveformView],
-    pub(crate) effect_regions: &'a [effects::EffectRegion],
-    pub(crate) plugin_blocks: &'a [effects::PluginBlock],
+    pub(crate) objects: &'a IndexMap<EntityId, CanvasObject>,
+    pub(crate) waveforms: &'a IndexMap<EntityId, WaveformView>,
+    pub(crate) effect_regions: &'a IndexMap<EntityId, effects::EffectRegion>,
+    pub(crate) plugin_blocks: &'a IndexMap<EntityId, effects::PluginBlock>,
     pub(crate) hovered: Option<HitTarget>,
     pub(crate) selected: &'a HashSet<HitTarget>,
     pub(crate) selection_rect: Option<([f32; 2], [f32; 2])>,
     pub(crate) select_area: Option<&'a SelectArea>,
     pub(crate) file_hovering: bool,
     pub(crate) playhead_world_x: Option<f32>,
-    pub(crate) export_regions: &'a [ExportRegion],
-    pub(crate) loop_regions: &'a [LoopRegion],
-    pub(crate) components: &'a [component::ComponentDef],
-    pub(crate) component_instances: &'a [component::ComponentInstance],
-    pub(crate) editing_component: Option<usize>,
+    pub(crate) export_regions: &'a IndexMap<EntityId, ExportRegion>,
+    pub(crate) loop_regions: &'a IndexMap<EntityId, LoopRegion>,
+    pub(crate) components: &'a IndexMap<EntityId, component::ComponentDef>,
+    pub(crate) component_instances: &'a IndexMap<EntityId, component::ComponentInstance>,
+    pub(crate) editing_component: Option<EntityId>,
     pub(crate) settings: &'a Settings,
-    pub(crate) component_map: &'a HashMap<component::ComponentId, usize>,
-    pub(crate) fade_curve_hovered: Option<(usize, bool)>,
-    pub(crate) fade_curve_dragging: Option<(usize, bool)>,
+    pub(crate) fade_curve_hovered: Option<(EntityId, bool)>,
+    pub(crate) fade_curve_dragging: Option<(EntityId, bool)>,
     pub(crate) mouse_world: [f32; 2],
     pub(crate) bpm: f32,
     pub(crate) automation_mode: bool,
     pub(crate) active_automation_param: crate::automation::AutomationParam,
-    pub(crate) midi_clips: &'a [midi::MidiClip],
-    pub(crate) instrument_regions: &'a [instruments::InstrumentRegion],
-    pub(crate) editing_midi_clip: Option<usize>,
+    pub(crate) midi_clips: &'a IndexMap<EntityId, midi::MidiClip>,
+    pub(crate) instrument_regions: &'a IndexMap<EntityId, instruments::InstrumentRegion>,
+    pub(crate) editing_midi_clip: Option<EntityId>,
     pub(crate) selected_midi_notes: &'a [usize],
     pub(crate) midi_note_select_rect: Option<[f32; 4]>,
+    pub(crate) remote_users: &'a std::collections::HashMap<crate::user::UserId, crate::user::RemoteUserState>,
+    pub(crate) network_mode: crate::network::NetworkMode,
 }
 
 pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
@@ -133,7 +137,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- effect regions (rendered behind everything) ---
-    for (i, er) in ctx.effect_regions.iter().enumerate() {
+    for (&id, er) in ctx.effect_regions.iter() {
         let er_right = er.position[0] + er.size[0];
         let er_bottom = er.position[1] + er.size[1];
         if er_right < world_left
@@ -143,8 +147,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::EffectRegion(i));
-        let is_hov = ctx.hovered == Some(HitTarget::EffectRegion(i));
+        let is_sel = ctx.selected.contains(&HitTarget::EffectRegion(id));
+        let is_hov = ctx.hovered == Some(HitTarget::EffectRegion(id));
         let is_active = ctx.playhead_world_x.map_or(false, |px| {
             px >= er.position[0] && px <= er.position[0] + er.size[0]
         });
@@ -154,7 +158,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- plugin blocks ---
-    for (i, pb) in ctx.plugin_blocks.iter().enumerate() {
+    for (&id, pb) in ctx.plugin_blocks.iter() {
         let pb_right = pb.position[0] + pb.size[0];
         let pb_bottom = pb.position[1] + pb.size[1];
         if pb_right < world_left
@@ -164,15 +168,15 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::PluginBlock(i));
-        let is_hov = ctx.hovered == Some(HitTarget::PluginBlock(i));
+        let is_sel = ctx.selected.contains(&HitTarget::PluginBlock(id));
+        let is_hov = ctx.hovered == Some(HitTarget::PluginBlock(id));
         out.extend(effects::build_plugin_block_instances(
             pb, camera, is_hov, is_sel,
         ));
     }
 
     // --- instrument regions ---
-    for (i, ir) in ctx.instrument_regions.iter().enumerate() {
+    for (&id, ir) in ctx.instrument_regions.iter() {
         let ir_right = ir.position[0] + ir.size[0];
         let ir_bottom = ir.position[1] + ir.size[1];
         if ir_right < world_left
@@ -182,8 +186,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::InstrumentRegion(i));
-        let is_hov = ctx.hovered == Some(HitTarget::InstrumentRegion(i));
+        let is_sel = ctx.selected.contains(&HitTarget::InstrumentRegion(id));
+        let is_hov = ctx.hovered == Some(HitTarget::InstrumentRegion(id));
         let is_active = ctx.playhead_world_x.map_or(false, |px| {
             px >= ir.position[0] && px <= ir.position[0] + ir.size[0]
         });
@@ -193,7 +197,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- midi clips ---
-    for (i, mc) in ctx.midi_clips.iter().enumerate() {
+    for (&id, mc) in ctx.midi_clips.iter() {
         let mc_right = mc.position[0] + mc.size[0];
         let mc_bottom = mc.position[1] + mc.size[1];
         if mc_right < world_left
@@ -203,9 +207,9 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::MidiClip(i));
-        let is_hov = ctx.hovered == Some(HitTarget::MidiClip(i));
-        let editing = ctx.editing_midi_clip == Some(i);
+        let is_sel = ctx.selected.contains(&HitTarget::MidiClip(id));
+        let is_hov = ctx.hovered == Some(HitTarget::MidiClip(id));
+        let editing = ctx.editing_midi_clip == Some(id);
         out.extend(midi::build_midi_clip_instances(mc, camera, is_hov, is_sel, editing));
         let sel_notes = if editing {
             ctx.selected_midi_notes
@@ -222,7 +226,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- export regions ---
-    for (i, er) in ctx.export_regions.iter().enumerate() {
+    for (&id, er) in ctx.export_regions.iter() {
         let p = er.position;
         let s = er.size;
         let er_right = p[0] + s[0];
@@ -234,8 +238,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::ExportRegion(i));
-        let is_hov = ctx.hovered == Some(HitTarget::ExportRegion(i));
+        let is_sel = ctx.selected.contains(&HitTarget::ExportRegion(id));
+        let is_hov = ctx.hovered == Some(HitTarget::ExportRegion(id));
 
         out.push(InstanceRaw {
             position: p,
@@ -296,7 +300,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- loop regions ---
-    for (i, lr) in ctx.loop_regions.iter().enumerate() {
+    for (&id, lr) in ctx.loop_regions.iter() {
         let p = lr.position;
         let s = lr.size;
         let lr_right = p[0] + s[0];
@@ -308,8 +312,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::LoopRegion(i));
-        let is_hov = ctx.hovered == Some(HitTarget::LoopRegion(i));
+        let is_sel = ctx.selected.contains(&HitTarget::LoopRegion(id));
+        let is_hov = ctx.hovered == Some(HitTarget::LoopRegion(id));
         let alpha_mul = if lr.enabled { 1.0 } else { 0.25 };
 
         let fill = [
@@ -391,7 +395,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
 
     // --- canvas objects ---
     let ci = ctx.settings.color_intensity;
-    for (i, obj) in ctx.objects.iter().enumerate() {
+    for (&id, obj) in ctx.objects.iter() {
         let obj_right = obj.position[0] + obj.size[0];
         let obj_bottom = obj.position[1] + obj.size[1];
         if obj_right < world_left
@@ -401,8 +405,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::Object(i));
-        let is_hov = ctx.hovered == Some(HitTarget::Object(i));
+        let is_sel = ctx.selected.contains(&HitTarget::Object(id));
+        let is_hov = ctx.hovered == Some(HitTarget::Object(id));
         let mut color = obj.color;
         if ci > 0.001 {
             let lum = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2];
@@ -425,7 +429,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- waveforms ---
-    for (i, wf) in ctx.waveforms.iter().enumerate() {
+    for (&id, wf) in ctx.waveforms.iter() {
         let wf_right = wf.position[0] + wf.size[0];
         let wf_bottom = wf.position[1] + wf.size[1];
         if wf_right < world_left
@@ -435,8 +439,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::Waveform(i));
-        let is_hov = ctx.hovered == Some(HitTarget::Waveform(i));
+        let is_sel = ctx.selected.contains(&HitTarget::Waveform(id));
+        let is_hov = ctx.hovered == Some(HitTarget::Waveform(id));
         out.extend(ui::waveform::build_waveform_instances(
             wf,
             camera,
@@ -457,7 +461,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- component definitions ---
-    for (i, def) in ctx.components.iter().enumerate() {
+    for (&id, def) in ctx.components.iter() {
         let def_right = def.position[0] + def.size[0];
         let def_bottom = def.position[1] + def.size[1];
         if def_right < world_left
@@ -467,9 +471,9 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::ComponentDef(i));
-        let is_hov = ctx.hovered == Some(HitTarget::ComponentDef(i));
-        let is_editing = ctx.editing_component == Some(i);
+        let is_sel = ctx.selected.contains(&HitTarget::ComponentDef(id));
+        let is_hov = ctx.hovered == Some(HitTarget::ComponentDef(id));
+        let is_editing = ctx.editing_component == Some(id);
         out.extend(component::build_component_def_instances(
             def,
             camera,
@@ -479,9 +483,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- component instances ---
-    for (i, inst) in ctx.component_instances.iter().enumerate() {
-        if let Some(&def_idx) = ctx.component_map.get(&inst.component_id) {
-            let def = &ctx.components[def_idx];
+    for (&id, inst) in ctx.component_instances.iter() {
+        if let Some(def) = ctx.components.get(&inst.component_id) {
             let inst_right = inst.position[0] + def.size[0];
             let inst_bottom = inst.position[1] + def.size[1];
             if inst_right < world_left
@@ -491,8 +494,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             {
                 continue;
             }
-            let is_sel = ctx.selected.contains(&HitTarget::ComponentInstance(i));
-            let is_hov = ctx.hovered == Some(HitTarget::ComponentInstance(i));
+            let is_sel = ctx.selected.contains(&HitTarget::ComponentInstance(id));
+            let is_hov = ctx.hovered == Some(HitTarget::ComponentInstance(id));
             out.extend(component::build_component_instance_instances(
                 inst,
                 def,
@@ -507,8 +510,8 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     }
 
     // --- edit mode dimming overlay ---
-    if let Some(ec_idx) = ctx.editing_component {
-        if let Some(def) = ctx.components.get(ec_idx) {
+    if let Some(ec_id) = ctx.editing_component {
+        if let Some(def) = ctx.components.get(&ec_id) {
             // Dim everything outside the component with 4 dark rectangles
             let dim_color = [0.0, 0.0, 0.0, 0.50];
             // Top strip
@@ -557,7 +560,6 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             ctx.export_regions,
             ctx.components,
             ctx.component_instances,
-            ctx.component_map,
             ctx.midi_clips,
             ctx.instrument_regions,
             target,
@@ -630,6 +632,80 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         });
     }
 
+    // --- remote user cursors ---
+    for (_uid, remote) in ctx.remote_users {
+        if !remote.online {
+            continue;
+        }
+        if let Some(pos) = remote.cursor_world {
+            // Cursor arrow body
+            let arrow_sz = 12.0 / camera.zoom;
+            out.push(InstanceRaw {
+                position: [pos[0], pos[1]],
+                size: [arrow_sz, arrow_sz],
+                color: remote.user.color,
+                border_radius: 2.0 / camera.zoom,
+            });
+            // Name tag background
+            let tag_w = 60.0 / camera.zoom;
+            let tag_h = 16.0 / camera.zoom;
+            let tag_x = pos[0] + arrow_sz * 0.8;
+            let tag_y = pos[1] + arrow_sz * 0.8;
+            out.push(InstanceRaw {
+                position: [tag_x, tag_y],
+                size: [tag_w, tag_h],
+                color: [remote.user.color[0], remote.user.color[1], remote.user.color[2], 0.85],
+                border_radius: 3.0 / camera.zoom,
+            });
+        }
+        // Ghost outlines for drag previews
+        if let Some(preview) = &remote.drag_preview {
+            let ghost_color = [remote.user.color[0], remote.user.color[1], remote.user.color[2], 0.3];
+            match preview {
+                crate::user::DragPreview::ResizingEntity { new_position, new_size, .. } => {
+                    out.push(InstanceRaw {
+                        position: *new_position,
+                        size: *new_size,
+                        color: ghost_color,
+                        border_radius: 4.0 / camera.zoom,
+                    });
+                }
+                crate::user::DragPreview::MovingEntities { targets } => {
+                    for (_target, pos) in targets {
+                        let sz = 60.0 / camera.zoom;
+                        out.push(InstanceRaw {
+                            position: *pos,
+                            size: [sz, sz],
+                            color: ghost_color,
+                            border_radius: 4.0 / camera.zoom,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // --- connection status dot (top-right corner) ---
+    {
+        use crate::network::NetworkMode;
+        let dot_color = match ctx.network_mode {
+            NetworkMode::Connected => Some([0.30, 0.85, 0.39, 0.90]),    // green
+            NetworkMode::Connecting => Some([1.00, 0.84, 0.00, 0.90]),   // yellow
+            NetworkMode::Disconnected => Some([1.00, 0.24, 0.19, 0.90]), // red
+            NetworkMode::Offline => None,
+        };
+        if let Some(color) = dot_color {
+            let dot_sz = 8.0 / camera.zoom;
+            let margin = 12.0 / camera.zoom;
+            out.push(InstanceRaw {
+                position: [world_right - dot_sz - margin, world_top + margin],
+                size: [dot_sz, dot_sz],
+                color,
+                border_radius: dot_sz / 2.0,
+            });
+        }
+    }
+
     // --- file drop zone overlay ---
     if ctx.file_hovering {
         out.push(InstanceRaw {
@@ -656,7 +732,7 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
     let world_right = world_left + ctx.screen_w / camera.zoom;
     let world_top = camera.position[1];
     let world_bottom = world_top + ctx.screen_h / camera.zoom;
-    for (i, wf) in ctx.waveforms.iter().enumerate() {
+    for (&id, wf) in ctx.waveforms.iter() {
         let wf_right = wf.position[0] + wf.size[0];
         let wf_bottom = wf.position[1] + wf.size[1];
         if wf_right < world_left
@@ -666,8 +742,8 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
         {
             continue;
         }
-        let is_sel = ctx.selected.contains(&HitTarget::Waveform(i));
-        let is_hov = ctx.hovered == Some(HitTarget::Waveform(i));
+        let is_sel = ctx.selected.contains(&HitTarget::Waveform(id));
+        let is_hov = ctx.hovered == Some(HitTarget::Waveform(id));
         verts.extend(ui::waveform::build_waveform_triangles(
             wf,
             camera,
@@ -689,11 +765,11 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
             && mx >= wf.position[0] + wf.size[0] - wf.fade_out_px
             && mx <= wf.position[0] + wf.size[0];
         let show_fi_line = mouse_in_fi
-            || matches!(ctx.fade_curve_hovered, Some((idx, true)) if idx == i)
-            || matches!(ctx.fade_curve_dragging, Some((idx, true)) if idx == i);
+            || matches!(ctx.fade_curve_hovered, Some((fid, true)) if fid == id)
+            || matches!(ctx.fade_curve_dragging, Some((fid, true)) if fid == id);
         let show_fo_line = mouse_in_fo
-            || matches!(ctx.fade_curve_hovered, Some((idx, false)) if idx == i)
-            || matches!(ctx.fade_curve_dragging, Some((idx, false)) if idx == i);
+            || matches!(ctx.fade_curve_hovered, Some((fid, false)) if fid == id)
+            || matches!(ctx.fade_curve_dragging, Some((fid, false)) if fid == id);
         verts.extend(ui::waveform::build_fade_curve_triangles(
             wf,
             camera,
@@ -735,44 +811,66 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
 }
 
 pub(crate) fn target_rect(
-    objects: &[CanvasObject],
-    waveforms: &[WaveformView],
-    effect_regions: &[effects::EffectRegion],
-    plugin_blocks: &[effects::PluginBlock],
-    loop_regions: &[LoopRegion],
-    export_regions: &[ExportRegion],
-    components: &[component::ComponentDef],
-    component_instances: &[component::ComponentInstance],
-    component_map: &HashMap<component::ComponentId, usize>,
-    midi_clips: &[midi::MidiClip],
-    instrument_regions: &[instruments::InstrumentRegion],
+    objects: &IndexMap<EntityId, CanvasObject>,
+    waveforms: &IndexMap<EntityId, WaveformView>,
+    effect_regions: &IndexMap<EntityId, effects::EffectRegion>,
+    plugin_blocks: &IndexMap<EntityId, effects::PluginBlock>,
+    loop_regions: &IndexMap<EntityId, LoopRegion>,
+    export_regions: &IndexMap<EntityId, ExportRegion>,
+    components: &IndexMap<EntityId, component::ComponentDef>,
+    component_instances: &IndexMap<EntityId, component::ComponentInstance>,
+    midi_clips: &IndexMap<EntityId, midi::MidiClip>,
+    instrument_regions: &IndexMap<EntityId, instruments::InstrumentRegion>,
     target: &HitTarget,
 ) -> ([f32; 2], [f32; 2]) {
     match target {
-        HitTarget::Object(i) => (objects[*i].position, objects[*i].size),
-        HitTarget::Waveform(i) => (waveforms[*i].position, waveforms[*i].size),
-        HitTarget::EffectRegion(i) => (effect_regions[*i].position, effect_regions[*i].size),
-        HitTarget::PluginBlock(i) => (plugin_blocks[*i].position, plugin_blocks[*i].size),
-        HitTarget::LoopRegion(i) => (loop_regions[*i].position, loop_regions[*i].size),
-        HitTarget::ExportRegion(i) => (export_regions[*i].position, export_regions[*i].size),
-        HitTarget::ComponentDef(i) => (components[*i].position, components[*i].size),
-        HitTarget::ComponentInstance(i) => {
-            let inst = &component_instances[*i];
-            let def = component_map
-                .get(&inst.component_id)
-                .map(|&idx| &components[idx]);
+        HitTarget::Object(id) => {
+            let o = &objects[id];
+            (o.position, o.size)
+        }
+        HitTarget::Waveform(id) => {
+            let w = &waveforms[id];
+            (w.position, w.size)
+        }
+        HitTarget::EffectRegion(id) => {
+            let e = &effect_regions[id];
+            (e.position, e.size)
+        }
+        HitTarget::PluginBlock(id) => {
+            let p = &plugin_blocks[id];
+            (p.position, p.size)
+        }
+        HitTarget::LoopRegion(id) => {
+            let l = &loop_regions[id];
+            (l.position, l.size)
+        }
+        HitTarget::ExportRegion(id) => {
+            let e = &export_regions[id];
+            (e.position, e.size)
+        }
+        HitTarget::ComponentDef(id) => {
+            let c = &components[id];
+            (c.position, c.size)
+        }
+        HitTarget::ComponentInstance(id) => {
+            let inst = &component_instances[id];
+            let def = components.get(&inst.component_id);
             match def {
                 Some(d) => (inst.position, d.size),
                 None => (inst.position, [100.0, 100.0]),
             }
         }
-        HitTarget::MidiClip(i) => (midi_clips[*i].position, midi_clips[*i].size),
-        HitTarget::InstrumentRegion(i) => {
-            (instrument_regions[*i].position, instrument_regions[*i].size)
+        HitTarget::MidiClip(id) => {
+            let m = &midi_clips[id];
+            (m.position, m.size)
+        }
+        HitTarget::InstrumentRegion(id) => {
+            let ir = &instrument_regions[id];
+            (ir.position, ir.size)
         }
     }
 }
 
-pub(crate) fn default_objects() -> Vec<CanvasObject> {
-    vec![]
+pub(crate) fn default_objects() -> IndexMap<EntityId, CanvasObject> {
+    IndexMap::new()
 }

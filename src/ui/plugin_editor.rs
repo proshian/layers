@@ -1,3 +1,4 @@
+use crate::entity_id::EntityId;
 use crate::InstanceRaw;
 
 const WIN_W: f32 = 360.0;
@@ -18,7 +19,7 @@ pub struct ParamEntry {
 }
 
 pub struct PluginEditorWindow {
-    pub region_idx: usize,
+    pub region_id: EntityId,
     pub slot_idx: usize,
     pub plugin_name: String,
     pub params: Vec<ParamEntry>,
@@ -28,13 +29,13 @@ pub struct PluginEditorWindow {
 
 impl PluginEditorWindow {
     pub fn new(
-        region_idx: usize,
+        region_id: EntityId,
         slot_idx: usize,
         plugin_name: String,
         params: Vec<ParamEntry>,
     ) -> Self {
         Self {
-            region_idx,
+            region_id,
             slot_idx,
             plugin_name,
             params,

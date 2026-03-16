@@ -1,7 +1,8 @@
+use crate::entity_id::EntityId;
 use crate::hit_testing::point_in_rect;
 use crate::Camera;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ExportRegion {
     pub(crate) position: [f32; 2],
     pub(crate) size: [f32; 2],
@@ -52,11 +53,11 @@ pub(crate) struct SelectArea {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum ExportHover {
     None,
-    RenderPill(usize),
-    CornerNW(usize),
-    CornerNE(usize),
-    CornerSW(usize),
-    CornerSE(usize),
+    RenderPill(EntityId),
+    CornerNW(EntityId),
+    CornerNE(EntityId),
+    CornerSW(EntityId),
+    CornerSE(EntityId),
 }
 
 pub(crate) const EXPORT_REGION_DEFAULT_WIDTH: f32 = 800.0;
@@ -67,7 +68,7 @@ pub(crate) const EXPORT_RENDER_PILL_COLOR: [f32; 4] = [0.15, 0.65, 0.50, 0.85];
 pub(crate) const EXPORT_RENDER_PILL_W: f32 = 110.0;
 pub(crate) const EXPORT_RENDER_PILL_H: f32 = 22.0;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LoopRegion {
     pub(crate) position: [f32; 2],
     pub(crate) size: [f32; 2],
@@ -119,10 +120,10 @@ impl LoopRegion {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum LoopHover {
     None,
-    CornerNW(usize),
-    CornerNE(usize),
-    CornerSW(usize),
-    CornerSE(usize),
+    CornerNW(EntityId),
+    CornerNE(EntityId),
+    CornerSW(EntityId),
+    CornerSE(EntityId),
 }
 
 pub(crate) const LOOP_REGION_DEFAULT_WIDTH: f32 = 800.0;

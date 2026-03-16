@@ -8,7 +8,7 @@ use crate::{push_border, Camera, InstanceRaw};
 
 const PEAK_BLOCK_SIZE: usize = 256;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WaveformPeaks {
     pub block_size: usize,
     pub peaks: Vec<f32>,
@@ -59,18 +59,31 @@ impl WaveformPeaks {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AudioData {
+    #[serde(skip, default = "default_empty_samples_arc")]
     pub left_samples: Arc<Vec<f32>>,
+    #[serde(skip, default = "default_empty_samples_arc")]
     pub right_samples: Arc<Vec<f32>>,
+    #[serde(skip, default = "default_empty_peaks_arc")]
     pub left_peaks: Arc<WaveformPeaks>,
+    #[serde(skip, default = "default_empty_peaks_arc")]
     pub right_peaks: Arc<WaveformPeaks>,
     pub sample_rate: u32,
     pub filename: String,
 }
 
-#[derive(Clone)]
+fn default_empty_samples_arc() -> Arc<Vec<f32>> {
+    Arc::new(Vec::new())
+}
+
+fn default_empty_peaks_arc() -> Arc<WaveformPeaks> {
+    Arc::new(WaveformPeaks::empty())
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WaveformView {
+    #[serde(skip, default = "default_empty_audio")]
     pub audio: Arc<AudioData>,
     pub position: [f32; 2],
     pub size: [f32; 2],
@@ -84,6 +97,17 @@ pub struct WaveformView {
     pub disabled: bool,
     pub sample_offset_px: f32,
     pub automation: AutomationData,
+}
+
+fn default_empty_audio() -> Arc<AudioData> {
+    Arc::new(AudioData {
+        left_samples: Arc::new(Vec::new()),
+        right_samples: Arc::new(Vec::new()),
+        left_peaks: Arc::new(WaveformPeaks::empty()),
+        right_peaks: Arc::new(WaveformPeaks::empty()),
+        sample_rate: 0,
+        filename: String::new(),
+    })
 }
 
 

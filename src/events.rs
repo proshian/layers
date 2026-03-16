@@ -52,12 +52,102 @@ impl ApplicationHandler for App {
             self.request_redraw();
         }
 
+        // Keep event loop alive when connected so background windows poll network
+        if self.network.is_connected() {
+            self.request_redraw();
+        }
+
         if let Ok(event) = muda::MenuEvent::receiver().try_recv() {
             self.handle_menu_event(event.id);
         }
 
         // GUI handles are kept alive (just hidden when user closes window).
         // No teardown or state sync needed here.
+
+        // --- Check for pending Welcome response (non-blocking) ---
+        if let Some(rx) = &mut self.pending_welcome {
+            if let Ok(assigned_user) = rx.try_recv() {
+                log::info!("Connected as {} ({})", assigned_user.name, assigned_user.id);
+                self.local_user = assigned_user;
+                self.reconnect_attempt = 0;
+                self.last_reconnect_time = None;
+                self.pending_welcome = None;
+            }
+        }
+
+        // --- Auto-reconnect on disconnect ---
+        if self.network.mode() == crate::network::NetworkMode::Disconnected {
+            if let Some(url) = self.connect_url.clone() {
+                let now = std::time::Instant::now();
+                let delay_secs = (1u64 << self.reconnect_attempt.min(5)).min(30);
+                let should_retry = match self.last_reconnect_time {
+                    Some(last) => now.duration_since(last).as_secs() >= delay_secs,
+                    None => true,
+                };
+                if should_retry {
+                    log::info!("Reconnecting (attempt {})...", self.reconnect_attempt + 1);
+                    self.last_reconnect_time = Some(now);
+                    self.reconnect_attempt += 1;
+                    self.connect_to_server(&url);
+                }
+            }
+        }
+
+        // --- Poll network for remote operations ---
+        let remote_ops = self.network.poll_ops();
+        if !remote_ops.is_empty() {
+            log::info!("[SYNC] polled {} remote ops", remote_ops.len());
+        }
+        for committed in remote_ops {
+            self.apply_remote_op(committed);
+        }
+
+        // --- Poll network for ephemeral messages (cursors, presence) ---
+        let ephemeral_msgs = self.network.poll_ephemeral();
+        for msg in ephemeral_msgs {
+            match msg {
+                crate::ephemeral::EphemeralMessage::CursorMove { user_id, position } => {
+                    if let Some(state) = self.remote_users.get_mut(&user_id) {
+                        state.cursor_world = Some(position);
+                    } else {
+                        // Unknown user — create placeholder (UserJoined may have been missed)
+                        let idx = self.remote_users.len();
+                        self.remote_users.insert(user_id, crate::user::RemoteUserState {
+                            user: crate::user::User {
+                                id: user_id,
+                                name: "Remote".to_string(),
+                                color: crate::user::color_for_user_index(idx + 1),
+                            },
+                            cursor_world: Some(position),
+                            drag_preview: None,
+                            online: true,
+                        });
+                    }
+                }
+                crate::ephemeral::EphemeralMessage::DragUpdate { user_id, preview } => {
+                    if let Some(state) = self.remote_users.get_mut(&user_id) {
+                        state.drag_preview = Some(preview);
+                    }
+                }
+                crate::ephemeral::EphemeralMessage::DragEnd { user_id } => {
+                    if let Some(state) = self.remote_users.get_mut(&user_id) {
+                        state.drag_preview = None;
+                    }
+                }
+                crate::ephemeral::EphemeralMessage::UserJoined { user } => {
+                    self.remote_users.insert(user.id, crate::user::RemoteUserState {
+                        user: user.clone(),
+                        cursor_world: None,
+                        drag_preview: None,
+                        online: true,
+                    });
+                }
+                crate::ephemeral::EphemeralMessage::UserLeft { user_id } => {
+                    self.remote_users.remove(&user_id);
+                }
+            }
+            self.request_redraw();
+        }
     }
 
     fn window_event(
@@ -146,7 +236,6 @@ impl ApplicationHandler for App {
 
                 if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
                     if let Some(loaded) = load_audio_file(&path) {
-                        self.push_undo();
                         let world = self.camera.screen_to_world(self.mouse_pos);
                         let height = 150.0;
                         let color_idx = self.waveforms.len() % WAVEFORM_COLORS.len();
@@ -159,7 +248,8 @@ impl ApplicationHandler for App {
                         );
                         let left_peaks = Arc::new(WaveformPeaks::build(&loaded.left_samples));
                         let right_peaks = Arc::new(WaveformPeaks::build(&loaded.right_samples));
-                        self.waveforms.push(WaveformView {
+                        let wf_id = new_id();
+                        let wf_data = WaveformView {
                             audio: Arc::new(AudioData {
                                 left_samples: loaded.left_samples,
                                 right_samples: loaded.right_samples,
@@ -180,12 +270,15 @@ impl ApplicationHandler for App {
                             disabled: false,
                             sample_offset_px: 0.0,
                             automation: crate::automation::AutomationData::new(),
-                        });
-                        self.audio_clips.push(AudioClipData {
+                        };
+                        let ac_data = AudioClipData {
                             samples: loaded.samples,
                             sample_rate: loaded.sample_rate,
                             duration_secs: loaded.duration_secs,
-                        });
+                        };
+                        self.waveforms.insert(wf_id, wf_data.clone());
+                        self.audio_clips.insert(wf_id, ac_data.clone());
+                        self.push_op(crate::operations::Operation::CreateWaveform { id: wf_id, data: wf_data, audio_clip: Some((wf_id, ac_data)) });
                         self.sync_audio_clips();
                     } else {
                         self.toast_manager.push(
@@ -212,6 +305,9 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = [position.x as f32, position.y as f32];
 
+                // Broadcast cursor position to network
+                self.broadcast_cursor_if_connected();
+
                 // Plugin editor: slider drag
                 {
                     let is_dragging_pe = self
@@ -224,8 +320,8 @@ impl ApplicationHandler for App {
                         if let Some(pe) = &mut self.plugin_editor {
                             let idx = pe.dragging_slider.unwrap();
                             let new_val = pe.slider_drag(idx, mx, scr_w, scr_h, scale);
-                            let pb_idx = pe.region_idx; // now repurposed as plugin_block index
-                            if let Some(pb) = self.plugin_blocks.get(pb_idx) {
+                            let pb_idx = pe.region_id; // now repurposed as plugin_block index
+                            if let Some(pb) = self.plugin_blocks.get(&pb_idx) {
                                 if let Ok(guard) = pb.gui.lock() {
                                     if let Some(gui) = guard.as_ref() {
                                         gui.set_parameter(idx, new_val as f64);
@@ -295,8 +391,8 @@ impl ApplicationHandler for App {
                                     let my = self.mouse_pos[1];
                                     p.sample_fader_drag(my, sw, sh, scale);
                                     if let Some(idx) = p.fader_target_waveform {
-                                        if idx < self.waveforms.len() {
-                                            self.waveforms[idx].volume = p.fader_value;
+                                        if let Some(wf) = self.waveforms.get_mut(&idx) {
+                                            wf.volume = p.fader_value;
                                             self.sync_audio_clips();
                                         }
                                     }
@@ -347,12 +443,12 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing component def
-                if let DragState::ResizingComponentDef { comp_idx, anchor, .. } = self.drag {
+                if let DragState::ResizingComponentDef { comp_id, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if comp_idx < self.components.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
-                        self.components[comp_idx].position = pos;
-                        self.components[comp_idx].size = size;
+                    let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
+                    if let Some(comp) = self.components.get_mut(&comp_id) {
+                        comp.position = pos;
+                        comp.size = size;
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -360,12 +456,12 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing export region
-                if let DragState::ResizingExportRegion { region_idx, anchor, .. } = self.drag {
+                if let DragState::ResizingExportRegion { region_id, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if region_idx < self.export_regions.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
-                        self.export_regions[region_idx].position = pos;
-                        self.export_regions[region_idx].size = size;
+                    let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
+                    if let Some(er) = self.export_regions.get_mut(&region_id) {
+                        er.position = pos;
+                        er.size = size;
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -373,12 +469,12 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing effect region
-                if let DragState::ResizingEffectRegion { region_idx, anchor, .. } = self.drag {
+                if let DragState::ResizingEffectRegion { region_id, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if region_idx < self.effect_regions.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
-                        self.effect_regions[region_idx].position = pos;
-                        self.effect_regions[region_idx].size = size;
+                    let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
+                    if let Some(er) = self.effect_regions.get_mut(&region_id) {
+                        er.position = pos;
+                        er.size = size;
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -386,12 +482,12 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing instrument region
-                if let DragState::ResizingInstrumentRegion { region_idx, anchor, .. } = self.drag {
+                if let DragState::ResizingInstrumentRegion { region_id, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if region_idx < self.instrument_regions.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
-                        self.instrument_regions[region_idx].position = pos;
-                        self.instrument_regions[region_idx].size = size;
+                    let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
+                    if let Some(ir) = self.instrument_regions.get_mut(&region_id) {
+                        ir.position = pos;
+                        ir.size = size;
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -399,15 +495,15 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing MIDI clip
-                if let DragState::ResizingMidiClip { clip_idx, anchor, .. } = self.drag {
+                if let DragState::ResizingMidiClip { clip_id, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if clip_idx < self.midi_clips.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
-                        self.midi_clips[clip_idx].position = pos;
-                        self.midi_clips[clip_idx].size = size;
+                    let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
+                    if let Some(mc) = self.midi_clips.get_mut(&clip_id) {
+                        mc.position = pos;
+                        mc.size = size;
                         // Auto-extend any overlapping instrument region
                         let padding = instruments::INSTRUMENT_REGION_PADDING;
-                        for ir in &mut self.instrument_regions {
+                        for ir in self.instrument_regions.values_mut() {
                             if rects_overlap(ir.position, ir.size, pos, size) {
                                 instruments::ensure_region_contains_clip(ir, pos, size, padding);
                             }
@@ -419,12 +515,12 @@ impl ApplicationHandler for App {
                 }
 
                 // Resizing loop region
-                if let DragState::ResizingLoopRegion { region_idx, anchor, .. } = self.drag {
+                if let DragState::ResizingLoopRegion { region_id, anchor, .. } = self.drag {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if region_idx < self.loop_regions.len() {
-                        let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
-                        self.loop_regions[region_idx].position = pos;
-                        self.loop_regions[region_idx].size = size;
+                    let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
+                    if let Some(lr) = self.loop_regions.get_mut(&region_id) {
+                        lr.position = pos;
+                        lr.size = size;
                     }
                     self.sync_loop_region();
                     self.mark_dirty();
@@ -434,15 +530,16 @@ impl ApplicationHandler for App {
 
                 // Resizing waveform edge
                 if let DragState::ResizingWaveform {
-                    waveform_idx,
+                    waveform_id,
                     is_left_edge,
                     initial_position_x,
                     initial_size_w,
                     initial_offset_px,
+                    ..
                 } = self.drag
                 {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if let Some(wf) = self.waveforms.get(waveform_idx) {
+                    if let Some(wf) = self.waveforms.get(&waveform_id) {
                         let full_w = full_audio_width_px(wf);
                         let min_w = if self.settings.grid_enabled && self.settings.snap_to_grid {
                             grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm)
@@ -475,7 +572,7 @@ impl ApplicationHandler for App {
                                 new_size_w = full_w - new_offset;
                             }
 
-                            let wf = &mut self.waveforms[waveform_idx];
+                            let wf = self.waveforms.get_mut(&waveform_id).unwrap();
                             wf.position[0] = new_pos_x;
                             wf.size[0] = new_size_w;
                             wf.sample_offset_px = new_offset;
@@ -487,8 +584,9 @@ impl ApplicationHandler for App {
                             } else {
                                 snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm)
                             };
-                            let mut new_size_w = snapped_right - self.waveforms[waveform_idx].position[0];
-                            let cur_offset = self.waveforms[waveform_idx].sample_offset_px;
+                            let wf = self.waveforms.get(&waveform_id).unwrap();
+                            let mut new_size_w = snapped_right - wf.position[0];
+                            let cur_offset = wf.sample_offset_px;
 
                             if new_size_w < min_w {
                                 new_size_w = min_w;
@@ -497,7 +595,7 @@ impl ApplicationHandler for App {
                                 new_size_w = full_w - cur_offset;
                             }
 
-                            let wf = &mut self.waveforms[waveform_idx];
+                            let wf = self.waveforms.get_mut(&waveform_id).unwrap();
                             wf.size[0] = new_size_w;
                             wf.fade_in_px = wf.fade_in_px.min(new_size_w * 0.5);
                             wf.fade_out_px = wf.fade_out_px.min(new_size_w * 0.5);
@@ -511,14 +609,14 @@ impl ApplicationHandler for App {
 
                 // Dragging automation point
                 if let DragState::DraggingAutomationPoint {
-                    waveform_idx,
+                    waveform_id,
                     param,
                     point_idx,
                     ..
                 } = self.drag
                 {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if let Some(wf) = self.waveforms.get_mut(waveform_idx) {
+                    if let Some(wf) = self.waveforms.get_mut(&waveform_id) {
                         let t = ((world[0] - wf.position[0]) / wf.size[0]).clamp(0.0, 1.0);
                         let y_top = wf.position[1];
                         let y_bot = wf.position[1] + wf.size[1];
@@ -547,12 +645,13 @@ impl ApplicationHandler for App {
 
                 // Dragging fade handle
                 if let DragState::DraggingFade {
-                    waveform_idx,
+                    waveform_id,
                     is_fade_in,
+                    ..
                 } = self.drag
                 {
                     let world = self.camera.screen_to_world(self.mouse_pos);
-                    if let Some(wf) = self.waveforms.get_mut(waveform_idx) {
+                    if let Some(wf) = self.waveforms.get_mut(&waveform_id) {
                         let max_fade = wf.size[0] * 0.5;
                         if is_fade_in {
                             let new_val = (world[0] - wf.position[0]).clamp(0.0, max_fade);
@@ -571,16 +670,17 @@ impl ApplicationHandler for App {
 
                 // Dragging fade curve shape
                 if let DragState::DraggingFadeCurve {
-                    waveform_idx,
+                    waveform_id,
                     is_fade_in,
                     start_mouse_y,
                     start_curve,
+                    ..
                 } = self.drag
                 {
                     let dy = self.mouse_pos[1] - start_mouse_y;
                     let sensitivity = 0.005;
                     let new_curve = (start_curve - dy * sensitivity).clamp(-1.0, 1.0);
-                    if let Some(wf) = self.waveforms.get_mut(waveform_idx) {
+                    if let Some(wf) = self.waveforms.get_mut(&waveform_id) {
                         if is_fade_in {
                             wf.fade_in_curve = new_curve;
                         } else {
@@ -603,7 +703,7 @@ impl ApplicationHandler for App {
                         start_mouse,
                         start_camera,
                     } => Action::Pan(*start_mouse, *start_camera),
-                    DragState::MovingSelection { offsets } => {
+                    DragState::MovingSelection { offsets, .. } => {
                         Action::MoveSelection(offsets.clone())
                     }
                     _ => Action::Other,
@@ -645,10 +745,10 @@ impl ApplicationHandler for App {
                         let padding = instruments::INSTRUMENT_REGION_PADDING;
                         for (target, _) in &offsets {
                             if let HitTarget::MidiClip(ci) = target {
-                                if *ci < self.midi_clips.len() {
-                                    let cp = self.midi_clips[*ci].position;
-                                    let cs = self.midi_clips[*ci].size;
-                                    for ir in &mut self.instrument_regions {
+                                if let Some(mc) = self.midi_clips.get(ci) {
+                                    let cp = mc.position;
+                                    let cs = mc.size;
+                                    for ir in self.instrument_regions.values_mut() {
                                         if rects_overlap(ir.position, ir.size, cp, cs) {
                                             instruments::ensure_region_contains_clip(ir, cp, cs, padding);
                                         }
@@ -690,12 +790,12 @@ impl ApplicationHandler for App {
                                 );
                             }
                         }
-                        if let DragState::MovingMidiNote { clip_idx, note_indices, offsets, start_world } = &self.drag {
-                            let clip_idx = *clip_idx;
+                        if let DragState::MovingMidiNote { clip_id, note_indices, offsets, start_world, .. } = &self.drag {
+                            let clip_id = *clip_id;
                             let note_indices = note_indices.clone();
                             let offsets = offsets.clone();
                             let sw = *start_world;
-                            if clip_idx < self.midi_clips.len() {
+                            if self.midi_clips.contains_key(&clip_id) {
                                 let drag_threshold = 3.0 / self.camera.zoom;
                                 let dx = world[0] - sw[0];
                                 let dy = world[1] - sw[1];
@@ -703,73 +803,79 @@ impl ApplicationHandler for App {
                                     && (dx * dx + dy * dy) < drag_threshold * drag_threshold;
                                 if !below_threshold {
                                     self.pending_midi_note_click = None;
-                                    let mc_pos = self.midi_clips[clip_idx].position;
-                                    let mc_pr = self.midi_clips[clip_idx].pitch_range;
-                                    let editing = self.editing_midi_clip == Some(clip_idx);
-                                    let area_h = self.midi_clips[clip_idx].note_area_height(editing);
+                                    let mc = &self.midi_clips[&clip_id];
+                                    let mc_pos = mc.position;
+                                    let mc_pr = mc.pitch_range;
+                                    let editing = self.editing_midi_clip == Some(clip_id);
+                                    let area_h = mc.note_area_height(editing);
                                     let first_raw_x = world[0] - offsets[0][0];
-                                    let mc_gm = self.midi_clips[clip_idx].grid_mode;
-                                    let mc_trip = self.midi_clips[clip_idx].triplet_grid;
+                                    let mc_gm = mc.grid_mode;
+                                    let mc_trip = mc.triplet_grid;
                                     let snap_delta = if self.is_snap_override_active() {
                                         0.0
                                     } else {
                                         snap_to_clip_grid(first_raw_x, &self.settings, mc_gm, mc_trip, self.camera.zoom, self.bpm) - first_raw_x
                                     };
+                                    let mc = self.midi_clips.get_mut(&clip_id).unwrap();
                                     for (i, &ni) in note_indices.iter().enumerate() {
-                                        if ni < self.midi_clips[clip_idx].notes.len() {
+                                        if ni < mc.notes.len() {
                                             let raw_x = world[0] - offsets[i][0];
                                             let ny = world[1] - offsets[i][1];
                                             let start_px = (raw_x + snap_delta - mc_pos[0]).max(0.0);
                                             let nh = area_h / (mc_pr.1 - mc_pr.0) as f32;
                                             let relative = mc_pos[1] + area_h - ny;
                                             let pitch = ((relative / nh) as u8 + mc_pr.0).clamp(mc_pr.0, mc_pr.1 - 1);
-                                            self.midi_clips[clip_idx].notes[ni].start_px = start_px;
-                                            self.midi_clips[clip_idx].notes[ni].pitch = pitch;
+                                            mc.notes[ni].start_px = start_px;
+                                            mc.notes[ni].pitch = pitch;
                                         }
                                     }
                                     self.mark_dirty();
                                 }
                             }
                         }
-                        if let DragState::ResizingMidiNote { clip_idx, anchor_idx, note_indices, original_durations } = &self.drag {
-                            let clip_idx = *clip_idx;
+                        if let DragState::ResizingMidiNote { clip_id, anchor_idx, note_indices, original_durations, .. } = &self.drag {
+                            let clip_id = *clip_id;
                             let anchor_idx = *anchor_idx;
                             let indices = note_indices.clone();
                             let orig_durs = original_durations.clone();
-                            if clip_idx < self.midi_clips.len() && anchor_idx < self.midi_clips[clip_idx].notes.len() {
-                                let mc_gm = self.midi_clips[clip_idx].grid_mode;
-                                let mc_trip = self.midi_clips[clip_idx].triplet_grid;
+                            if let Some(mc) = self.midi_clips.get(&clip_id) {
+                                if anchor_idx < mc.notes.len() {
+                                let mc_gm = mc.grid_mode;
+                                let mc_trip = mc.triplet_grid;
                                 let snapped_edge = if self.is_snap_override_active() {
                                     world[0]
                                 } else {
                                     snap_to_clip_grid(world[0], &self.settings, mc_gm, mc_trip, self.camera.zoom, self.bpm)
                                 };
-                                let anchor_x = self.midi_clips[clip_idx].position[0] + self.midi_clips[clip_idx].notes[anchor_idx].start_px;
+                                let anchor_x = mc.position[0] + mc.notes[anchor_idx].start_px;
                                 let anchor_new_dur = (snapped_edge - anchor_x).max(10.0);
+                                let mc = self.midi_clips.get_mut(&clip_id).unwrap();
                                 if let Some(ai) = indices.iter().position(|&ni| ni == anchor_idx) {
                                     let delta = anchor_new_dur - orig_durs[ai];
                                     for (j, &ni) in indices.iter().enumerate() {
-                                        if ni < self.midi_clips[clip_idx].notes.len() {
-                                            self.midi_clips[clip_idx].notes[ni].duration_px = (orig_durs[j] + delta).max(10.0);
+                                        if ni < mc.notes.len() {
+                                            mc.notes[ni].duration_px = (orig_durs[j] + delta).max(10.0);
                                         }
                                     }
                                 } else {
-                                    self.midi_clips[clip_idx].notes[anchor_idx].duration_px = anchor_new_dur;
+                                    mc.notes[anchor_idx].duration_px = anchor_new_dur;
                                 }
                                 self.mark_dirty();
                             }
+                            }
                         }
-                        if let DragState::ResizingMidiNoteLeft { clip_idx, anchor_idx, note_indices, original_starts, original_durations } = &self.drag {
-                            let clip_idx = *clip_idx;
+                        if let DragState::ResizingMidiNoteLeft { clip_id, anchor_idx, note_indices, original_starts, original_durations, .. } = &self.drag {
+                            let clip_id = *clip_id;
                             let anchor_idx = *anchor_idx;
                             let indices = note_indices.clone();
                             let orig_starts = original_starts.clone();
                             let orig_durs = original_durations.clone();
-                            if clip_idx < self.midi_clips.len() && anchor_idx < self.midi_clips[clip_idx].notes.len() {
+                            if let Some(mc) = self.midi_clips.get(&clip_id) {
+                                if anchor_idx < mc.notes.len() {
                                 if let Some(ai) = indices.iter().position(|&ni| ni == anchor_idx) {
-                                    let clip_x = self.midi_clips[clip_idx].position[0];
-                                    let mc_gm = self.midi_clips[clip_idx].grid_mode;
-                                    let mc_trip = self.midi_clips[clip_idx].triplet_grid;
+                                    let clip_x = mc.position[0];
+                                    let mc_gm = mc.grid_mode;
+                                    let mc_trip = mc.triplet_grid;
                                     let snapped_x = if self.is_snap_override_active() {
                                         world[0]
                                     } else {
@@ -779,40 +885,42 @@ impl ApplicationHandler for App {
                                     let anchor_right = orig_starts[ai] + orig_durs[ai];
                                     let anchor_clamped = anchor_new_start.min(anchor_right - 10.0);
                                     let delta = anchor_clamped - orig_starts[ai];
+                                    let mc = self.midi_clips.get_mut(&clip_id).unwrap();
                                     for (j, &ni) in indices.iter().enumerate() {
-                                        if ni < self.midi_clips[clip_idx].notes.len() {
+                                        if ni < mc.notes.len() {
                                             let new_start = (orig_starts[j] + delta).max(0.0);
                                             let right_edge = orig_starts[j] + orig_durs[j];
                                             let clamped = new_start.min(right_edge - 10.0);
-                                            self.midi_clips[clip_idx].notes[ni].start_px = clamped;
-                                            self.midi_clips[clip_idx].notes[ni].duration_px = right_edge - clamped;
+                                            mc.notes[ni].start_px = clamped;
+                                            mc.notes[ni].duration_px = right_edge - clamped;
                                         }
                                     }
                                 }
                                 self.mark_dirty();
                             }
+                            }
                         }
-                        if let DragState::MovingMidiClip { clip_idx, offset } = &self.drag {
-                            let clip_idx = *clip_idx;
+                        if let DragState::MovingMidiClip { clip_id, offset, .. } = &self.drag {
+                            let clip_id = *clip_id;
                             let offset = *offset;
-                            if clip_idx < self.midi_clips.len() {
+                            if self.midi_clips.contains_key(&clip_id) {
                                 let raw_x = world[0] - offset[0];
                                 let snapped_x = if self.is_snap_override_active() {
                                     raw_x
                                 } else {
                                     snap_to_grid(raw_x, &self.settings, self.camera.zoom, self.bpm)
                                 };
-                                self.midi_clips[clip_idx].position = [snapped_x, world[1] - offset[1]];
+                                self.midi_clips.get_mut(&clip_id).unwrap().position = [snapped_x, world[1] - offset[1]];
                                 self.mark_dirty();
                                 self.sync_audio_clips();
                             }
                         }
-                        if let DragState::SelectingMidiNotes { clip_idx, start_world } = &self.drag {
-                            let clip_idx = *clip_idx;
+                        if let DragState::SelectingMidiNotes { clip_id, start_world } = &self.drag {
+                            let clip_id = *clip_id;
                             let start = *start_world;
-                            if clip_idx < self.midi_clips.len() {
-                                let mc_pos = self.midi_clips[clip_idx].position;
-                                let mc_size = self.midi_clips[clip_idx].size;
+                            if let Some(mc) = self.midi_clips.get(&clip_id) {
+                                let mc_pos = mc.position;
+                                let mc_size = mc.size;
                                 // Compute selection rect, clamped to clip bounds
                                 let rx = start[0].min(world[0]).max(mc_pos[0]);
                                 let ry = start[1].min(world[1]).max(mc_pos[1]);
@@ -821,12 +929,12 @@ impl ApplicationHandler for App {
                                 let rw = (rx2 - rx).max(0.0);
                                 let rh = (ry2 - ry).max(0.0);
                                 self.midi_note_select_rect = Some([rx, ry, rw, rh]);
-                                let editing = self.editing_midi_clip == Some(clip_idx);
-                                let nh = self.midi_clips[clip_idx].note_height_editing(editing);
+                                let editing = self.editing_midi_clip == Some(clip_id);
+                                let nh = mc.note_height_editing(editing);
                                 let mut selected = Vec::new();
-                                for (i, note) in self.midi_clips[clip_idx].notes.iter().enumerate() {
+                                for (i, note) in mc.notes.iter().enumerate() {
                                     let nx = mc_pos[0] + note.start_px;
-                                    let ny = self.midi_clips[clip_idx].pitch_to_y_editing(note.pitch, editing);
+                                    let ny = mc.pitch_to_y_editing(note.pitch, editing);
                                     let nw = note.duration_px;
                                     // AABB intersection
                                     if nx < rx + rw && nx + nw > rx && ny < ry + rh && ny + nh > ry {
@@ -837,33 +945,33 @@ impl ApplicationHandler for App {
                                 self.mark_dirty();
                             }
                         }
-                        if let DragState::DraggingVelocity { clip_idx, note_indices, original_velocities, start_world_y } = &self.drag {
-                            let clip_idx = *clip_idx;
+                        if let DragState::DraggingVelocity { clip_id, note_indices, original_velocities, start_world_y, .. } = &self.drag {
+                            let clip_id = *clip_id;
                             let indices = note_indices.clone();
                             let orig_vels = original_velocities.clone();
                             let start_y = *start_world_y;
-                            if clip_idx < self.midi_clips.len() {
-                                let lane_height = self.midi_clips[clip_idx].velocity_lane_height;
+                            if let Some(mc) = self.midi_clips.get_mut(&clip_id) {
+                                let lane_height = mc.velocity_lane_height;
                                 let delta_y = start_y - world[1];
                                 let vel_delta = (delta_y / lane_height * 127.0) as i16;
                                 for (j, &ni) in indices.iter().enumerate() {
-                                    if ni < self.midi_clips[clip_idx].notes.len() {
+                                    if ni < mc.notes.len() {
                                         let new_vel = (orig_vels[j] as i16 + vel_delta).clamp(0, 127) as u8;
-                                        self.midi_clips[clip_idx].notes[ni].velocity = new_vel;
+                                        mc.notes[ni].velocity = new_vel;
                                     }
                                 }
                                 self.mark_dirty();
                             }
                         }
-                        if let DragState::ResizingVelocityLane { clip_idx, start_world_y, original_height } = &self.drag {
-                            let clip_idx = *clip_idx;
+                        if let DragState::ResizingVelocityLane { clip_id, start_world_y, original_height } = &self.drag {
+                            let clip_id = *clip_id;
                             let start_y = *start_world_y;
                             let orig_h = *original_height;
-                            if clip_idx < self.midi_clips.len() {
+                            if let Some(mc) = self.midi_clips.get_mut(&clip_id) {
                                 let delta_y = start_y - world[1];
                                 let new_height = (orig_h + delta_y)
                                     .clamp(midi::VELOCITY_LANE_MIN_HEIGHT, midi::VELOCITY_LANE_MAX_HEIGHT);
-                                self.midi_clips[clip_idx].velocity_lane_height = new_height;
+                                mc.velocity_lane_height = new_height;
                                 self.mark_dirty();
                             }
                         }
@@ -907,12 +1015,14 @@ impl ApplicationHandler for App {
                             if let Some((wf_idx, pt_idx)) =
                                 hit_test_automation_point(&self.waveforms, world, &self.camera, param)
                             {
-                                self.push_undo();
-                                self.waveforms[wf_idx]
-                                    .automation
-                                    .lane_for_mut(param)
-                                    .remove_point(pt_idx);
-                                self.mark_dirty();
+                                let before = self.waveforms[&wf_idx].clone();
+                                if let Some(wf) = self.waveforms.get_mut(&wf_idx) {
+                                    wf.automation
+                                        .lane_for_mut(param)
+                                        .remove_point(pt_idx);
+                                }
+                                let after = self.waveforms[&wf_idx].clone();
+                                self.push_op(crate::operations::Operation::UpdateWaveform { id: wf_idx, before, after });
                                 self.request_redraw();
                                 return;
                             }
@@ -940,8 +1050,7 @@ impl ApplicationHandler for App {
                         let world = self.camera.screen_to_world(self.mouse_pos);
 
                         if let Some(mc_idx) = self.editing_midi_clip {
-                            if mc_idx < self.midi_clips.len() {
-                                let mc = &self.midi_clips[mc_idx];
+                            if let Some(mc) = self.midi_clips.get(&mc_idx) {
                                 if mc.contains(world) {
                                     let menu_ctx = MenuContext::MidiClipEdit {
                                         grid_mode: mc.grid_mode,
@@ -1002,7 +1111,7 @@ impl ApplicationHandler for App {
                                     .selected
                                     .iter()
                                     .find_map(|t| match t {
-                                        HitTarget::Waveform(i) => Some(self.waveforms[*i].color),
+                                        HitTarget::Waveform(i) => self.waveforms.get(i).map(|wf| wf.color),
                                         _ => None,
                                     });
                                 MenuContext::Selection {
@@ -1052,8 +1161,8 @@ impl ApplicationHandler for App {
                                             scr_h,
                                             scale,
                                         );
-                                        let pb_idx = pe.region_idx; // repurposed as plugin_block index
-                                        if let Some(pb) = self.plugin_blocks.get(pb_idx) {
+                                        let pb_idx = pe.region_id; // repurposed as plugin_block index
+                                        if let Some(pb) = self.plugin_blocks.get(&pb_idx) {
                                             if let Ok(guard) = pb.gui.lock() {
                                                 if let Some(gui) = guard.as_ref() {
                                                     gui.set_parameter(idx, new_val as f64);
@@ -1422,10 +1531,10 @@ impl ApplicationHandler for App {
                         self.last_canvas_click_world = world;
 
                         // --- component def corner resize ---
-                        for (ci, def) in self.components.iter().enumerate() {
+                        for (&ci, def) in self.components.iter() {
                             if let Some((anchor, nwse)) = hit_test_corner_resize(def.position, def.size, world, self.camera.zoom) {
-                                self.push_undo();
-                                self.drag = DragState::ResizingComponentDef { comp_idx: ci, anchor, nwse };
+                                let before = def.clone();
+                                self.drag = DragState::ResizingComponentDef { comp_id: ci, anchor, nwse, before };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -1433,10 +1542,10 @@ impl ApplicationHandler for App {
                         }
 
                         // --- effect region corner resize ---
-                        for (i, er) in self.effect_regions.iter().enumerate() {
+                        for (&i, er) in self.effect_regions.iter() {
                             if let Some((anchor, nwse)) = hit_test_corner_resize(er.position, er.size, world, self.camera.zoom) {
-                                self.push_undo();
-                                self.drag = DragState::ResizingEffectRegion { region_idx: i, anchor, nwse };
+                                let before = er.clone();
+                                self.drag = DragState::ResizingEffectRegion { region_id: i, anchor, nwse, before };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -1444,10 +1553,14 @@ impl ApplicationHandler for App {
                         }
 
                         // --- instrument region corner resize ---
-                        for (i, ir) in self.instrument_regions.iter().enumerate() {
+                        for (&i, ir) in self.instrument_regions.iter() {
                             if let Some((anchor, nwse)) = hit_test_corner_resize(ir.position, ir.size, world, self.camera.zoom) {
-                                self.push_undo();
-                                self.drag = DragState::ResizingInstrumentRegion { region_idx: i, anchor, nwse };
+                                let before = crate::instruments::InstrumentRegionSnapshot {
+                                    position: ir.position, size: ir.size,
+                                    name: ir.name.clone(), plugin_id: ir.plugin_id.clone(),
+                                    plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone(),
+                                };
+                                self.drag = DragState::ResizingInstrumentRegion { region_id: i, anchor, nwse, before };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -1455,10 +1568,10 @@ impl ApplicationHandler for App {
                         }
 
                         // --- midi clip corner resize ---
-                        for (i, mc) in self.midi_clips.iter().enumerate() {
+                        for (&i, mc) in self.midi_clips.iter() {
                             if let Some((anchor, nwse)) = hit_test_corner_resize(mc.position, mc.size, world, self.camera.zoom) {
-                                self.push_undo();
-                                self.drag = DragState::ResizingMidiClip { clip_idx: i, anchor, nwse };
+                                let before = mc.clone();
+                                self.drag = DragState::ResizingMidiClip { clip_id: i, anchor, nwse, before };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -1467,29 +1580,31 @@ impl ApplicationHandler for App {
 
                         // --- midi clip body move (when not editing notes) ---
                         if self.editing_midi_clip.is_none() {
-                            let hit_clip = self.midi_clips.iter().enumerate().find(|(_, mc)| {
+                            let hit_clip = self.midi_clips.iter().find(|(_, mc)| {
                                 point_in_rect(world, mc.position, mc.size)
-                            }).map(|(i, mc)| (i, mc.position));
+                            }).map(|(&id, mc)| (id, mc.position));
                             if let Some((i, pos)) = hit_clip {
                                 if self.camera.zoom >= MIDI_AUTO_EDIT_ZOOM_THRESHOLD {
                                     self.editing_midi_clip = Some(i);
                                     self.selected_midi_notes.clear();
                                     // Fall through to note-editing section below
                                 } else {
-                                    self.push_undo();
-                                    let clip_idx = if self.modifiers.alt_key() {
-                                        let mc = self.midi_clips[i].clone();
-                                        self.midi_clips.push(mc);
-                                        self.midi_clips.len() - 1
+                                    let clip_id = if self.modifiers.alt_key() {
+                                        let mc = self.midi_clips[&i].clone();
+                                        let new_id = new_id();
+                                        self.midi_clips.insert(new_id, mc.clone());
+                                        self.push_op(crate::operations::Operation::CreateMidiClip { id: new_id, data: mc });
+                                        new_id
                                     } else {
                                         i
                                     };
-                                    if !self.selected.contains(&HitTarget::MidiClip(clip_idx)) {
+                                    let before = self.midi_clips[&clip_id].clone();
+                                    if !self.selected.contains(&HitTarget::MidiClip(clip_id)) {
                                         self.selected.clear();
-                                        self.selected.push(HitTarget::MidiClip(clip_idx));
+                                        self.selected.push(HitTarget::MidiClip(clip_id));
                                     }
                                     let offset = [world[0] - pos[0], world[1] - pos[1]];
-                                    self.drag = DragState::MovingMidiClip { clip_idx, offset };
+                                    self.drag = DragState::MovingMidiClip { clip_id, offset, before };
                                     self.update_cursor();
                                     self.request_redraw();
                                     return;
@@ -1498,10 +1613,10 @@ impl ApplicationHandler for App {
                         }
 
                         // --- export region corner resize ---
-                        for (i, er) in self.export_regions.iter().enumerate() {
+                        for (&i, er) in self.export_regions.iter() {
                             if let Some((anchor, nwse)) = hit_test_corner_resize(er.position, er.size, world, self.camera.zoom) {
-                                self.push_undo();
-                                self.drag = DragState::ResizingExportRegion { region_idx: i, anchor, nwse };
+                                let before = er.clone();
+                                self.drag = DragState::ResizingExportRegion { region_id: i, anchor, nwse, before };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -1509,7 +1624,7 @@ impl ApplicationHandler for App {
                         }
 
                         // --- export region render pill click ---
-                        for er in &self.export_regions {
+                        for er in self.export_regions.values() {
                             let pill_w = EXPORT_RENDER_PILL_W / self.camera.zoom;
                             let pill_h = EXPORT_RENDER_PILL_H / self.camera.zoom;
                             let pill_x = er.position[0] + 4.0 / self.camera.zoom;
@@ -1522,13 +1637,13 @@ impl ApplicationHandler for App {
                         }
 
                         // --- loop region corner resize ---
-                        for (i, lr) in self.loop_regions.iter().enumerate() {
+                        for (&i, lr) in self.loop_regions.iter() {
                             if !lr.enabled {
                                 continue;
                             }
                             if let Some((anchor, nwse)) = hit_test_corner_resize(lr.position, lr.size, world, self.camera.zoom) {
-                                self.push_undo();
-                                self.drag = DragState::ResizingLoopRegion { region_idx: i, anchor, nwse };
+                                let before = lr.clone();
+                                self.drag = DragState::ResizingLoopRegion { region_id: i, anchor, nwse, before };
                                 self.update_cursor();
                                 self.request_redraw();
                                 return;
@@ -1539,16 +1654,18 @@ impl ApplicationHandler for App {
                         match hit_test_waveform_edge(&self.waveforms, world, &self.camera) {
                             WaveformEdgeHover::LeftEdge(i) | WaveformEdgeHover::RightEdge(i) => {
                                 let is_left = matches!(self.waveform_edge_hover, WaveformEdgeHover::LeftEdge(_));
-                                let pos_x = self.waveforms[i].position[0];
-                                let size_w = self.waveforms[i].size[0];
-                                let offset = self.waveforms[i].sample_offset_px;
-                                self.push_undo();
+                                let wf = &self.waveforms[&i];
+                                let pos_x = wf.position[0];
+                                let size_w = wf.size[0];
+                                let offset = wf.sample_offset_px;
+                                let before = wf.clone();
                                 self.drag = DragState::ResizingWaveform {
-                                    waveform_idx: i,
+                                    waveform_id: i,
                                     is_left_edge: is_left,
                                     initial_position_x: pos_x,
                                     initial_size_w: size_w,
                                     initial_offset_px: offset,
+                                    before,
                                 };
                                 self.update_cursor();
                                 self.request_redraw();
@@ -1565,10 +1682,11 @@ impl ApplicationHandler for App {
                                     if self.mouse_pos[0] >= rx && self.mouse_pos[0] <= rx + rw
                                         && self.mouse_pos[1] >= ry && self.mouse_pos[1] <= ry + rh
                                     {
-                                        self.push_undo();
+                                        let before = self.waveforms[&wf_idx].clone();
                                         let param = self.active_automation_param;
-                                        self.waveforms[wf_idx].automation.lane_for_mut(param).points.clear();
-                                        self.mark_dirty();
+                                        self.waveforms[&wf_idx].automation.lane_for_mut(param).points.clear();
+                                        let after = self.waveforms[&wf_idx].clone();
+                                        self.push_op(crate::operations::Operation::UpdateWaveform { id: wf_idx, before, after });
                                         self.request_redraw();
                                         return;
                                     }
@@ -1583,15 +1701,17 @@ impl ApplicationHandler for App {
                             if let Some((wf_idx, pt_idx)) =
                                 hit_test_automation_point(&self.waveforms, world, &self.camera, param)
                             {
-                                let orig_t = self.waveforms[wf_idx].automation.lane_for(param).points[pt_idx].t;
-                                let orig_v = self.waveforms[wf_idx].automation.lane_for(param).points[pt_idx].value;
-                                self.push_undo();
+                                let wf = &self.waveforms[&wf_idx];
+                                let orig_t = wf.automation.lane_for(param).points[pt_idx].t;
+                                let orig_v = wf.automation.lane_for(param).points[pt_idx].value;
+                                let before = wf.clone();
                                 self.drag = DragState::DraggingAutomationPoint {
-                                    waveform_idx: wf_idx,
+                                    waveform_id: wf_idx,
                                     param,
                                     point_idx: pt_idx,
                                     original_t: orig_t,
                                     original_value: orig_v,
+                                    before,
                                 };
                                 self.update_cursor();
                                 self.request_redraw();
@@ -1601,17 +1721,18 @@ impl ApplicationHandler for App {
                             if let Some((wf_idx, t, value)) =
                                 hit_test_automation_line(&self.waveforms, world, &self.camera, param)
                             {
-                                self.push_undo();
-                                let pt_idx = self.waveforms[wf_idx]
+                                let before = self.waveforms[&wf_idx].clone();
+                                let pt_idx = self.waveforms.get_mut(&wf_idx).unwrap()
                                     .automation
                                     .lane_for_mut(param)
                                     .insert_point(t, value);
                                 self.drag = DragState::DraggingAutomationPoint {
-                                    waveform_idx: wf_idx,
+                                    waveform_id: wf_idx,
                                     param,
                                     point_idx: pt_idx,
                                     original_t: t,
                                     original_value: value,
+                                    before,
                                 };
                                 self.mark_dirty();
                                 self.update_cursor();
@@ -1619,23 +1740,27 @@ impl ApplicationHandler for App {
                                 return;
                             }
                             // Click inside waveform to create new point
-                            for (i, wf) in self.waveforms.iter().enumerate().rev() {
+                            // Collect keys in reverse to iterate back-to-front
+                            let wf_keys: Vec<EntityId> = self.waveforms.keys().copied().collect();
+                            for &wf_id in wf_keys.iter().rev() {
+                                let wf = &self.waveforms[&wf_id];
                                 if point_in_rect(world, wf.position, wf.size) {
                                     let t = ((world[0] - wf.position[0]) / wf.size[0]).clamp(0.0, 1.0);
                                     let y_top = wf.position[1];
                                     let y_bot = wf.position[1] + wf.size[1];
                                     let value = ((world[1] - y_bot) / (y_top - y_bot)).clamp(0.0, 1.0);
-                                    self.push_undo();
-                                    let pt_idx = self.waveforms[i]
+                                    let before = self.waveforms[&wf_id].clone();
+                                    let pt_idx = self.waveforms.get_mut(&wf_id).unwrap()
                                         .automation
                                         .lane_for_mut(param)
                                         .insert_point(t, value);
                                     self.drag = DragState::DraggingAutomationPoint {
-                                        waveform_idx: i,
+                                        waveform_id: wf_id,
                                         param,
                                         point_idx: pt_idx,
                                         original_t: t,
                                         original_value: value,
+                                        before,
                                     };
                                     self.mark_dirty();
                                     self.update_cursor();
@@ -1649,10 +1774,11 @@ impl ApplicationHandler for App {
                         if let Some((wf_idx, is_fade_in)) =
                             hit_test_fade_handle(&self.waveforms, world, &self.camera)
                         {
-                            self.push_undo();
+                            let before = self.waveforms[&wf_idx].clone();
                             self.drag = DragState::DraggingFade {
-                                waveform_idx: wf_idx,
+                                waveform_id: wf_idx,
                                 is_fade_in,
+                                before,
                             };
                             self.update_cursor();
                             self.request_redraw();
@@ -1663,14 +1789,15 @@ impl ApplicationHandler for App {
                         if let Some((wf_idx, is_fade_in)) =
                             hit_test_fade_curve_dot(&self.waveforms, world, &self.camera)
                         {
-                            let wf = &self.waveforms[wf_idx];
+                            let wf = &self.waveforms[&wf_idx];
                             let start_curve = if is_fade_in { wf.fade_in_curve } else { wf.fade_out_curve };
-                            self.push_undo();
+                            let before = wf.clone();
                             self.drag = DragState::DraggingFadeCurve {
-                                waveform_idx: wf_idx,
+                                waveform_id: wf_idx,
                                 is_fade_in,
                                 start_mouse_y: self.mouse_pos[1],
                                 start_curve,
+                                before,
                             };
                             self.update_cursor();
                             self.request_redraw();
@@ -1710,7 +1837,7 @@ impl ApplicationHandler for App {
                                 self.selected.clear();
                                 println!(
                                     "Entered component edit mode: {}",
-                                    self.components[ci].name
+                                    self.components[&ci].name
                                 );
                                 self.request_redraw();
                                 return;
@@ -1724,24 +1851,25 @@ impl ApplicationHandler for App {
                                 if self.editing_midi_clip == Some(idx) {
                                     self.select_area = None;
                                     self.selected.clear();
-                                    let mc = &self.midi_clips[idx];
+                                    let mc = &self.midi_clips[&idx];
                                     // TODO: refactor velocity lane rendering before re-enabling
                                     // let in_vel_lane = world[1] >= mc.velocity_lane_top();
                                     let in_vel_lane = false;
                                     let hit_note = midi::hit_test_midi_note_editing(mc, world, &self.camera, true);
                                     if hit_note.is_none() && !in_vel_lane {
-                                        self.push_undo();
-                                        let pitch = self.midi_clips[idx].y_to_pitch_editing(world[1], true);
-                                        let start_px = self.midi_clips[idx].x_to_start_px(world[0]);
-                                        self.midi_clips[idx].notes.push(midi::MidiNote {
+                                        let mc = self.midi_clips.get_mut(&idx).unwrap();
+                                        let pitch = mc.y_to_pitch_editing(world[1], true);
+                                        let start_px = mc.x_to_start_px(world[0]);
+                                        let note = midi::MidiNote {
                                             pitch,
                                             start_px,
                                             duration_px: midi::DEFAULT_NOTE_DURATION_PX,
                                             velocity: 100,
-                                        });
-                                        let new_idx = self.midi_clips[idx].notes.len() - 1;
+                                        };
+                                        mc.notes.push(note.clone());
+                                        let new_idx = mc.notes.len() - 1;
+                                        self.push_op(crate::operations::Operation::CreateMidiNote { clip_id: idx, note_idx: new_idx, data: note });
                                         self.selected_midi_notes = vec![new_idx];
-                                        self.mark_dirty();
                                     }
                                     self.request_redraw();
                                     return;
@@ -1753,7 +1881,7 @@ impl ApplicationHandler for App {
                                 return;
                             }
                             if let Some(HitTarget::InstrumentRegion(idx)) = hit {
-                                if self.instrument_regions[idx].has_plugin() {
+                                if self.instrument_regions[&idx].has_plugin() {
                                     self.open_instrument_region_gui(idx);
                                 }
                                 self.request_redraw();
@@ -1763,8 +1891,7 @@ impl ApplicationHandler for App {
 
                         // Click outside editing MIDI clip exits edit mode
                         if let Some(mc_idx) = self.editing_midi_clip {
-                            if mc_idx < self.midi_clips.len() {
-                                let mc = &self.midi_clips[mc_idx];
+                            if let Some(mc) = self.midi_clips.get(&mc_idx) {
                                 if !point_in_rect(world, mc.position, mc.size) {
                                     self.editing_midi_clip = None;
                                     self.selected_midi_notes.clear();
@@ -1778,9 +1905,9 @@ impl ApplicationHandler for App {
 
                         // MIDI note editing when inside an editing clip
                         if let Some(mc_idx) = self.editing_midi_clip {
-                            if mc_idx < self.midi_clips.len() {
-                                let mc_pos = self.midi_clips[mc_idx].position;
-                                let mc_size = self.midi_clips[mc_idx].size;
+                            if let Some(mc) = self.midi_clips.get(&mc_idx) {
+                                let mc_pos = mc.position;
+                                let mc_size = mc.size;
                                 if point_in_rect(world, mc_pos, mc_size) {
                                     self.select_area = None;
                                     self.selected.clear();
@@ -1794,11 +1921,11 @@ impl ApplicationHandler for App {
 
                                     // TODO: refactor velocity lane rendering before re-enabling
                                     // // Check velocity lane divider first (for resizing)
-                                    // if midi::hit_test_velocity_divider(&self.midi_clips[mc_idx], world, &self.camera) {
+                                    // if midi::hit_test_velocity_divider(&self.midi_clips[&mc_idx], world, &self.camera) {
                                     //     self.drag = DragState::ResizingVelocityLane {
-                                    //         clip_idx: mc_idx,
+                                    //         clip_id: mc_idx,
                                     //         start_world_y: world[1],
-                                    //         original_height: self.midi_clips[mc_idx].velocity_lane_height,
+                                    //         original_height: self.midi_clips[&mc_idx].velocity_lane_height,
                                     //     };
                                     //     self.update_cursor();
                                     //     self.request_redraw();
@@ -1806,7 +1933,7 @@ impl ApplicationHandler for App {
                                     // }
 
                                     // // Check velocity bar
-                                    // let vel_hit = midi::hit_test_velocity_bar(&self.midi_clips[mc_idx], world, &self.camera);
+                                    // let vel_hit = midi::hit_test_velocity_bar(&self.midi_clips[&mc_idx], world, &self.camera);
                                     // if let Some(note_idx) = vel_hit {
                                     //     if self.selected_midi_notes.contains(&note_idx) {
                                     //         // already selected
@@ -1819,10 +1946,10 @@ impl ApplicationHandler for App {
                                     //     self.push_undo();
                                     //     let indices = self.selected_midi_notes.clone();
                                     //     let velocities: Vec<u8> = indices.iter().map(|&ni| {
-                                    //         self.midi_clips[mc_idx].notes[ni].velocity
+                                    //         self.midi_clips[&mc_idx].notes[ni].velocity
                                     //     }).collect();
                                     //     self.drag = DragState::DraggingVelocity {
-                                    //         clip_idx: mc_idx,
+                                    //         clip_id: mc_idx,
                                     //         note_indices: indices,
                                     //         original_velocities: velocities,
                                     //         start_world_y: world[1],
@@ -1833,7 +1960,7 @@ impl ApplicationHandler for App {
                                     // }
 
                                     // Check if clicking on existing note (editing-aware)
-                                    let hit_note = midi::hit_test_midi_note_editing(&self.midi_clips[mc_idx], world, &self.camera, true);
+                                    let hit_note = midi::hit_test_midi_note_editing(&self.midi_clips[&mc_idx], world, &self.camera, true);
                                     if let Some((note_idx, zone)) = hit_note {
                                         if self.modifiers.super_key() && !matches!(zone, midi::MidiNoteHitZone::VelocityBar) {
                                             let indices = if self.selected_midi_notes.contains(&note_idx) {
@@ -1843,15 +1970,16 @@ impl ApplicationHandler for App {
                                                 self.selected_midi_notes.push(note_idx);
                                                 vec![note_idx]
                                             };
-                                            self.push_undo();
+                                            let before_notes = self.midi_clips[&mc_idx].notes.clone();
                                             let velocities: Vec<u8> = indices.iter().map(|&ni| {
-                                                self.midi_clips[mc_idx].notes[ni].velocity
+                                                self.midi_clips[&mc_idx].notes[ni].velocity
                                             }).collect();
                                             self.drag = DragState::DraggingVelocity {
-                                                clip_idx: mc_idx,
+                                                clip_id: mc_idx,
                                                 note_indices: indices,
                                                 original_velocities: velocities,
                                                 start_world_y: world[1],
+                                                before_notes,
                                             };
                                             self.mark_dirty();
                                             self.request_redraw();
@@ -1859,39 +1987,41 @@ impl ApplicationHandler for App {
                                         }
                                         match zone {
                                             midi::MidiNoteHitZone::RightEdge => {
-                                                self.push_undo();
+                                                let before_notes = self.midi_clips[&mc_idx].notes.clone();
                                                 let mut indices = self.selected_midi_notes.clone();
                                                 if !indices.contains(&note_idx) {
                                                     indices = vec![note_idx];
                                                 }
                                                 let durations: Vec<f32> = indices.iter().map(|&ni| {
-                                                    self.midi_clips[mc_idx].notes[ni].duration_px
+                                                    self.midi_clips[&mc_idx].notes[ni].duration_px
                                                 }).collect();
                                                 self.drag = DragState::ResizingMidiNote {
-                                                    clip_idx: mc_idx,
+                                                    clip_id: mc_idx,
                                                     anchor_idx: note_idx,
                                                     note_indices: indices,
                                                     original_durations: durations,
+                                                    before_notes,
                                                 };
                                             }
                                             midi::MidiNoteHitZone::LeftEdge => {
-                                                self.push_undo();
+                                                let before_notes = self.midi_clips[&mc_idx].notes.clone();
                                                 let mut indices = self.selected_midi_notes.clone();
                                                 if !indices.contains(&note_idx) {
                                                     indices = vec![note_idx];
                                                 }
                                                 let starts: Vec<f32> = indices.iter().map(|&ni| {
-                                                    self.midi_clips[mc_idx].notes[ni].start_px
+                                                    self.midi_clips[&mc_idx].notes[ni].start_px
                                                 }).collect();
                                                 let durations: Vec<f32> = indices.iter().map(|&ni| {
-                                                    self.midi_clips[mc_idx].notes[ni].duration_px
+                                                    self.midi_clips[&mc_idx].notes[ni].duration_px
                                                 }).collect();
                                                 self.drag = DragState::ResizingMidiNoteLeft {
-                                                    clip_idx: mc_idx,
+                                                    clip_id: mc_idx,
                                                     anchor_idx: note_idx,
                                                     note_indices: indices,
                                                     original_starts: starts,
                                                     original_durations: durations,
+                                                    before_notes,
                                                 };
                                             }
                                             midi::MidiNoteHitZone::Body => {
@@ -1904,43 +2034,45 @@ impl ApplicationHandler for App {
                                                     self.selected_midi_notes.push(note_idx);
                                                 }
                                                 if self.modifiers.alt_key() {
-                                                    self.push_undo();
+                                                    let before_notes = self.midi_clips[&mc_idx].notes.clone();
                                                     let mut new_indices: Vec<usize> = Vec::new();
                                                     for &ni in &self.selected_midi_notes {
-                                                        if ni < self.midi_clips[mc_idx].notes.len() {
-                                                            let cloned = self.midi_clips[mc_idx].notes[ni].clone();
-                                                            self.midi_clips[mc_idx].notes.push(cloned);
-                                                            new_indices.push(self.midi_clips[mc_idx].notes.len() - 1);
+                                                        if ni < self.midi_clips[&mc_idx].notes.len() {
+                                                            let cloned = self.midi_clips[&mc_idx].notes[ni].clone();
+                                                            self.midi_clips[&mc_idx].notes.push(cloned);
+                                                            new_indices.push(self.midi_clips[&mc_idx].notes.len() - 1);
                                                         }
                                                     }
                                                     self.selected_midi_notes = new_indices.clone();
-                                                    let nh = self.midi_clips[mc_idx].note_height_editing(true);
+                                                    let nh = self.midi_clips[&mc_idx].note_height_editing(true);
                                                     let offsets: Vec<[f32; 2]> = new_indices.iter().map(|&ni| {
-                                                        let n = &self.midi_clips[mc_idx].notes[ni];
+                                                        let n = &self.midi_clips[&mc_idx].notes[ni];
                                                         let nx = mc_pos[0] + n.start_px;
-                                                        let ny = self.midi_clips[mc_idx].pitch_to_y_editing(n.pitch, true) + nh * 0.5;
+                                                        let ny = self.midi_clips[&mc_idx].pitch_to_y_editing(n.pitch, true) + nh * 0.5;
                                                         [world[0] - nx, world[1] - ny]
                                                     }).collect();
                                                     self.drag = DragState::MovingMidiNote {
-                                                        clip_idx: mc_idx,
+                                                        clip_id: mc_idx,
                                                         note_indices: new_indices,
                                                         offsets,
                                                         start_world: world,
+                                                        before_notes,
                                                     };
                                                 } else {
-                                                    self.push_undo();
-                                                    let nh = self.midi_clips[mc_idx].note_height_editing(true);
+                                                    let before_notes = self.midi_clips[&mc_idx].notes.clone();
+                                                    let nh = self.midi_clips[&mc_idx].note_height_editing(true);
                                                     let offsets: Vec<[f32; 2]> = self.selected_midi_notes.iter().map(|&ni| {
-                                                        let n = &self.midi_clips[mc_idx].notes[ni];
+                                                        let n = &self.midi_clips[&mc_idx].notes[ni];
                                                         let nx = mc_pos[0] + n.start_px;
-                                                        let ny = self.midi_clips[mc_idx].pitch_to_y_editing(n.pitch, true) + nh * 0.5;
+                                                        let ny = self.midi_clips[&mc_idx].pitch_to_y_editing(n.pitch, true) + nh * 0.5;
                                                         [world[0] - nx, world[1] - ny]
                                                     }).collect();
                                                     self.drag = DragState::MovingMidiNote {
-                                                        clip_idx: mc_idx,
+                                                        clip_id: mc_idx,
                                                         note_indices: self.selected_midi_notes.clone(),
                                                         offsets,
                                                         start_world: world,
+                                                        before_notes,
                                                     };
                                                 }
                                             }
@@ -1950,7 +2082,7 @@ impl ApplicationHandler for App {
                                         self.selected_midi_notes.clear();
                                         self.midi_note_select_rect = None;
                                         self.drag = DragState::SelectingMidiNotes {
-                                            clip_idx: mc_idx,
+                                            clip_id: mc_idx,
                                             start_world: world,
                                         };
                                     }
@@ -1963,7 +2095,7 @@ impl ApplicationHandler for App {
 
                         // Click outside the editing component exits edit mode
                         if let Some(ec_idx) = self.editing_component {
-                            if let Some(def) = self.components.get(ec_idx) {
+                            if let Some(def) = self.components.get(&ec_idx) {
                                 if !point_in_rect(world, def.position, def.size) {
                                     self.editing_component = None;
                                     self.selected.clear();
@@ -2055,11 +2187,17 @@ impl ApplicationHandler for App {
 
                         // --- finish automation point drag ---
                         if matches!(self.drag, DragState::DraggingAutomationPoint { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_audio_clips();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::DraggingAutomationPoint { waveform_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.waveforms.get(&waveform_id) {
+                                    self.push_op(crate::operations::Operation::UpdateWaveform { id: waveform_id, before, after: after.clone() });
+                                }
+                                self.sync_audio_clips();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish browser resize ---
@@ -2073,52 +2211,107 @@ impl ApplicationHandler for App {
 
                         // --- finish resizing component def ---
                         if matches!(self.drag, DragState::ResizingComponentDef { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_audio_clips();
-                            self.update_hover();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::ResizingComponentDef { comp_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.components.get(&comp_id) {
+                                    self.push_op(crate::operations::Operation::UpdateComponent { id: comp_id, before, after: after.clone() });
+                                }
+                                self.sync_audio_clips();
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish resizing effect region ---
                         if matches!(self.drag, DragState::ResizingEffectRegion { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_audio_clips();
-                            self.update_hover();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::ResizingEffectRegion { region_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.effect_regions.get(&region_id) {
+                                    self.push_op(crate::operations::Operation::UpdateEffectRegion { id: region_id, before, after: after.clone() });
+                                }
+                                self.sync_audio_clips();
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish resizing instrument region ---
                         if matches!(self.drag, DragState::ResizingInstrumentRegion { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_audio_clips();
-                            self.update_hover();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::ResizingInstrumentRegion { region_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(ir) = self.instrument_regions.get(&region_id) {
+                                    let after = crate::instruments::InstrumentRegionSnapshot {
+                                        position: ir.position, size: ir.size,
+                                        name: ir.name.clone(), plugin_id: ir.plugin_id.clone(),
+                                        plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone(),
+                                    };
+                                    self.push_op(crate::operations::Operation::UpdateInstrumentRegion { id: region_id, before, after });
+                                }
+                                self.sync_audio_clips();
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish MIDI note drag/resize ---
                         if matches!(self.drag, DragState::MovingMidiNote { .. } | DragState::ResizingMidiNote { .. } | DragState::ResizingMidiNoteLeft { .. } | DragState::ResizingMidiClip { .. }) {
+                            let old_drag = std::mem::replace(&mut self.drag, DragState::None);
                             if let Some(note_idx) = self.pending_midi_note_click.take() {
-                                self.undo();
+                                // No-op click — restore before state
+                                let (clip_id, before_notes) = match &old_drag {
+                                    DragState::MovingMidiNote { clip_id, before_notes, .. } => (Some(*clip_id), Some(before_notes.clone())),
+                                    DragState::ResizingMidiNote { clip_id, before_notes, .. } => (Some(*clip_id), Some(before_notes.clone())),
+                                    DragState::ResizingMidiNoteLeft { clip_id, before_notes, .. } => (Some(*clip_id), Some(before_notes.clone())),
+                                    _ => (None, None),
+                                };
+                                if let (Some(cid), Some(bn)) = (clip_id, before_notes) {
+                                    if let Some(mc) = self.midi_clips.get_mut(&cid) {
+                                        mc.notes = bn;
+                                    }
+                                }
                                 self.selected_midi_notes = vec![note_idx];
                             } else {
-                                let (clip_idx, note_indices) = match &self.drag {
-                                    DragState::MovingMidiNote { clip_idx, note_indices, .. } => (*clip_idx, note_indices.clone()),
-                                    DragState::ResizingMidiNote { clip_idx, note_indices, .. } => (*clip_idx, note_indices.clone()),
-                                    DragState::ResizingMidiNoteLeft { clip_idx, note_indices, .. } => (*clip_idx, note_indices.clone()),
-                                    _ => (0, vec![]),
+                                // Extract before_notes and emit op
+                                let (clip_id, before_notes) = match &old_drag {
+                                    DragState::MovingMidiNote { clip_id, before_notes, .. } => (Some(*clip_id), Some(before_notes.clone())),
+                                    DragState::ResizingMidiNote { clip_id, before_notes, .. } => (Some(*clip_id), Some(before_notes.clone())),
+                                    DragState::ResizingMidiNoteLeft { clip_id, before_notes, .. } => (Some(*clip_id), Some(before_notes.clone())),
+                                    DragState::ResizingMidiClip { clip_id, before, .. } => {
+                                        if let Some(after) = self.midi_clips.get(clip_id) {
+                                            self.push_op(crate::operations::Operation::UpdateMidiClip { id: *clip_id, before: before.clone(), after: after.clone() });
+                                        }
+                                        (None, None)
+                                    }
+                                    _ => (None, None),
                                 };
-                                if clip_idx < self.midi_clips.len() && !note_indices.is_empty() {
-                                    let new_indices = self.midi_clips[clip_idx].resolve_note_overlaps(&note_indices);
-                                    self.selected_midi_notes = new_indices;
+                                if let (Some(cid), Some(bn)) = (clip_id, before_notes) {
+                                    // Resolve overlaps
+                                    let note_indices: Vec<usize> = match &old_drag {
+                                        DragState::MovingMidiNote { note_indices, .. } => note_indices.clone(),
+                                        DragState::ResizingMidiNote { note_indices, .. } => note_indices.clone(),
+                                        DragState::ResizingMidiNoteLeft { note_indices, .. } => note_indices.clone(),
+                                        _ => vec![],
+                                    };
+                                    if let Some(mc) = self.midi_clips.get_mut(&cid) {
+                                        if !note_indices.is_empty() {
+                                            let new_indices = mc.resolve_note_overlaps(&note_indices);
+                                            self.selected_midi_notes = new_indices;
+                                        }
+                                    }
+                                    if let Some(mc) = self.midi_clips.get(&cid) {
+                                        self.push_op(crate::operations::Operation::UpdateMidiNotes { clip_id: cid, before: bn, after: mc.notes.clone() });
+                                    }
                                 }
                             }
-                            self.drag = DragState::None;
                             self.sync_audio_clips();
                             self.update_cursor();
                             self.request_redraw();
@@ -2127,11 +2320,17 @@ impl ApplicationHandler for App {
 
                         // --- finish velocity drag ---
                         if matches!(self.drag, DragState::DraggingVelocity { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_audio_clips();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::DraggingVelocity { clip_id, before_notes, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(mc) = self.midi_clips.get(&clip_id) {
+                                    self.push_op(crate::operations::Operation::UpdateMidiNotes { clip_id, before: before_notes, after: mc.notes.clone() });
+                                }
+                                self.sync_audio_clips();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish velocity lane resize ---
@@ -2145,11 +2344,17 @@ impl ApplicationHandler for App {
 
                         // --- finish MIDI clip move ---
                         if matches!(self.drag, DragState::MovingMidiClip { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_audio_clips();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::MovingMidiClip { clip_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.midi_clips.get(&clip_id) {
+                                    self.push_op(crate::operations::Operation::UpdateMidiClip { id: clip_id, before, after: after.clone() });
+                                }
+                                self.sync_audio_clips();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish MIDI note selection drag ---
@@ -2163,41 +2368,65 @@ impl ApplicationHandler for App {
 
                         // --- finish resizing export region ---
                         if matches!(self.drag, DragState::ResizingExportRegion { .. }) {
-                            self.drag = DragState::None;
-                            self.update_hover();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::ResizingExportRegion { region_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.export_regions.get(&region_id) {
+                                    self.push_op(crate::operations::Operation::UpdateExportRegion { id: region_id, before, after: after.clone() });
+                                }
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish resizing loop region ---
                         if matches!(self.drag, DragState::ResizingLoopRegion { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_loop_region();
-                            self.update_hover();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::ResizingLoopRegion { region_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.loop_regions.get(&region_id) {
+                                    self.push_op(crate::operations::Operation::UpdateLoopRegion { id: region_id, before, after: after.clone() });
+                                }
+                                self.sync_loop_region();
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish fade handle drag ---
                         if matches!(self.drag, DragState::DraggingFade { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_audio_clips();
-                            self.update_hover();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::DraggingFade { waveform_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.waveforms.get(&waveform_id) {
+                                    self.push_op(crate::operations::Operation::UpdateWaveform { id: waveform_id, before, after: after.clone() });
+                                }
+                                self.sync_audio_clips();
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- finish fade curve drag ---
                         if matches!(self.drag, DragState::DraggingFadeCurve { .. }) {
-                            self.drag = DragState::None;
-                            self.sync_audio_clips();
-                            self.update_hover();
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
+                            if let DragState::DraggingFadeCurve { waveform_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.waveforms.get(&waveform_id) {
+                                    self.push_op(crate::operations::Operation::UpdateWaveform { id: waveform_id, before, after: after.clone() });
+                                }
+                                self.sync_audio_clips();
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         // --- drop from browser to canvas ---
@@ -2228,24 +2457,119 @@ impl ApplicationHandler for App {
                                 && self.sample_browser.contains(self.mouse_pos, sh, scale);
                             if !in_browser {
                                 let world = self.camera.screen_to_world(self.mouse_pos);
-                                let hit_er = self
+                                let _hit_er = self
                                     .effect_regions
                                     .iter()
-                                    .enumerate()
                                     .rev()
                                     .find(|(_, er)| point_in_rect(world, er.position, er.size))
-                                    .map(|(i, _)| i);
+                                    .map(|(&id, _)| id);
 
-                                self.push_undo();
                                 self.add_plugin_block(world, &plugin_id, &plugin_name);
-                                let idx = self.plugin_blocks.len() - 1;
-                                self.selected.clear();
-                                self.selected.push(HitTarget::PluginBlock(idx));
+                                if let Some(&pb_id) = self.plugin_blocks.keys().last() {
+                                    let snap = self.plugin_blocks[&pb_id].snapshot();
+                                    self.push_op(crate::operations::Operation::CreatePluginBlock { id: pb_id, data: snap });
+                                    self.selected.clear();
+                                    self.selected.push(HitTarget::PluginBlock(pb_id));
+                                }
                             }
                             self.drag = DragState::None;
                             self.update_hover();
                             self.request_redraw();
                             return;
+                        }
+
+                        // --- finish resizing waveform ---
+                        if matches!(self.drag, DragState::ResizingWaveform { .. }) {
+                            if let DragState::ResizingWaveform { waveform_id, before, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                                if let Some(after) = self.waveforms.get(&waveform_id) {
+                                    self.push_op(crate::operations::Operation::UpdateWaveform { id: waveform_id, before, after: after.clone() });
+                                }
+                                self.sync_audio_clips();
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+
+                        // --- finish moving selection ---
+                        if matches!(self.drag, DragState::MovingSelection { .. }) {
+                            if let DragState::MovingSelection { before_states, .. } =
+                                std::mem::replace(&mut self.drag, DragState::None)
+                            {
+                            let mut ops = Vec::new();
+                            for (target, bs) in before_states {
+                                match (target, bs) {
+                                    (HitTarget::Object(id), EntityBeforeState::Object(before)) => {
+                                        if let Some(after) = self.objects.get(&id) {
+                                            ops.push(crate::operations::Operation::UpdateObject { id, before, after: after.clone() });
+                                        }
+                                    }
+                                    (HitTarget::Waveform(id), EntityBeforeState::Waveform(before)) => {
+                                        if let Some(after) = self.waveforms.get(&id) {
+                                            ops.push(crate::operations::Operation::UpdateWaveform { id, before, after: after.clone() });
+                                        }
+                                    }
+                                    (HitTarget::EffectRegion(id), EntityBeforeState::EffectRegion(before)) => {
+                                        if let Some(after) = self.effect_regions.get(&id) {
+                                            ops.push(crate::operations::Operation::UpdateEffectRegion { id, before, after: after.clone() });
+                                        }
+                                    }
+                                    (HitTarget::PluginBlock(id), EntityBeforeState::PluginBlock(before)) => {
+                                        if let Some(after) = self.plugin_blocks.get(&id) {
+                                            ops.push(crate::operations::Operation::DeletePluginBlock { id, data: before });
+                                            ops.push(crate::operations::Operation::CreatePluginBlock { id, data: after.snapshot() });
+                                        }
+                                    }
+                                    (HitTarget::LoopRegion(id), EntityBeforeState::LoopRegion(before)) => {
+                                        if let Some(after) = self.loop_regions.get(&id) {
+                                            ops.push(crate::operations::Operation::UpdateLoopRegion { id, before, after: after.clone() });
+                                        }
+                                    }
+                                    (HitTarget::ExportRegion(id), EntityBeforeState::ExportRegion(before)) => {
+                                        if let Some(after) = self.export_regions.get(&id) {
+                                            ops.push(crate::operations::Operation::UpdateExportRegion { id, before, after: after.clone() });
+                                        }
+                                    }
+                                    (HitTarget::ComponentDef(id), EntityBeforeState::ComponentDef(before)) => {
+                                        if let Some(after) = self.components.get(&id) {
+                                            ops.push(crate::operations::Operation::UpdateComponent { id, before, after: after.clone() });
+                                        }
+                                    }
+                                    (HitTarget::ComponentInstance(id), EntityBeforeState::ComponentInstance(before)) => {
+                                        if let Some(after) = self.component_instances.get(&id) {
+                                            ops.push(crate::operations::Operation::UpdateComponentInstance { id, before, after: after.clone() });
+                                        }
+                                    }
+                                    (HitTarget::MidiClip(id), EntityBeforeState::MidiClip(before)) => {
+                                        if let Some(after) = self.midi_clips.get(&id) {
+                                            ops.push(crate::operations::Operation::UpdateMidiClip { id, before, after: after.clone() });
+                                        }
+                                    }
+                                    (HitTarget::InstrumentRegion(id), EntityBeforeState::InstrumentRegion(before)) => {
+                                        if let Some(ir) = self.instrument_regions.get(&id) {
+                                            let after = crate::instruments::InstrumentRegionSnapshot {
+                                                position: ir.position, size: ir.size,
+                                                name: ir.name.clone(), plugin_id: ir.plugin_id.clone(),
+                                                plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone(),
+                                            };
+                                            ops.push(crate::operations::Operation::UpdateInstrumentRegion { id, before, after });
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if !ops.is_empty() {
+                                self.push_op(crate::operations::Operation::Batch(ops));
+                            }
+                                self.sync_audio_clips();
+                                self.update_hover();
+                                self.update_cursor();
+                                self.request_redraw();
+                                return;
+                            }
                         }
 
                         if let DragState::Selecting { start_world } = &self.drag {
@@ -2358,18 +2682,20 @@ impl ApplicationHandler for App {
                         // Delete selected MIDI notes
                         if matches!(event.logical_key, Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)) {
                             if let Some(mc_idx) = self.editing_midi_clip {
-                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
-                                    self.push_undo();
+                                if self.midi_clips.contains_key(&mc_idx) && !self.selected_midi_notes.is_empty() {
+                                    let before_notes = self.midi_clips[&mc_idx].notes.clone();
                                     let mut indices = self.selected_midi_notes.clone();
                                     indices.sort_unstable_by(|a, b| b.cmp(a));
+                                    let mc = self.midi_clips.get_mut(&mc_idx).unwrap();
                                     for &i in &indices {
-                                        if i < self.midi_clips[mc_idx].notes.len() {
-                                            self.midi_clips[mc_idx].notes.remove(i);
+                                        if i < mc.notes.len() {
+                                            mc.notes.remove(i);
                                         }
                                     }
+                                    let after_notes = self.midi_clips[&mc_idx].notes.clone();
+                                    self.push_op(crate::operations::Operation::UpdateMidiNotes { clip_id: mc_idx, before: before_notes, after: after_notes });
                                     self.selected_midi_notes.clear();
                                     self.sync_audio_clips();
-                                    self.mark_dirty();
                                     self.request_redraw();
                                     return;
                                 }
@@ -2378,9 +2704,9 @@ impl ApplicationHandler for App {
                         // Cmd+D: duplicate selected MIDI notes
                         if matches!(&event.logical_key, Key::Character(ch) if ch.as_ref() == "d") && self.modifiers.super_key() {
                             if let Some(mc_idx) = self.editing_midi_clip {
-                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
-                                    self.push_undo();
-                                    let notes = &self.midi_clips[mc_idx].notes;
+                                if self.midi_clips.contains_key(&mc_idx) && !self.selected_midi_notes.is_empty() {
+                                    let before_notes = self.midi_clips[&mc_idx].notes.clone();
+                                    let notes = &self.midi_clips[&mc_idx].notes;
                                     // Compute group span: shift = max_end - min_start
                                     let min_start = self.selected_midi_notes.iter()
                                         .filter(|&&ni| ni < notes.len())
@@ -2393,16 +2719,17 @@ impl ApplicationHandler for App {
                                     let group_shift = max_end - min_start;
                                     let mut new_indices: Vec<usize> = Vec::new();
                                     for &ni in &self.selected_midi_notes {
-                                        if ni < self.midi_clips[mc_idx].notes.len() {
-                                            let mut cloned = self.midi_clips[mc_idx].notes[ni].clone();
+                                        if ni < self.midi_clips[&mc_idx].notes.len() {
+                                            let mut cloned = self.midi_clips[&mc_idx].notes[ni].clone();
                                             cloned.start_px += group_shift;
-                                            self.midi_clips[mc_idx].notes.push(cloned);
-                                            new_indices.push(self.midi_clips[mc_idx].notes.len() - 1);
+                                            self.midi_clips[&mc_idx].notes.push(cloned);
+                                            new_indices.push(self.midi_clips[&mc_idx].notes.len() - 1);
                                         }
                                     }
-                                    self.selected_midi_notes = self.midi_clips[mc_idx].resolve_note_overlaps(&new_indices);
+                                    let after_notes = self.midi_clips[&mc_idx].notes.clone();
+                                    self.push_op(crate::operations::Operation::UpdateMidiNotes { clip_id: mc_idx, before: before_notes, after: after_notes });
+                                    self.selected_midi_notes = self.midi_clips[&mc_idx].resolve_note_overlaps(&new_indices);
                                     self.sync_audio_clips();
-                                    self.mark_dirty();
                                     self.request_redraw();
                                     return;
                                 }
@@ -2411,46 +2738,48 @@ impl ApplicationHandler for App {
                         // Left/Right: move notes; Shift+Left/Right: resize note duration
                         if matches!(event.logical_key, Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight)) {
                             if let Some(mc_idx) = self.editing_midi_clip {
-                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
-                                    let mc = &self.midi_clips[mc_idx];
+                                if self.midi_clips.contains_key(&mc_idx) && !self.selected_midi_notes.is_empty() {
+                                    let mc = &self.midi_clips[&mc_idx];
                                     let step = grid::clip_grid_spacing(mc.grid_mode, mc.triplet_grid, self.camera.zoom, self.bpm);
                                     let delta = if matches!(event.logical_key, Key::Named(NamedKey::ArrowRight)) { step } else { -step };
                                     if self.modifiers.shift_key() {
                                         // Resize duration
                                         let min_dur = step;
                                         let all_valid = self.selected_midi_notes.iter().all(|&ni| {
-                                            if ni >= self.midi_clips[mc_idx].notes.len() { return false; }
-                                            self.midi_clips[mc_idx].notes[ni].duration_px + delta >= min_dur
+                                            if ni >= self.midi_clips[&mc_idx].notes.len() { return false; }
+                                            self.midi_clips[&mc_idx].notes[ni].duration_px + delta >= min_dur
                                         });
                                         if all_valid {
-                                            self.push_undo();
+                                            let before_notes = self.midi_clips[&mc_idx].notes.clone();
                                             for &ni in &self.selected_midi_notes {
-                                                if ni < self.midi_clips[mc_idx].notes.len() {
-                                                    self.midi_clips[mc_idx].notes[ni].duration_px += delta;
+                                                if ni < self.midi_clips[&mc_idx].notes.len() {
+                                                    self.midi_clips[&mc_idx].notes[ni].duration_px += delta;
                                                 }
                                             }
-                                            self.selected_midi_notes = self.midi_clips[mc_idx].resolve_note_overlaps(&self.selected_midi_notes);
+                                            let after_notes = self.midi_clips[&mc_idx].notes.clone();
+                                            self.push_op(crate::operations::Operation::UpdateMidiNotes { clip_id: mc_idx, before: before_notes, after: after_notes });
+                                            self.selected_midi_notes = self.midi_clips[&mc_idx].resolve_note_overlaps(&self.selected_midi_notes);
                                             self.sync_audio_clips();
-                                            self.mark_dirty();
                                             self.request_redraw();
                                             return;
                                         }
                                     } else {
                                         // Move position
                                         let all_valid = self.selected_midi_notes.iter().all(|&ni| {
-                                            if ni >= self.midi_clips[mc_idx].notes.len() { return false; }
-                                            self.midi_clips[mc_idx].notes[ni].start_px + delta >= 0.0
+                                            if ni >= self.midi_clips[&mc_idx].notes.len() { return false; }
+                                            self.midi_clips[&mc_idx].notes[ni].start_px + delta >= 0.0
                                         });
                                         if all_valid {
-                                            self.push_undo();
+                                            let before_notes = self.midi_clips[&mc_idx].notes.clone();
                                             for &ni in &self.selected_midi_notes {
-                                                if ni < self.midi_clips[mc_idx].notes.len() {
-                                                    self.midi_clips[mc_idx].notes[ni].start_px += delta;
+                                                if ni < self.midi_clips[&mc_idx].notes.len() {
+                                                    self.midi_clips[&mc_idx].notes[ni].start_px += delta;
                                                 }
                                             }
-                                            self.selected_midi_notes = self.midi_clips[mc_idx].resolve_note_overlaps(&self.selected_midi_notes);
+                                            let after_notes = self.midi_clips[&mc_idx].notes.clone();
+                                            self.push_op(crate::operations::Operation::UpdateMidiNotes { clip_id: mc_idx, before: before_notes, after: after_notes });
+                                            self.selected_midi_notes = self.midi_clips[&mc_idx].resolve_note_overlaps(&self.selected_midi_notes);
                                             self.sync_audio_clips();
-                                            self.mark_dirty();
                                             self.request_redraw();
                                             return;
                                         }
@@ -2462,26 +2791,27 @@ impl ApplicationHandler for App {
                         // Shift+Up/Down transposes by an octave (12 semitones)
                         if matches!(event.logical_key, Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown)) {
                             if let Some(mc_idx) = self.editing_midi_clip {
-                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
+                                if self.midi_clips.contains_key(&mc_idx) && !self.selected_midi_notes.is_empty() {
                                     let delta: i16 = if self.modifiers.shift_key() { 12 } else { 1 };
                                     let delta = if matches!(event.logical_key, Key::Named(NamedKey::ArrowUp)) { delta } else { -delta };
                                     // Check if all notes stay in valid range (0..=127)
                                     let all_valid = self.selected_midi_notes.iter().all(|&ni| {
-                                        if ni >= self.midi_clips[mc_idx].notes.len() { return false; }
-                                        let new_pitch = self.midi_clips[mc_idx].notes[ni].pitch as i16 + delta;
+                                        if ni >= self.midi_clips[&mc_idx].notes.len() { return false; }
+                                        let new_pitch = self.midi_clips[&mc_idx].notes[ni].pitch as i16 + delta;
                                         (0..=127).contains(&new_pitch)
                                     });
                                     if all_valid {
-                                        self.push_undo();
+                                        let before_notes = self.midi_clips[&mc_idx].notes.clone();
                                         for &ni in &self.selected_midi_notes {
-                                            if ni < self.midi_clips[mc_idx].notes.len() {
-                                                self.midi_clips[mc_idx].notes[ni].pitch =
-                                                    (self.midi_clips[mc_idx].notes[ni].pitch as i16 + delta) as u8;
+                                            if ni < self.midi_clips[&mc_idx].notes.len() {
+                                                self.midi_clips[&mc_idx].notes[ni].pitch =
+                                                    (self.midi_clips[&mc_idx].notes[ni].pitch as i16 + delta) as u8;
                                             }
                                         }
-                                        self.selected_midi_notes = self.midi_clips[mc_idx].resolve_note_overlaps(&self.selected_midi_notes);
+                                        let after_notes = self.midi_clips[&mc_idx].notes.clone();
+                                        self.push_op(crate::operations::Operation::UpdateMidiNotes { clip_id: mc_idx, before: before_notes, after: after_notes });
+                                        self.selected_midi_notes = self.midi_clips[&mc_idx].resolve_note_overlaps(&self.selected_midi_notes);
                                         self.sync_audio_clips();
-                                        self.mark_dirty();
                                         self.request_redraw();
                                         return;
                                     }
@@ -2539,14 +2869,16 @@ impl ApplicationHandler for App {
                             }
                             Key::Named(NamedKey::Enter) => {
                                 if let Some((idx, text)) = self.editing_effect_name.take() {
-                                    if idx < self.effect_regions.len() {
-                                        self.push_undo();
+                                    if self.effect_regions.contains_key(&idx) {
+                                        let before = self.effect_regions[&idx].clone();
                                         let name = if text.trim().is_empty() {
                                             "effects".to_string()
                                         } else {
                                             text
                                         };
-                                        self.effect_regions[idx].name = name;
+                                        self.effect_regions.get_mut(&idx).unwrap().name = name;
+                                        let after = self.effect_regions[&idx].clone();
+                                        self.push_op(crate::operations::Operation::UpdateEffectRegion { id: idx, before, after });
                                     }
                                 }
                                 self.request_redraw();
@@ -2587,16 +2919,19 @@ impl ApplicationHandler for App {
                             }
                             Key::Named(NamedKey::Enter) => {
                                 if let Some((idx, text)) = self.editing_waveform_name.take() {
-                                    if idx < self.waveforms.len() {
-                                        self.push_undo();
+                                    if self.waveforms.contains_key(&idx) {
+                                        let before = self.waveforms[&idx].clone();
+                                        let wf = self.waveforms.get_mut(&idx).unwrap();
                                         let name = if text.trim().is_empty() {
-                                            self.waveforms[idx].audio.filename.clone()
+                                            wf.audio.filename.clone()
                                         } else {
                                             text
                                         };
-                                        let mut new_audio = (*self.waveforms[idx].audio).clone();
+                                        let mut new_audio = (*wf.audio).clone();
                                         new_audio.filename = name;
-                                        self.waveforms[idx].audio = Arc::new(new_audio);
+                                        wf.audio = Arc::new(new_audio);
+                                        let after = self.waveforms[&idx].clone();
+                                        self.push_op(crate::operations::Operation::UpdateWaveform { id: idx, before, after });
                                     }
                                 }
                                 self.request_redraw();
@@ -2661,8 +2996,8 @@ impl ApplicationHandler for App {
                                         let new_db = (db + 1.0).min(6.0);
                                         p.fader_value = db_to_gain(new_db);
                                         if let Some(idx) = p.fader_target_waveform {
-                                            if idx < self.waveforms.len() {
-                                                self.waveforms[idx].volume = p.fader_value;
+                                            if let Some(wf) = self.waveforms.get_mut(&idx) {
+                                                wf.volume = p.fader_value;
                                                 self.sync_audio_clips();
                                             }
                                         }
@@ -2676,8 +3011,8 @@ impl ApplicationHandler for App {
                                         let new_db = db - 1.0;
                                         p.fader_value = if new_db <= -60.0 { 0.0 } else { db_to_gain(new_db) };
                                         if let Some(idx) = p.fader_target_waveform {
-                                            if idx < self.waveforms.len() {
-                                                self.waveforms[idx].volume = p.fader_value;
+                                            if let Some(wf) = self.waveforms.get_mut(&idx) {
+                                                wf.volume = p.fader_value;
                                                 self.sync_audio_clips();
                                             }
                                         }
@@ -2850,15 +3185,14 @@ impl ApplicationHandler for App {
                     // --- Enter on selected effect region: show overlapping plugin info ---
                     if matches!(event.logical_key, Key::Named(NamedKey::Enter)) {
                         if let Some(HitTarget::EffectRegion(idx)) = self.selected.first().copied() {
-                            if idx < self.effect_regions.len() {
-                                let er = &self.effect_regions[idx];
-                                let block_indices = effects::collect_plugins_for_region(er, &self.plugin_blocks);
-                                if block_indices.is_empty() {
-                                    println!("  Effect region {} has no overlapping plugins", idx);
+                            if let Some(er) = self.effect_regions.get(&idx) {
+                                let block_ids = effects::collect_plugins_for_region(er, &self.plugin_blocks);
+                                if block_ids.is_empty() {
+                                    println!("  Effect region {:?} has no overlapping plugins", idx);
                                 } else {
-                                    println!("  Effect region {} plugin chain:", idx);
-                                    for (j, &bi) in block_indices.iter().enumerate() {
-                                        let pb = &self.plugin_blocks[bi];
+                                    println!("  Effect region {:?} plugin chain:", idx);
+                                    for (j, &bi) in block_ids.iter().enumerate() {
+                                        let pb = &self.plugin_blocks[&bi];
                                         let param_count = pb
                                             .gui
                                             .lock()
@@ -2876,7 +3210,7 @@ impl ApplicationHandler for App {
                         }
                         // Double-click on plugin block: open GUI
                         if let Some(HitTarget::PluginBlock(idx)) = self.selected.first().copied() {
-                            if idx < self.plugin_blocks.len() {
+                            if self.plugin_blocks.contains_key(&idx) {
                                 self.open_plugin_block_gui(idx);
                             }
                             self.request_redraw();
@@ -2913,40 +3247,47 @@ impl ApplicationHandler for App {
                         }
                         Key::Character(ch) if !self.modifiers.super_key() => match ch.as_ref() {
                             "0" => {
-                                let wf_indices: Vec<usize> = self
+                                let wf_ids: Vec<EntityId> = self
                                     .selected
                                     .iter()
                                     .filter_map(|t| {
                                         if let HitTarget::Waveform(i) = t { Some(*i) } else { None }
                                     })
                                     .collect();
-                                let lr_indices: Vec<usize> = self
+                                let lr_ids: Vec<EntityId> = self
                                     .selected
                                     .iter()
                                     .filter_map(|t| {
                                         if let HitTarget::LoopRegion(i) = t { Some(*i) } else { None }
                                     })
                                     .collect();
-                                if !wf_indices.is_empty() || !lr_indices.is_empty() {
-                                    self.push_undo();
-                                    if !wf_indices.is_empty() {
-                                        let any_enabled = wf_indices.iter().any(|&i| i < self.waveforms.len() && !self.waveforms[i].disabled);
+                                if !wf_ids.is_empty() || !lr_ids.is_empty() {
+                                    let mut ops = Vec::new();
+                                    if !wf_ids.is_empty() {
+                                        let any_enabled = wf_ids.iter().any(|i| self.waveforms.get(i).map_or(false, |wf| !wf.disabled));
                                         let new_disabled = any_enabled;
-                                        for &i in &wf_indices {
-                                            if i < self.waveforms.len() {
-                                                self.waveforms[i].disabled = new_disabled;
+                                        for i in &wf_ids {
+                                            if let Some(wf) = self.waveforms.get_mut(i) {
+                                                let before = wf.clone();
+                                                wf.disabled = new_disabled;
+                                                ops.push(crate::operations::Operation::UpdateWaveform { id: *i, before, after: wf.clone() });
                                             }
                                         }
                                     }
-                                    if !lr_indices.is_empty() {
-                                        let any_enabled = lr_indices.iter().any(|&i| i < self.loop_regions.len() && self.loop_regions[i].enabled);
+                                    if !lr_ids.is_empty() {
+                                        let any_enabled = lr_ids.iter().any(|i| self.loop_regions.get(i).map_or(false, |lr| lr.enabled));
                                         let new_enabled = !any_enabled;
-                                        for &i in &lr_indices {
-                                            if i < self.loop_regions.len() {
-                                                self.loop_regions[i].enabled = new_enabled;
+                                        for i in &lr_ids {
+                                            if let Some(lr) = self.loop_regions.get_mut(i) {
+                                                let before = lr.clone();
+                                                lr.enabled = new_enabled;
+                                                ops.push(crate::operations::Operation::UpdateLoopRegion { id: *i, before, after: lr.clone() });
                                             }
                                         }
                                         self.sync_loop_region();
+                                    }
+                                    if !ops.is_empty() {
+                                        self.push_op(crate::operations::Operation::Batch(ops));
                                     }
                                     self.sync_audio_clips();
                                     self.request_redraw();
@@ -3039,9 +3380,9 @@ impl ApplicationHandler for App {
                             "z" => {
                                 println!("[KEY] Cmd+Z pressed, shift={}", self.modifiers.shift_key());
                                 if self.modifiers.shift_key() {
-                                    self.redo();
+                                    self.redo_op();
                                 } else {
-                                    self.undo();
+                                    self.undo_op();
                                 }
                             }
                             "1" => {
@@ -3119,6 +3460,7 @@ impl ApplicationHandler for App {
                     let zoom_sensitivity = 0.005;
                     let factor = (1.0 + dy * zoom_sensitivity).clamp(0.5, 2.0);
                     self.camera.zoom_at(self.mouse_pos, factor);
+                    self.broadcast_cursor_if_connected();
                     if self.camera.zoom < MIDI_AUTO_EDIT_ZOOM_THRESHOLD && self.editing_midi_clip.is_some() {
                         self.editing_midi_clip = None;
                         self.selected_midi_notes.clear();
@@ -3126,6 +3468,7 @@ impl ApplicationHandler for App {
                 } else {
                     self.camera.position[0] -= dx / self.camera.zoom;
                     self.camera.position[1] -= dy / self.camera.zoom;
+                    self.broadcast_cursor_if_connected();
                 }
 
                 self.update_hover();
@@ -3138,6 +3481,7 @@ impl ApplicationHandler for App {
                 }
                 let factor = (1.0 + delta as f32).clamp(0.5, 2.0);
                 self.camera.zoom_at(self.mouse_pos, factor);
+                self.broadcast_cursor_if_connected();
                 if self.camera.zoom < MIDI_AUTO_EDIT_ZOOM_THRESHOLD && self.editing_midi_clip.is_some() {
                     self.editing_midi_clip = None;
                     self.selected_midi_notes.clear();
@@ -3180,15 +3524,6 @@ impl ApplicationHandler for App {
                     if needs_rebuild {
                         let selected_set: HashSet<HitTarget> =
                             self.selected.iter().copied().collect();
-                        let component_map: std::collections::HashMap<
-                            component::ComponentId,
-                            usize,
-                        > = self
-                            .components
-                            .iter()
-                            .enumerate()
-                            .map(|(i, c)| (c.id, i))
-                            .collect();
                         let render_ctx = RenderContext {
                             camera: &self.camera,
                             screen_w: w,
@@ -3209,10 +3544,9 @@ impl ApplicationHandler for App {
                             component_instances: &self.component_instances,
                             editing_component: self.editing_component,
                             settings: &self.settings,
-                            component_map: &component_map,
                             fade_curve_hovered: self.fade_curve_hovered,
-                            fade_curve_dragging: if let DragState::DraggingFadeCurve { waveform_idx, is_fade_in, .. } = self.drag {
-                                Some((waveform_idx, is_fade_in))
+                            fade_curve_dragging: if let DragState::DraggingFadeCurve { waveform_id, is_fade_in, .. } = self.drag {
+                                Some((waveform_id, is_fade_in))
                             } else {
                                 None
                             },
@@ -3225,6 +3559,8 @@ impl ApplicationHandler for App {
                             midi_clips: &self.midi_clips,
                             selected_midi_notes: &self.selected_midi_notes,
                             midi_note_select_rect: self.midi_note_select_rect,
+                            remote_users: &self.remote_users,
+                            network_mode: self.network.mode(),
                         };
                         build_instances(&mut self.cached_instances, &render_ctx);
                         build_waveform_vertices(&mut self.cached_wf_verts, &render_ctx);
@@ -3307,8 +3643,8 @@ impl ApplicationHandler for App {
                         self.editing_midi_clip,
                         self.camera.screen_to_world(self.mouse_pos),
                         match &self.drag {
-                            DragState::DraggingVelocity { clip_idx, note_indices, .. } => {
-                                note_indices.first().map(|&ni| (*clip_idx, ni))
+                            DragState::DraggingVelocity { clip_id, note_indices, .. } => {
+                                note_indices.first().map(|&ni| (*clip_id, ni))
                             }
                             _ => self.cmd_velocity_hover_note,
                         },

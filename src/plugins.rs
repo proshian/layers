@@ -41,11 +41,9 @@ impl App {
         self.sample_browser.set_plugins(entries);
 
         // Reload any saved plugin blocks that were waiting for the scanner.
-        // Open with full GUI but immediately hide — state is restored, user can show() later.
-        for pb in &mut self.plugin_blocks {
+        for pb in self.plugin_blocks.values_mut() {
             let has_gui = pb.gui.lock().ok().map_or(false, |g| g.is_some());
             if !has_gui {
-                // Update plugin_path from registry
                 if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
                     pb.plugin_path = entry.info.path.clone();
                 }
@@ -71,7 +69,7 @@ impl App {
             }
         }
         // Reload any saved instrument regions that were waiting for the scanner
-        for ir in &mut self.instrument_regions {
+        for ir in self.instrument_regions.values_mut() {
             if ir.plugin_id.is_empty() {
                 continue;
             }
@@ -125,7 +123,6 @@ impl App {
         let sample_rate = 48000.0;
         let block_size = 512;
 
-        // Look up plugin path from registry
         let plugin_path = self
             .plugin_registry
             .plugins
@@ -141,7 +138,6 @@ impl App {
             plugin_path,
         );
 
-        // Open vst3-gui instance (single instance for both GUI and audio)
         let path = pb.plugin_path.to_string_lossy().to_string();
         if !path.is_empty() {
             if let Some(gui) = vst3_gui::Vst3Gui::open(&path, plugin_id, plugin_name) {
@@ -153,57 +149,52 @@ impl App {
             }
         }
 
-        self.plugin_blocks.push(pb);
+        self.plugin_blocks.insert(new_id(), pb);
         println!("  Added plugin block '{}'", plugin_name);
         self.sync_audio_clips();
     }
 
     pub(crate) fn add_plugin_to_selected_effect_region(&mut self, plugin_id: &str, plugin_name: &str) {
-        // Find the selected effect region
-        let region_idx = self.selected.iter().find_map(|t| {
-            if let HitTarget::EffectRegion(i) = t {
-                Some(*i)
+        let region_id = self.selected.iter().find_map(|t| {
+            if let HitTarget::EffectRegion(id) = t {
+                Some(*id)
             } else {
                 None
             }
         });
-        let Some(region_idx) = region_idx else {
+        let Some(region_id) = region_id else {
             println!("  No effect region selected, cannot add plugin");
             return;
         };
-        if region_idx >= self.effect_regions.len() {
+        let Some(region) = self.effect_regions.get(&region_id) else {
             return;
-        }
+        };
 
-        // Find the rightmost plugin block already in this region to place after it
-        let region = &self.effect_regions[region_idx];
         let existing = effects::collect_plugins_for_region(region, &self.plugin_blocks);
-        let position = if let Some(&last_idx) = existing.last() {
-            let last = &self.plugin_blocks[last_idx];
-            [
-                last.position[0] + last.size[0] + 10.0,
-                last.position[1],
-            ]
+        let position = if let Some(&last_id) = existing.last() {
+            if let Some(last) = self.plugin_blocks.get(&last_id) {
+                [
+                    last.position[0] + last.size[0] + 10.0,
+                    last.position[1],
+                ]
+            } else {
+                [region.position[0] + 10.0, region.position[1] + 30.0]
+            }
         } else {
-            // Place at the top-left of the region with some padding
-            [
-                region.position[0] + 10.0,
-                region.position[1] + 30.0,
-            ]
+            [region.position[0] + 10.0, region.position[1] + 30.0]
         };
 
         self.add_plugin_block(position, plugin_id, plugin_name);
     }
 
-    pub(crate) fn open_plugin_block_gui(&mut self, idx: usize) {
-        if idx >= self.plugin_blocks.len() {
+    pub(crate) fn open_plugin_block_gui(&mut self, id: EntityId) {
+        let Some(pb) = self.plugin_blocks.get(&id) else {
             return;
-        }
+        };
 
-        // Ensure plugin is loaded and path is resolved before opening GUI
         self.ensure_plugins_scanned();
         {
-            let pb = &mut self.plugin_blocks[idx];
+            let pb = self.plugin_blocks.get_mut(&id).unwrap();
             if pb.plugin_path.as_os_str().is_empty() {
                 if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
                     pb.plugin_path = entry.info.path.clone();
@@ -211,22 +202,21 @@ impl App {
             }
         }
 
-        let saved_state = self.plugin_blocks[idx].pending_state.take();
-        let saved_params = self.plugin_blocks[idx].pending_params.take();
-        let pb = &self.plugin_blocks[idx];
+        let pb = self.plugin_blocks.get_mut(&id).unwrap();
+        let saved_state = pb.pending_state.take();
+        let saved_params = pb.pending_params.take();
+        let pb = self.plugin_blocks.get(&id).unwrap();
         let path = pb.plugin_path.to_string_lossy().to_string();
         let uid = pb.plugin_id.clone();
         let name = pb.plugin_name.clone();
 
         if !path.is_empty() {
-            // Check if we already have a GUI handle (open or hidden)
             let has_gui = pb.gui.lock().ok().map_or(false, |g| g.is_some());
             if has_gui {
                 let is_visible = pb.gui.lock()
                     .ok()
                     .map_or(false, |g| g.as_ref().map_or(false, |gui| gui.is_open()));
                 if !is_visible {
-                    // GUI exists but hidden — just show it
                     if let Ok(g) = pb.gui.lock() {
                         if let Some(gui) = g.as_ref() {
                             gui.show();
@@ -237,16 +227,13 @@ impl App {
                 return;
             }
 
-            // No GUI yet — create one
             if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &uid, &name) {
                 gui.setup_processing(48000.0, 512);
-                // Restore saved state blob first (handles preset name, etc.)
                 if let Some(state) = saved_state {
                     if !state.is_empty() {
                         gui.set_state(&state);
                     }
                 }
-                // Then restore individual parameter values (more reliable for some plugins)
                 if let Some(params) = saved_params {
                     gui.set_all_parameters(&params);
                     println!("  Restored {} GUI parameters", params.len());
@@ -276,25 +263,20 @@ impl App {
             }
         }
         self.plugin_editor = Some(ui::plugin_editor::PluginEditorWindow::new(
-            idx, 0, name, params,
+            id, 0, name, params,
         ));
     }
 
-    /// Create a new instrument region with the given plugin already assigned,
-    /// plus an empty MIDI clip inside it ready for editing.
     pub(crate) fn add_instrument(&mut self, plugin_id: &str, plugin_name: &str) {
-        self.push_undo();
         self.ensure_plugins_scanned();
 
         let padding = instruments::INSTRUMENT_REGION_PADDING;
 
-        // Compute MIDI clip dimensions (same logic as add_midi_clip)
         let ppb = grid::pixels_per_beat(self.bpm);
         let beats_per_bar = 4.0;
         let clip_w = ppb * beats_per_bar * midi::MIDI_CLIP_DEFAULT_BARS as f32;
         let clip_h = midi::MIDI_CLIP_DEFAULT_HEIGHT;
 
-        // Region = clip + padding on each side
         let region_w = clip_w + padding * 2.0;
         let region_h = clip_h + padding * 2.0;
 
@@ -303,12 +285,10 @@ impl App {
         let region_pos = [center[0] - region_w * 0.5, center[1] - region_h * 0.5];
         let clip_pos = [region_pos[0] + padding, region_pos[1] + padding];
 
-        // Create instrument region
         let mut ir = instruments::InstrumentRegion::new(region_pos, [region_w, region_h]);
         ir.plugin_id = plugin_id.to_string();
         ir.plugin_name = plugin_name.to_string();
 
-        // Look up plugin path from registry
         let plugin_path = self
             .plugin_registry
             .instruments
@@ -318,7 +298,6 @@ impl App {
             .unwrap_or_default();
         ir.plugin_path = plugin_path.clone();
 
-        // Open vst3-gui instance
         let path_str = plugin_path.to_string_lossy().to_string();
         if !path_str.is_empty() {
             if let Some(gui) = vst3_gui::Vst3Gui::open(&path_str, plugin_id, plugin_name) {
@@ -334,31 +313,37 @@ impl App {
             }
         }
 
-        self.instrument_regions.push(ir);
-        let region_idx = self.instrument_regions.len() - 1;
+        let ir_id = new_id();
+        let ir_snap = instruments::InstrumentRegionSnapshot {
+            position: ir.position, size: ir.size,
+            name: ir.name.clone(), plugin_id: ir.plugin_id.clone(),
+            plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone(),
+        };
+        self.instrument_regions.insert(ir_id, ir);
 
-        // Create MIDI clip inside the region
         let mut clip = midi::MidiClip::new(clip_pos, &self.settings);
         clip.size = [clip_w, clip_h];
-        self.midi_clips.push(clip);
-        let clip_idx = self.midi_clips.len() - 1;
+        let clip_id = new_id();
+        self.midi_clips.insert(clip_id, clip.clone());
 
-        // Select the region and enter MIDI edit mode on the clip
+        self.push_op(crate::operations::Operation::Batch(vec![
+            crate::operations::Operation::CreateInstrumentRegion { id: ir_id, data: ir_snap },
+            crate::operations::Operation::CreateMidiClip { id: clip_id, data: clip },
+        ]));
+
         self.selected.clear();
-        self.selected.push(HitTarget::InstrumentRegion(region_idx));
-        self.editing_midi_clip = Some(clip_idx);
+        self.selected.push(HitTarget::InstrumentRegion(ir_id));
+        self.editing_midi_clip = Some(clip_id);
         self.selected_midi_notes.clear();
 
-        self.mark_dirty();
         self.request_redraw();
         println!("  Added instrument '{}'", plugin_name);
     }
 
-    pub(crate) fn open_instrument_region_gui(&mut self, idx: usize) {
-        if idx >= self.instrument_regions.len() {
+    pub(crate) fn open_instrument_region_gui(&mut self, id: EntityId) {
+        let Some(ir) = self.instrument_regions.get(&id) else {
             return;
-        }
-        let ir = &self.instrument_regions[idx];
+        };
         if ir.plugin_id.is_empty() {
             return;
         }

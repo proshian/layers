@@ -2,6 +2,8 @@ mod audio;
 mod automation;
 mod component;
 mod effects;
+mod entity_id;
+mod ephemeral;
 mod events;
 mod gpu;
 mod grid;
@@ -9,12 +11,18 @@ mod history;
 mod hit_testing;
 mod instruments;
 mod midi;
+mod network;
+mod operations;
+mod p2p;
+mod protocol;
+mod ws_client;
 mod plugins;
 mod regions;
 mod rendering;
 mod settings;
 mod storage;
 mod ui;
+mod user;
 
 #[cfg(test)]
 mod tests;
@@ -41,6 +49,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
+use entity_id::{EntityId, new_id};
+
 use audio::{load_audio_file, AudioClipData, AudioEngine, AudioRecorder, PIXELS_PER_SECOND};
 use settings::GridMode;
 use ui::context_menu::{ContextMenu, MenuContext};
@@ -66,7 +77,7 @@ use winit::{
 // Canvas objects
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, SurrealValue)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CanvasObject {
     pub position: [f32; 2],
     pub size: [f32; 2],
@@ -74,22 +85,22 @@ pub struct CanvasObject {
     pub border_radius: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) enum HitTarget {
-    Object(usize),
-    Waveform(usize),
-    EffectRegion(usize),
-    PluginBlock(usize),
-    LoopRegion(usize),
-    ExportRegion(usize),
-    ComponentDef(usize),
-    ComponentInstance(usize),
-    MidiClip(usize),
-    InstrumentRegion(usize),
+    Object(EntityId),
+    Waveform(EntityId),
+    EffectRegion(EntityId),
+    PluginBlock(EntityId),
+    LoopRegion(EntityId),
+    ExportRegion(EntityId),
+    ComponentDef(EntityId),
+    ComponentInstance(EntityId),
+    MidiClip(EntityId),
+    InstrumentRegion(EntityId),
 }
 
 use automation::{AutomationData, AutomationParam};
-use history::Snapshot;
+
 
 
 enum DragState {
@@ -103,6 +114,7 @@ enum DragState {
     },
     MovingSelection {
         offsets: Vec<(HitTarget, [f32; 2])>,
+        before_states: Vec<(HitTarget, EntityBeforeState)>,
     },
     DraggingFromBrowser {
         path: PathBuf,
@@ -114,124 +126,154 @@ enum DragState {
     },
     ResizingBrowser,
     ResizingExportRegion {
-        region_idx: usize,
+        region_id: EntityId,
         anchor: [f32; 2],
         nwse: bool,
+        before: ExportRegion,
     },
     DraggingFade {
-        waveform_idx: usize,
+        waveform_id: EntityId,
         is_fade_in: bool,
+        before: WaveformView,
     },
     DraggingFadeCurve {
-        waveform_idx: usize,
+        waveform_id: EntityId,
         is_fade_in: bool,
         start_mouse_y: f32,
         start_curve: f32,
+        before: WaveformView,
     },
     ResizingComponentDef {
-        comp_idx: usize,
+        comp_id: EntityId,
         anchor: [f32; 2],
         nwse: bool,
+        before: component::ComponentDef,
     },
     ResizingEffectRegion {
-        region_idx: usize,
+        region_id: EntityId,
         anchor: [f32; 2],
         nwse: bool,
+        before: effects::EffectRegion,
     },
     ResizingLoopRegion {
-        region_idx: usize,
+        region_id: EntityId,
         anchor: [f32; 2],
         nwse: bool,
+        before: LoopRegion,
     },
     ResizingWaveform {
-        waveform_idx: usize,
+        waveform_id: EntityId,
         is_left_edge: bool,
         initial_position_x: f32,
         initial_size_w: f32,
         initial_offset_px: f32,
+        before: WaveformView,
     },
     DraggingAutomationPoint {
-        waveform_idx: usize,
+        waveform_id: EntityId,
         param: AutomationParam,
         point_idx: usize,
         original_t: f32,
         original_value: f32,
+        before: WaveformView,
     },
     ResizingInstrumentRegion {
-        region_idx: usize,
+        region_id: EntityId,
         anchor: [f32; 2],
         nwse: bool,
+        before: instruments::InstrumentRegionSnapshot,
     },
     ResizingMidiClip {
-        clip_idx: usize,
+        clip_id: EntityId,
         anchor: [f32; 2],
         nwse: bool,
+        before: midi::MidiClip,
     },
     MovingMidiClip {
-        clip_idx: usize,
+        clip_id: EntityId,
         offset: [f32; 2],
+        before: midi::MidiClip,
     },
     MovingMidiNote {
-        clip_idx: usize,
+        clip_id: EntityId,
         note_indices: Vec<usize>,
         offsets: Vec<[f32; 2]>,
         start_world: [f32; 2],
+        before_notes: Vec<midi::MidiNote>,
     },
     ResizingMidiNote {
-        clip_idx: usize,
+        clip_id: EntityId,
         anchor_idx: usize,
         note_indices: Vec<usize>,
         original_durations: Vec<f32>,
+        before_notes: Vec<midi::MidiNote>,
     },
     ResizingMidiNoteLeft {
-        clip_idx: usize,
+        clip_id: EntityId,
         anchor_idx: usize,
         note_indices: Vec<usize>,
         original_starts: Vec<f32>,
         original_durations: Vec<f32>,
+        before_notes: Vec<midi::MidiNote>,
     },
     SelectingMidiNotes {
-        clip_idx: usize,
+        clip_id: EntityId,
         start_world: [f32; 2],
     },
     DraggingVelocity {
-        clip_idx: usize,
+        clip_id: EntityId,
         note_indices: Vec<usize>,
         original_velocities: Vec<u8>,
         start_world_y: f32,
+        before_notes: Vec<midi::MidiNote>,
     },
     ResizingVelocityLane {
-        clip_idx: usize,
+        clip_id: EntityId,
         start_world_y: f32,
         original_height: f32,
     },
 }
 
+/// Captures before-state of an entity for drag operations.
+#[derive(Clone)]
+enum EntityBeforeState {
+    Object(CanvasObject),
+    Waveform(WaveformView),
+    EffectRegion(effects::EffectRegion),
+    PluginBlock(effects::PluginBlockSnapshot),
+    LoopRegion(LoopRegion),
+    ExportRegion(ExportRegion),
+    ComponentDef(component::ComponentDef),
+    ComponentInstance(component::ComponentInstance),
+    MidiClip(midi::MidiClip),
+    InstrumentRegion(instruments::InstrumentRegionSnapshot),
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum ComponentDefHover {
     None,
-    CornerNW(usize),
-    CornerNE(usize),
-    CornerSW(usize),
-    CornerSE(usize),
+    CornerNW(EntityId),
+    CornerNE(EntityId),
+    CornerSW(EntityId),
+    CornerSE(EntityId),
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum EffectRegionHover {
     None,
-    CornerNW(usize),
-    CornerNE(usize),
-    CornerSW(usize),
-    CornerSE(usize),
+    CornerNW(EntityId),
+    CornerNE(EntityId),
+    CornerSW(EntityId),
+    CornerSE(EntityId),
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum InstrumentRegionHover {
     None,
-    CornerNW(usize),
-    CornerNE(usize),
-    CornerSW(usize),
-    CornerSE(usize),
+    CornerNW(EntityId),
+    CornerNE(EntityId),
+    CornerSW(EntityId),
+    CornerSE(EntityId),
 }
 
 
@@ -339,19 +381,19 @@ struct MenuState {
 struct App {
     gpu: Option<Gpu>,
     camera: Camera,
-    objects: Vec<CanvasObject>,
-    waveforms: Vec<WaveformView>,
-    audio_clips: Vec<AudioClipData>,
+    objects: IndexMap<EntityId, CanvasObject>,
+    waveforms: IndexMap<EntityId, WaveformView>,
+    audio_clips: IndexMap<EntityId, AudioClipData>,
     audio_engine: Option<AudioEngine>,
     recorder: Option<AudioRecorder>,
-    recording_waveform_idx: Option<usize>,
+    recording_waveform_id: Option<EntityId>,
     last_canvas_click_world: [f32; 2],
     selected: Vec<HitTarget>,
     drag: DragState,
     mouse_pos: [f32; 2],
     hovered: Option<HitTarget>,
-    fade_handle_hovered: Option<(usize, bool)>,
-    fade_curve_hovered: Option<(usize, bool)>,
+    fade_handle_hovered: Option<(EntityId, bool)>,
+    fade_curve_hovered: Option<(EntityId, bool)>,
     waveform_edge_hover: WaveformEdgeHover,
     midi_note_edge_hover: bool,
     velocity_bar_hovered: bool,
@@ -365,38 +407,39 @@ struct App {
     storage: Option<Storage>,
     has_saved_state: bool,
     project_dirty: bool,
-    undo_stack: Vec<Snapshot>,
-    redo_stack: Vec<Snapshot>,
+    op_undo_stack: Vec<operations::CommittedOp>,
+    op_redo_stack: Vec<operations::CommittedOp>,
     current_project_name: String,
-    effect_regions: Vec<effects::EffectRegion>,
-    plugin_blocks: Vec<effects::PluginBlock>,
-    components: Vec<component::ComponentDef>,
-    component_instances: Vec<component::ComponentInstance>,
+    effect_regions: IndexMap<EntityId, effects::EffectRegion>,
+    plugin_blocks: IndexMap<EntityId, effects::PluginBlock>,
+    components: IndexMap<EntityId, component::ComponentDef>,
+    component_instances: IndexMap<EntityId, component::ComponentInstance>,
     next_component_id: component::ComponentId,
     plugin_registry: effects::PluginRegistry,
-    export_regions: Vec<ExportRegion>,
+    export_regions: IndexMap<EntityId, ExportRegion>,
     export_hover: ExportHover,
-    loop_regions: Vec<LoopRegion>,
+    loop_regions: IndexMap<EntityId, LoopRegion>,
     loop_hover: LoopHover,
     select_area: Option<SelectArea>,
     component_def_hover: ComponentDefHover,
     effect_region_hover: EffectRegionHover,
     instrument_region_hover: InstrumentRegionHover,
-    midi_clips: Vec<midi::MidiClip>,
-    instrument_regions: Vec<instruments::InstrumentRegion>,
-    editing_midi_clip: Option<usize>,
+    midi_clips: IndexMap<EntityId, midi::MidiClip>,
+    instrument_regions: IndexMap<EntityId, instruments::InstrumentRegion>,
+    editing_midi_clip: Option<EntityId>,
     selected_midi_notes: Vec<usize>,
     pending_midi_note_click: Option<usize>,
     midi_note_select_rect: Option<[f32; 4]>,
-    cmd_velocity_hover_note: Option<(usize, usize)>,
-    editing_component: Option<usize>,
-    editing_effect_name: Option<(usize, String)>,
-    editing_waveform_name: Option<(usize, String)>,
+    cmd_velocity_hover_note: Option<(EntityId, usize)>,
+    editing_component: Option<EntityId>,
+    editing_effect_name: Option<(EntityId, String)>,
+    editing_waveform_name: Option<(EntityId, String)>,
     bpm: f32,
     editing_bpm: Option<String>,
     dragging_bpm: Option<(f32, f32)>,
     last_click_time: std::time::Instant,
     last_click_world: [f32; 2],
+    last_cursor_send: std::time::Instant,
     clipboard: Clipboard,
     settings: Settings,
     settings_window: Option<SettingsWindow>,
@@ -405,6 +448,16 @@ struct App {
     toast_manager: ui::toast::ToastManager,
     automation_mode: bool,
     active_automation_param: AutomationParam,
+    // Collaboration
+    local_user: user::User,
+    remote_users: std::collections::HashMap<user::UserId, user::RemoteUserState>,
+    applied_remote_seqs: std::collections::HashSet<(user::UserId, u64)>,
+    network: network::NetworkManager,
+    ws_runtime: Option<tokio::runtime::Runtime>,
+    connect_url: Option<String>,
+    pending_welcome: Option<tokio::sync::oneshot::Receiver<user::User>>,
+    reconnect_attempt: u32,
+    last_reconnect_time: Option<std::time::Instant>,
     cached_instances: Vec<InstanceRaw>,
     cached_wf_verts: Vec<WaveformVertex>,
     render_generation: u64,
@@ -421,12 +474,12 @@ impl App {
         Self {
             gpu: None,
             camera: Camera::new(),
-            objects: Vec::new(),
-            waveforms: Vec::new(),
-            audio_clips: Vec::new(),
+            objects: IndexMap::new(),
+            waveforms: IndexMap::new(),
+            audio_clips: IndexMap::new(),
             audio_engine: None,
             recorder: None,
-            recording_waveform_idx: None,
+            recording_waveform_id: None,
             last_canvas_click_world: [0.0; 2],
             selected: Vec::new(),
             drag: DragState::None,
@@ -447,25 +500,25 @@ impl App {
             storage: None,
             has_saved_state: false,
             project_dirty: false,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            op_undo_stack: Vec::new(),
+            op_redo_stack: Vec::new(),
             current_project_name: "test".into(),
-            effect_regions: Vec::new(),
-            plugin_blocks: Vec::new(),
-            components: Vec::new(),
-            component_instances: Vec::new(),
-            next_component_id: 1,
+            effect_regions: IndexMap::new(),
+            plugin_blocks: IndexMap::new(),
+            components: IndexMap::new(),
+            component_instances: IndexMap::new(),
+            next_component_id: new_id(),
             plugin_registry: effects::PluginRegistry::new(),
-            export_regions: Vec::new(),
+            export_regions: IndexMap::new(),
             export_hover: ExportHover::None,
-            loop_regions: Vec::new(),
+            loop_regions: IndexMap::new(),
             loop_hover: LoopHover::None,
             select_area: None,
             component_def_hover: ComponentDefHover::None,
             effect_region_hover: EffectRegionHover::None,
             instrument_region_hover: InstrumentRegionHover::None,
-            midi_clips: Vec::new(),
-            instrument_regions: Vec::new(),
+            midi_clips: IndexMap::new(),
+            instrument_regions: IndexMap::new(),
             editing_midi_clip: None,
             selected_midi_notes: Vec::new(),
             pending_midi_note_click: None,
@@ -479,6 +532,7 @@ impl App {
             dragging_bpm: None,
             last_click_time: std::time::Instant::now(),
             last_click_world: [0.0; 2],
+            last_cursor_send: std::time::Instant::now(),
             clipboard: Clipboard::new(),
             settings: Settings::default(),
             settings_window: None,
@@ -487,6 +541,19 @@ impl App {
             toast_manager: ui::toast::ToastManager::new(),
             automation_mode: false,
             active_automation_param: AutomationParam::Volume,
+            local_user: user::User {
+                id: entity_id::new_id(),
+                name: "Local".to_string(),
+                color: user::USER_COLORS[0],
+            },
+            remote_users: std::collections::HashMap::new(),
+            applied_remote_seqs: std::collections::HashSet::new(),
+            network: network::NetworkManager::new_offline(),
+            ws_runtime: None,
+            connect_url: None,
+            pending_welcome: None,
+            reconnect_attempt: 0,
+            last_reconnect_time: None,
             cached_instances: Vec::new(),
             cached_wf_verts: Vec::new(),
             render_generation: 1,
@@ -510,14 +577,14 @@ impl App {
         self.audio_engine = None;
 
         // Destroy instrument region GUIs (single instance handles both GUI + audio)
-        for ir in &mut self.instrument_regions {
+        for ir in self.instrument_regions.values_mut() {
             if let Ok(mut g) = ir.gui.lock() {
                 *g = None;
             }
         }
 
         // Destroy plugin block GUIs
-        for pb in &mut self.plugin_blocks {
+        for pb in self.plugin_blocks.values_mut() {
             if let Ok(mut g) = pb.gui.lock() {
                 *g = None;
             }
@@ -613,11 +680,10 @@ impl App {
                 let expanded: HashSet<PathBuf> =
                     state.browser_expanded.iter().map(PathBuf::from).collect();
 
-                let num_waveforms = state.waveforms.len();
-                let mut waveforms: Vec<WaveformView> = state
-                    .waveforms
+                let wf_pairs = storage::waveforms_from_stored(state.waveforms);
+                let mut waveforms: IndexMap<EntityId, WaveformView> = wf_pairs
                     .into_iter()
-                    .map(|sw| WaveformView {
+                    .map(|(id, sw)| (id, WaveformView {
                         audio: Arc::new(AudioData {
                             left_samples: Arc::new(Vec::new()),
                             right_samples: Arc::new(Vec::new()),
@@ -638,38 +704,41 @@ impl App {
                         disabled: sw.disabled,
                         sample_offset_px: sw.sample_offset_px,
                         automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
-                    })
+                    }))
                     .collect();
 
                 // Restore audio data and peaks from DB
-                let mut audio_clips: Vec<AudioClipData> = Vec::new();
+                let mut audio_clips: IndexMap<EntityId, AudioClipData> = IndexMap::new();
                 if let Some(s) = &storage {
-                    for i in 0..num_waveforms {
+                    let wf_ids: Vec<EntityId> = waveforms.keys().cloned().collect();
+                    for wf_id in &wf_ids {
+                        let id_str = wf_id.to_string();
+                        let wf = waveforms.get(wf_id).unwrap();
                         let mut left_samples = Arc::new(Vec::new());
                         let mut right_samples = Arc::new(Vec::new());
-                        let mut sample_rate = waveforms[i].audio.sample_rate;
-                        let mut left_peaks = waveforms[i].audio.left_peaks.clone();
-                        let mut right_peaks = waveforms[i].audio.right_peaks.clone();
+                        let mut sample_rate = wf.audio.sample_rate;
+                        let mut left_peaks = wf.audio.left_peaks.clone();
+                        let mut right_peaks = wf.audio.right_peaks.clone();
 
-                        if let Some(audio) = s.load_audio(i as u64) {
+                        if let Some(audio) = s.load_audio(&id_str) {
                             left_samples = Arc::new(storage::u8_slice_to_f32(&audio.left_samples));
                             right_samples =
                                 Arc::new(storage::u8_slice_to_f32(&audio.right_samples));
                             let mono = storage::u8_slice_to_f32(&audio.mono_samples);
                             sample_rate = audio.sample_rate;
-                            audio_clips.push(AudioClipData {
+                            audio_clips.insert(*wf_id, AudioClipData {
                                 samples: Arc::new(mono),
                                 sample_rate: audio.sample_rate,
                                 duration_secs: audio.duration_secs,
                             });
                         } else {
-                            audio_clips.push(AudioClipData {
+                            audio_clips.insert(*wf_id, AudioClipData {
                                 samples: Arc::new(Vec::new()),
                                 sample_rate: 48000,
                                 duration_secs: 0.0,
                             });
                         }
-                        if let Some(peaks) = s.load_peaks(i as u64) {
+                        if let Some(peaks) = s.load_peaks(&id_str) {
                             let lp = storage::u8_slice_to_f32(&peaks.left_peaks);
                             let rp = storage::u8_slice_to_f32(&peaks.right_peaks);
                             left_peaks =
@@ -677,57 +746,58 @@ impl App {
                             right_peaks =
                                 Arc::new(WaveformPeaks::from_raw(peaks.block_size as usize, rp));
                         }
-                        waveforms[i].audio = Arc::new(AudioData {
+                        let filename = wf.audio.filename.clone();
+                        waveforms.get_mut(wf_id).unwrap().audio = Arc::new(AudioData {
                             left_samples,
                             right_samples,
                             left_peaks,
                             right_peaks,
                             sample_rate,
-                            filename: waveforms[i].audio.filename.clone(),
+                            filename,
                         });
                     }
                 }
 
                 (
                     cam,
-                    state.objects,
+                    storage::objects_from_stored(state.objects),
                     waveforms,
                     name,
                     folders,
                     bw,
                     state.browser_visible,
                     Some(expanded),
-                    state.effect_regions,
-                    state.plugin_blocks,
-                    state.loop_regions,
-                    state.components,
-                    state.component_instances,
+                    storage::effect_regions_from_stored(state.effect_regions),
+                    storage::plugin_blocks_from_stored(state.plugin_blocks),
+                    storage::loop_regions_from_stored(state.loop_regions),
+                    storage::components_from_stored(state.components),
+                    storage::component_instances_from_stored(state.component_instances),
                     audio_clips,
                     if state.bpm > 0.0 { state.bpm } else { DEFAULT_BPM },
-                    state.midi_clips,
-                    state.instrument_regions,
+                    storage::midi_clips_from_stored(state.midi_clips),
+                    storage::instrument_regions_from_stored(state.instrument_regions),
                 )
             }
             None => {
                 println!("  No saved project found, starting fresh");
                 (
                     Camera::new(),
-                    default_objects(),
-                    Vec::new(),
+                    IndexMap::new(),
+                    IndexMap::new(),
                     "Untitled".to_string(),
                     Vec::new(),
                     260.0,
                     false,
                     None,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
+                    Vec::new(),  // stored_effect_regions
+                    Vec::new(),  // stored_plugin_blocks
+                    Vec::new(),  // stored_loop_regions
+                    Vec::new(),  // stored_components
+                    Vec::new(),  // stored_component_instances
+                    IndexMap::new(),  // audio_clips
                     DEFAULT_BPM,
-                    Vec::new(),
-                    Vec::new(),
+                    Vec::new(),  // stored_midi_clips
+                    Vec::new(),  // stored_instrument_regions
                 )
             }
         };
@@ -800,19 +870,19 @@ impl App {
         let plugin_registry = effects::PluginRegistry::new();
 
         // Restore effect region geometry
-        let restored_effect_regions: Vec<effects::EffectRegion> = stored_effect_regions
+        let restored_effect_regions: IndexMap<EntityId, effects::EffectRegion> = stored_effect_regions
             .into_iter()
-            .map(|ser| {
+            .map(|(id, ser)| {
                 let mut region = effects::EffectRegion::new(ser.position, ser.size);
                 region.name = ser.name;
-                region
+                (id, region)
             })
             .collect();
 
         // Restore plugin blocks; instances will be loaded lazily on first scan
-        let mut restored_plugin_blocks: Vec<effects::PluginBlock> = stored_plugin_blocks
+        let mut restored_plugin_blocks: IndexMap<EntityId, effects::PluginBlock> = stored_plugin_blocks
             .into_iter()
-            .map(|spb| {
+            .map(|(id, spb)| {
                 let mut pb = effects::PluginBlock::new(
                     spb.position,
                     spb.plugin_id,
@@ -830,20 +900,15 @@ impl App {
                         .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
                         .collect());
                 }
-                pb
+                (id, pb)
             })
             .collect();
 
         // Migration: if old project had plugins in regions but no plugin_blocks, generate them
         if restored_plugin_blocks.is_empty() {
-            // Read the raw stored regions before we stripped plugin data
-            // We already have the effect_regions loaded; check the original stored data
-            // by looking at the stored_effect_regions we consumed above.
-            // Unfortunately they're consumed, so use a separate path: if load found
-            // plugin_ids inside stored regions, we re-read from storage to migrate.
             if let Some(s) = &storage {
                 if let Some(raw_state) = s.load_project_state() {
-                    for (_ri, ser) in raw_state.effect_regions.iter().enumerate() {
+                    for ser in raw_state.effect_regions.iter() {
                         if ser.plugin_ids.is_empty() {
                             continue;
                         }
@@ -857,7 +922,7 @@ impl App {
                                 pname.clone(),
                                 std::path::PathBuf::new(),
                             );
-                            restored_plugin_blocks.push(pb);
+                            restored_plugin_blocks.insert(entity_id::new_id(), pb);
                             x_offset += effects::PLUGIN_BLOCK_DEFAULT_SIZE[0] + 10.0;
                         }
                     }
@@ -868,37 +933,45 @@ impl App {
             }
         }
 
-        let restored_loop_regions: Vec<LoopRegion> = stored_loop_regions
+        let restored_loop_regions: IndexMap<EntityId, LoopRegion> = stored_loop_regions
             .into_iter()
-            .map(|slr| LoopRegion {
+            .map(|(id, slr)| (id, LoopRegion {
                 position: slr.position,
                 size: slr.size,
                 enabled: slr.enabled,
-            })
+            }))
             .collect();
 
-        let restored_components: Vec<component::ComponentDef> = stored_components
+        let restored_components: IndexMap<EntityId, component::ComponentDef> = stored_components
             .into_iter()
-            .map(|sc| component::ComponentDef {
-                id: sc.id,
-                name: sc.name,
-                position: sc.position,
-                size: sc.size,
-                waveform_indices: sc.waveform_indices.iter().map(|&i| i as usize).collect(),
+            .map(|(id, sc)| {
+                let waveform_ids = sc.waveform_ids.iter()
+                    .map(|s| s.parse::<EntityId>().unwrap_or_else(|_| entity_id::new_id()))
+                    .collect();
+                (id, component::ComponentDef {
+                    id,
+                    name: sc.name,
+                    position: sc.position,
+                    size: sc.size,
+                    waveform_ids,
+                })
             })
             .collect();
-        let restored_instances: Vec<component::ComponentInstance> = stored_component_instances
+        let restored_instances: IndexMap<EntityId, component::ComponentInstance> = stored_component_instances
             .into_iter()
-            .map(|si| component::ComponentInstance {
-                component_id: si.component_id,
-                position: si.position,
+            .map(|(id, si)| {
+                let component_id = si.component_id.parse::<EntityId>().unwrap_or_else(|_| entity_id::new_id());
+                (id, component::ComponentInstance {
+                    component_id,
+                    position: si.position,
+                })
             })
             .collect();
-        let next_component_id = restored_components.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        let next_component_id = entity_id::new_id();
 
-        let restored_midi_clips: Vec<midi::MidiClip> = stored_midi_clips
+        let restored_midi_clips: IndexMap<EntityId, midi::MidiClip> = stored_midi_clips
             .into_iter()
-            .map(|smc| midi::MidiClip {
+            .map(|(id, smc)| (id, midi::MidiClip {
                 position: smc.position,
                 size: smc.size,
                 color: smc.color,
@@ -912,12 +985,12 @@ impl App {
                 grid_mode: storage::grid_mode_from_stored(&smc.grid_mode_tag, &smc.grid_mode_value),
                 triplet_grid: smc.triplet_grid,
                 velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
-            })
+            }))
             .collect();
 
-        let restored_instrument_regions: Vec<instruments::InstrumentRegion> = stored_instrument_regions
+        let restored_instrument_regions: IndexMap<EntityId, instruments::InstrumentRegion> = stored_instrument_regions
             .into_iter()
-            .map(|sir| {
+            .map(|(id, sir)| {
                 let mut ir = instruments::InstrumentRegion::new(sir.position, sir.size);
                 ir.name = sir.name;
                 ir.plugin_id = sir.plugin_id;
@@ -932,7 +1005,7 @@ impl App {
                         f64::from_le_bytes(bytes)
                     }).collect());
                 }
-                ir
+                (id, ir)
             })
             .collect();
 
@@ -944,7 +1017,7 @@ impl App {
             audio_clips,
             audio_engine,
             recorder,
-            recording_waveform_idx: None,
+            recording_waveform_id: None,
             last_canvas_click_world: [0.0; 2],
             selected: Vec::new(),
             drag: DragState::None,
@@ -965,8 +1038,8 @@ impl App {
             storage,
             has_saved_state,
             project_dirty: false,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            op_undo_stack: Vec::new(),
+            op_redo_stack: Vec::new(),
             current_project_name: project_name,
             effect_regions: restored_effect_regions,
             plugin_blocks: restored_plugin_blocks,
@@ -974,7 +1047,7 @@ impl App {
             component_instances: restored_instances,
             next_component_id,
             plugin_registry,
-            export_regions: Vec::new(),
+            export_regions: IndexMap::new(),
             export_hover: ExportHover::None,
             loop_regions: restored_loop_regions,
             loop_hover: LoopHover::None,
@@ -997,6 +1070,7 @@ impl App {
             dragging_bpm: None,
             last_click_time: std::time::Instant::now(),
             last_click_world: [0.0; 2],
+            last_cursor_send: std::time::Instant::now(),
             clipboard: Clipboard::new(),
             settings,
             settings_window: None,
@@ -1005,6 +1079,19 @@ impl App {
             toast_manager: ui::toast::ToastManager::new(),
             automation_mode: false,
             active_automation_param: AutomationParam::Volume,
+            local_user: user::User {
+                id: entity_id::new_id(),
+                name: "Local".to_string(),
+                color: user::USER_COLORS[0],
+            },
+            remote_users: std::collections::HashMap::new(),
+            applied_remote_seqs: std::collections::HashSet::new(),
+            network: network::NetworkManager::new_offline(),
+            ws_runtime: None,
+            connect_url: None,
+            pending_welcome: None,
+            reconnect_attempt: 0,
+            last_reconnect_time: None,
             cached_instances: Vec::with_capacity(2048),
             cached_wf_verts: Vec::with_capacity(32768),
             render_generation: 1,
@@ -1016,12 +1103,75 @@ impl App {
         }
     }
 
+    /// Returns true if the app is allowed to mutate state.
+    /// Blocked when the user intended to connect but is currently disconnected.
+    fn can_mutate(&self) -> bool {
+        match self.network.mode() {
+            network::NetworkMode::Offline => true,
+            network::NetworkMode::Connected => true,
+            _ => false, // Connecting or Disconnected
+        }
+    }
+
+    /// Broadcast cursor world position to remote users (throttled to ~20/sec).
+    /// Call this after any event that changes the world-space cursor position:
+    /// mouse movement, camera panning, zooming, etc.
+    fn broadcast_cursor_if_connected(&mut self) {
+        if self.network.is_connected() {
+            let now = std::time::Instant::now();
+            if now.duration_since(self.last_cursor_send).as_millis() >= 25 {
+                let world_pos = self.camera.screen_to_world(self.mouse_pos);
+                self.network.send_ephemeral(crate::ephemeral::EphemeralMessage::CursorMove {
+                    user_id: self.local_user.id,
+                    position: world_pos,
+                });
+                self.last_cursor_send = now;
+            }
+        }
+    }
+
+    fn connect_to_server(&mut self, url: &str) {
+        // Reuse existing runtime or create one
+        if self.ws_runtime.is_none() {
+            self.ws_runtime = Some(
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime for networking"),
+            );
+        }
+        let rt = self.ws_runtime.as_ref().unwrap();
+
+        let (mgr, remote_op_tx, remote_op_rx, remote_eph_tx, remote_eph_rx) =
+            network::NetworkManager::new_connected();
+
+        let (welcome_tx, welcome_rx) = tokio::sync::oneshot::channel();
+        let conn_state = mgr.connection_state.clone();
+
+        let _handle = ws_client::spawn_ws_client(
+            url.to_string(),
+            remote_op_tx,
+            remote_op_rx,
+            remote_eph_tx,
+            remote_eph_rx,
+            welcome_tx,
+            conn_state,
+            rt,
+        );
+
+        self.network = mgr;
+        self.connect_url = Some(url.to_string());
+        self.pending_welcome = Some(welcome_rx);
+        log::info!("Connecting to relay server at {}", url);
+    }
+
     fn save_project_state(&mut self) {
         if let Some(storage) = &self.storage {
             let stored_regions: Vec<storage::StoredEffectRegion> = self
                 .effect_regions
                 .iter()
-                .map(|er| storage::StoredEffectRegion {
+                .map(|(id, er)| storage::StoredEffectRegion {
+                    id: id.to_string(),
                     position: er.position,
                     size: er.size,
                     plugin_ids: Vec::new(),
@@ -1033,7 +1183,8 @@ impl App {
             let stored_plugin_blocks: Vec<storage::StoredPluginBlock> = self
                 .plugin_blocks
                 .iter()
-                .map(|pb| storage::StoredPluginBlock {
+                .map(|(id, pb)| storage::StoredPluginBlock {
+                    id: id.to_string(),
                     position: pb.position,
                     size: pb.size,
                     color: pb.color,
@@ -1055,19 +1206,20 @@ impl App {
             let stored_components: Vec<storage::StoredComponent> = self
                 .components
                 .iter()
-                .map(|c| storage::StoredComponent {
-                    id: c.id,
+                .map(|(id, c)| storage::StoredComponent {
+                    id: id.to_string(),
                     name: c.name.clone(),
                     position: c.position,
                     size: c.size,
-                    waveform_indices: c.waveform_indices.iter().map(|&i| i as u64).collect(),
+                    waveform_ids: c.waveform_ids.iter().map(|wid| wid.to_string()).collect(),
                 })
                 .collect();
             let stored_instances: Vec<storage::StoredComponentInstance> = self
                 .component_instances
                 .iter()
-                .map(|inst| storage::StoredComponentInstance {
-                    component_id: inst.component_id,
+                .map(|(id, inst)| storage::StoredComponentInstance {
+                    id: id.to_string(),
+                    component_id: inst.component_id.to_string(),
                     position: inst.position,
                 })
                 .collect();
@@ -1075,7 +1227,8 @@ impl App {
             let stored_waveforms: Vec<storage::StoredWaveform> = self
                 .waveforms
                 .iter()
-                .map(|wf| storage::StoredWaveform {
+                .map(|(id, wf)| storage::StoredWaveform {
+                    id: id.to_string(),
                     position: wf.position,
                     size: wf.size,
                     color: wf.color,
@@ -1095,10 +1248,11 @@ impl App {
                 .collect();
 
             let state = ProjectState {
+                version: 2,
                 name: self.current_project_name.clone(),
                 camera_position: self.camera.position,
                 camera_zoom: self.camera.zoom,
-                objects: self.objects.clone(),
+                objects: storage::objects_to_stored(&self.objects),
                 waveforms: stored_waveforms,
                 browser_folders: self
                     .sample_browser
@@ -1119,7 +1273,8 @@ impl App {
                 loop_regions: self
                     .loop_regions
                     .iter()
-                    .map(|lr| storage::StoredLoopRegion {
+                    .map(|(id, lr)| storage::StoredLoopRegion {
+                        id: id.to_string(),
                         position: lr.position,
                         size: lr.size,
                         enabled: lr.enabled,
@@ -1128,9 +1283,10 @@ impl App {
                 components: stored_components,
                 component_instances: stored_instances,
                 bpm: self.bpm,
-                midi_clips: self.midi_clips.iter().map(|mc| {
+                midi_clips: self.midi_clips.iter().map(|(id, mc)| {
                     let (grid_tag, grid_val) = storage::grid_mode_to_stored(mc.grid_mode);
                     storage::StoredMidiClip {
+                        id: id.to_string(),
                         position: mc.position,
                         size: mc.size,
                         color: mc.color,
@@ -1147,7 +1303,8 @@ impl App {
                         triplet_grid: mc.triplet_grid,
                     }
                 }).collect(),
-                instrument_regions: self.instrument_regions.iter().map(|ir| storage::StoredInstrumentRegion {
+                instrument_regions: self.instrument_regions.iter().map(|(id, ir)| storage::StoredInstrumentRegion {
+                    id: id.to_string(),
                     position: ir.position,
                     size: ir.size,
                     name: ir.name.clone(),
@@ -1174,19 +1331,15 @@ impl App {
 
             // Save audio data and peaks for each waveform
             storage.clear_audio_and_peaks();
-            for (i, wf) in self.waveforms.iter().enumerate() {
-                let mono = if i < self.audio_clips.len() {
-                    &self.audio_clips[i].samples
+            for (wf_id, wf) in self.waveforms.iter() {
+                let id_str = wf_id.to_string();
+                let (mono, duration) = if let Some(clip) = self.audio_clips.get(wf_id) {
+                    (&clip.samples, clip.duration_secs)
                 } else {
                     continue;
                 };
-                let duration = if i < self.audio_clips.len() {
-                    self.audio_clips[i].duration_secs
-                } else {
-                    0.0
-                };
                 storage.save_audio(
-                    i as u64,
+                    &id_str,
                     &wf.audio.left_samples,
                     &wf.audio.right_samples,
                     mono,
@@ -1194,7 +1347,7 @@ impl App {
                     duration,
                 );
                 storage.save_peaks(
-                    i as u64,
+                    &id_str,
                     wf.audio.left_peaks.block_size as u64,
                     &wf.audio.left_peaks.peaks,
                     &wf.audio.right_peaks.peaks,
@@ -1268,9 +1421,9 @@ impl App {
             };
             self.request_redraw();
         } else if id == menu.undo {
-            self.undo();
+            self.undo_op();
         } else if id == menu.redo {
-            self.redo();
+            self.redo_op();
         } else if id == menu.copy {
             self.copy_selected();
             self.request_redraw();
@@ -1304,17 +1457,17 @@ impl App {
         }
 
         self.current_project_name = "Untitled".to_string();
-        self.objects = default_objects();
+        self.objects = IndexMap::new();
         self.waveforms.clear();
         self.audio_clips.clear();
         self.effect_regions.clear();
         self.plugin_blocks.clear();
         self.components.clear();
         self.component_instances.clear();
-        self.next_component_id = 1;
+        self.next_component_id = entity_id::new_id();
         self.selected.clear();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.op_undo_stack.clear();
+        self.op_redo_stack.clear();
         self.camera = Camera::new();
         self.export_regions.clear();
         self.loop_regions.clear();
@@ -1379,12 +1532,11 @@ impl App {
             position: state.camera_position,
             zoom: state.camera_zoom,
         };
-        self.objects = state.objects;
-        let num_waveforms = state.waveforms.len();
-        self.waveforms = state
-            .waveforms
+        self.objects = storage::objects_from_stored(state.objects);
+        let wf_pairs = storage::waveforms_from_stored(state.waveforms);
+        self.waveforms = wf_pairs
             .into_iter()
-            .map(|sw| WaveformView {
+            .map(|(id, sw)| (id, WaveformView {
                 audio: Arc::new(AudioData {
                     left_samples: Arc::new(Vec::new()),
                     right_samples: Arc::new(Vec::new()),
@@ -1405,68 +1557,69 @@ impl App {
                 disabled: sw.disabled,
                 sample_offset_px: sw.sample_offset_px,
                 automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
-            })
+            }))
             .collect();
 
         // Restore audio data and peaks from DB
         self.audio_clips.clear();
         if let Some(s) = &self.storage {
-            for i in 0..num_waveforms {
+            let wf_ids: Vec<EntityId> = self.waveforms.keys().cloned().collect();
+            for wf_id in &wf_ids {
+                let id_str = wf_id.to_string();
+                let wf = self.waveforms.get(wf_id).unwrap();
                 let mut left_samples = Arc::new(Vec::new());
                 let mut right_samples = Arc::new(Vec::new());
-                let mut sample_rate = self.waveforms[i].audio.sample_rate;
-                let mut left_peaks = self.waveforms[i].audio.left_peaks.clone();
-                let mut right_peaks = self.waveforms[i].audio.right_peaks.clone();
+                let mut sample_rate = wf.audio.sample_rate;
+                let mut left_peaks = wf.audio.left_peaks.clone();
+                let mut right_peaks = wf.audio.right_peaks.clone();
 
-                if let Some(audio) = s.load_audio(i as u64) {
+                if let Some(audio) = s.load_audio(&id_str) {
                     left_samples = Arc::new(storage::u8_slice_to_f32(&audio.left_samples));
                     right_samples = Arc::new(storage::u8_slice_to_f32(&audio.right_samples));
                     let mono = storage::u8_slice_to_f32(&audio.mono_samples);
                     sample_rate = audio.sample_rate;
-                    self.audio_clips.push(AudioClipData {
+                    self.audio_clips.insert(*wf_id, AudioClipData {
                         samples: Arc::new(mono),
                         sample_rate: audio.sample_rate,
                         duration_secs: audio.duration_secs,
                     });
                 } else {
-                    self.audio_clips.push(AudioClipData {
+                    self.audio_clips.insert(*wf_id, AudioClipData {
                         samples: Arc::new(Vec::new()),
                         sample_rate: 48000,
                         duration_secs: 0.0,
                     });
                 }
-                if let Some(peaks) = s.load_peaks(i as u64) {
+                if let Some(peaks) = s.load_peaks(&id_str) {
                     let lp = storage::u8_slice_to_f32(&peaks.left_peaks);
                     let rp = storage::u8_slice_to_f32(&peaks.right_peaks);
                     left_peaks = Arc::new(WaveformPeaks::from_raw(peaks.block_size as usize, lp));
                     right_peaks = Arc::new(WaveformPeaks::from_raw(peaks.block_size as usize, rp));
                 }
-                self.waveforms[i].audio = Arc::new(AudioData {
+                let filename = wf.audio.filename.clone();
+                self.waveforms.get_mut(wf_id).unwrap().audio = Arc::new(AudioData {
                     left_samples,
                     right_samples,
                     left_peaks,
                     right_peaks,
                     sample_rate,
-                    filename: self.waveforms[i].audio.filename.clone(),
+                    filename,
                 });
             }
         }
 
-        let restored_regions: Vec<effects::EffectRegion> = state
-            .effect_regions
+        self.effect_regions = storage::effect_regions_from_stored(state.effect_regions)
             .into_iter()
-            .map(|ser| {
+            .map(|(id, ser)| {
                 let mut region = effects::EffectRegion::new(ser.position, ser.size);
                 region.name = ser.name;
-                region
+                (id, region)
             })
             .collect();
-        self.effect_regions = restored_regions;
 
-        self.plugin_blocks = state
-            .plugin_blocks
+        self.plugin_blocks = storage::plugin_blocks_from_stored(state.plugin_blocks)
             .into_iter()
-            .map(|spb| {
+            .map(|(id, spb)| {
                 let mut pb = effects::PluginBlock::new(
                     spb.position,
                     spb.plugin_id,
@@ -1484,30 +1637,36 @@ impl App {
                         .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
                         .collect());
                 }
-                pb
+                (id, pb)
             })
             .collect();
 
-        self.components = state
-            .components
+        self.components = storage::components_from_stored(state.components)
             .into_iter()
-            .map(|sc| component::ComponentDef {
-                id: sc.id,
-                name: sc.name,
-                position: sc.position,
-                size: sc.size,
-                waveform_indices: sc.waveform_indices.iter().map(|&i| i as usize).collect(),
+            .map(|(id, sc)| {
+                let waveform_ids = sc.waveform_ids.iter()
+                    .map(|s| s.parse::<EntityId>().unwrap_or_else(|_| entity_id::new_id()))
+                    .collect();
+                (id, component::ComponentDef {
+                    id,
+                    name: sc.name,
+                    position: sc.position,
+                    size: sc.size,
+                    waveform_ids,
+                })
             })
             .collect();
-        self.component_instances = state
-            .component_instances
+        self.component_instances = storage::component_instances_from_stored(state.component_instances)
             .into_iter()
-            .map(|si| component::ComponentInstance {
-                component_id: si.component_id,
-                position: si.position,
+            .map(|(id, si)| {
+                let component_id = si.component_id.parse::<EntityId>().unwrap_or_else(|_| entity_id::new_id());
+                (id, component::ComponentInstance {
+                    component_id,
+                    position: si.position,
+                })
             })
             .collect();
-        self.next_component_id = self.components.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        self.next_component_id = entity_id::new_id();
         self.bpm = if state.bpm > 0.0 { state.bpm } else { DEFAULT_BPM };
 
         self.sample_browser = if !state.browser_expanded.is_empty() {
@@ -1530,24 +1689,22 @@ impl App {
         };
 
         self.selected.clear();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.op_undo_stack.clear();
+        self.op_redo_stack.clear();
         self.export_regions.clear();
 
-        self.loop_regions = state
-            .loop_regions
+        self.loop_regions = storage::loop_regions_from_stored(state.loop_regions)
             .into_iter()
-            .map(|slr| LoopRegion {
+            .map(|(id, slr)| (id, LoopRegion {
                 position: slr.position,
                 size: slr.size,
                 enabled: slr.enabled,
-            })
+            }))
             .collect();
 
-        self.midi_clips = state
-            .midi_clips
+        self.midi_clips = storage::midi_clips_from_stored(state.midi_clips)
             .into_iter()
-            .map(|smc| midi::MidiClip {
+            .map(|(id, smc)| (id, midi::MidiClip {
                 position: smc.position,
                 size: smc.size,
                 color: smc.color,
@@ -1561,13 +1718,12 @@ impl App {
                 grid_mode: storage::grid_mode_from_stored(&smc.grid_mode_tag, &smc.grid_mode_value),
                 triplet_grid: smc.triplet_grid,
                 velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
-            })
+            }))
             .collect();
 
-        self.instrument_regions = state
-            .instrument_regions
+        self.instrument_regions = storage::instrument_regions_from_stored(state.instrument_regions)
             .into_iter()
-            .map(|sir| {
+            .map(|(id, sir)| {
                 let mut ir = instruments::InstrumentRegion::new(sir.position, sir.size);
                 ir.name = sir.name;
                 ir.plugin_id = sir.plugin_id;
@@ -1582,7 +1738,7 @@ impl App {
                         f64::from_le_bytes(bytes)
                     }).collect());
                 }
-                ir
+                (id, ir)
             })
             .collect();
 
@@ -1598,7 +1754,7 @@ impl App {
 
         // If plugins are already scanned, open vst3-gui instances for restored plugin blocks
         if self.plugin_registry.is_scanned() {
-            for pb in &mut self.plugin_blocks {
+            for (_pb_id, pb) in &mut self.plugin_blocks {
                 let has_gui = pb.gui.lock().ok().map_or(false, |g| g.is_some());
                 if !has_gui {
                     if let Some(entry) = self.plugin_registry.plugins.iter().find(|e| e.info.unique_id == pb.plugin_id) {
@@ -1661,17 +1817,20 @@ impl App {
         menu.open_project_items = new_items;
     }
 
-    fn update_component_bounds(&mut self, comp_idx: usize) {
-        if comp_idx >= self.components.len() {
+    fn update_component_bounds(&mut self, comp_id: EntityId) {
+        let indices = if let Some(comp) = self.components.get(&comp_id) {
+            comp.waveform_ids.clone()
+        } else {
             return;
-        }
-        let indices = self.components[comp_idx].waveform_indices.clone();
+        };
         if indices.is_empty() {
             return;
         }
         let (pos, size) = component::bounding_box_of_waveforms(&self.waveforms, &indices);
-        self.components[comp_idx].position = pos;
-        self.components[comp_idx].size = size;
+        if let Some(comp) = self.components.get_mut(&comp_id) {
+            comp.position = pos;
+            comp.size = size;
+        }
     }
 
     fn sync_audio_clips(&self) {
@@ -1688,13 +1847,17 @@ impl App {
             let mut vol_autos: Vec<Vec<(f32, f32)>> = Vec::new();
             let mut pan_autos: Vec<Vec<(f32, f32)>> = Vec::new();
 
-            for (i, wf) in self.waveforms.iter().enumerate() {
-                if wf.disabled || i >= self.audio_clips.len() {
+            for (&wf_id, wf) in self.waveforms.iter() {
+                if wf.disabled {
                     continue;
                 }
+                let clip = match self.audio_clips.get(&wf_id) {
+                    Some(c) => c,
+                    None => continue,
+                };
                 positions.push(wf.position);
                 sizes.push(wf.size);
-                clips.push(&self.audio_clips[i]);
+                clips.push(clip);
                 fade_ins.push(wf.fade_in_px);
                 fade_outs.push(wf.fade_out_px);
                 fade_in_curves.push(wf.fade_in_curve);
@@ -1706,36 +1869,27 @@ impl App {
             }
 
             // Add virtual clips for each component instance
-            let comp_map: std::collections::HashMap<component::ComponentId, usize> = self
-                .components
-                .iter()
-                .enumerate()
-                .map(|(i, c)| (c.id, i))
-                .collect();
-            for inst in &self.component_instances {
-                if let Some(def) = comp_map
-                    .get(&inst.component_id)
-                    .map(|&i| &self.components[i])
-                {
+            for inst in self.component_instances.values() {
+                if let Some(def) = self.components.values().find(|c| c.id == inst.component_id) {
                     let offset = [
                         inst.position[0] - def.position[0],
                         inst.position[1] - def.position[1],
                     ];
-                    for &wf_idx in &def.waveform_indices {
-                        if wf_idx < self.waveforms.len() && wf_idx < self.audio_clips.len() && !self.waveforms[wf_idx].disabled {
-                            let wf = &self.waveforms[wf_idx];
-                            positions
-                                .push([wf.position[0] + offset[0], wf.position[1] + offset[1]]);
-                            sizes.push(wf.size);
-                            clips.push(&self.audio_clips[wf_idx]);
-                            fade_ins.push(wf.fade_in_px);
-                            fade_outs.push(wf.fade_out_px);
-                            fade_in_curves.push(wf.fade_in_curve);
-                            fade_out_curves.push(wf.fade_out_curve);
-                            volumes.push(wf.volume);
-                            sample_offsets.push(wf.sample_offset_px);
-                            vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
-                            pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
+                    for &wf_id in &def.waveform_ids {
+                        if let (Some(wf), Some(clip)) = (self.waveforms.get(&wf_id), self.audio_clips.get(&wf_id)) {
+                            if !wf.disabled {
+                                positions.push([wf.position[0] + offset[0], wf.position[1] + offset[1]]);
+                                sizes.push(wf.size);
+                                clips.push(clip);
+                                fade_ins.push(wf.fade_in_px);
+                                fade_outs.push(wf.fade_out_px);
+                                fade_in_curves.push(wf.fade_in_curve);
+                                fade_out_curves.push(wf.fade_out_curve);
+                                volumes.push(wf.volume);
+                                sample_offsets.push(wf.sample_offset_px);
+                                vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
+                                pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
+                            }
                         }
                     }
                 }
@@ -1746,17 +1900,18 @@ impl App {
 
             let regions: Vec<audio::AudioEffectRegion> = self
                 .effect_regions
-                .iter()
+                .values()
                 .map(|er| {
-                    let block_indices = effects::collect_plugins_for_region(er, &self.plugin_blocks);
+                    let block_ids = effects::collect_plugins_for_region(er, &self.plugin_blocks);
                     audio::AudioEffectRegion {
                         x_start_px: er.position[0],
                         x_end_px: er.position[0] + er.size[0],
                         y_start: er.position[1],
                         y_end: er.position[1] + er.size[1],
-                        plugins: block_indices
+                        plugins: block_ids
                             .iter()
-                            .map(|&i| self.plugin_blocks[i].gui.clone())
+                            .filter_map(|id| self.plugin_blocks.get(id))
+                            .map(|pb| pb.gui.clone())
                             .collect(),
                     }
                 })
@@ -1767,7 +1922,6 @@ impl App {
     }
 
     fn add_loop_area(&mut self) {
-        self.push_undo();
         let (pos, size) = if let Some(sa) = self.select_area.take() {
             let x0 = snap_to_grid(sa.position[0], &self.settings, self.camera.zoom, self.bpm);
             let x1 = snap_to_grid(sa.position[0] + sa.size[0], &self.settings, self.camera.zoom, self.bpm);
@@ -1779,21 +1933,17 @@ impl App {
             let h = LOOP_REGION_DEFAULT_HEIGHT;
             ([center[0] - w * 0.5, center[1] - h * 0.5], [w, h])
         };
-        self.loop_regions.push(LoopRegion {
-            position: pos,
-            size,
-            enabled: true,
-        });
-        let idx = self.loop_regions.len() - 1;
+        let id = new_id();
+        let data = LoopRegion { position: pos, size, enabled: true };
+        self.loop_regions.insert(id, data.clone());
+        self.push_op(operations::Operation::CreateLoopRegion { id, data });
         self.selected.clear();
-        self.selected.push(HitTarget::LoopRegion(idx));
+        self.selected.push(HitTarget::LoopRegion(id));
         self.sync_loop_region();
-        self.mark_dirty();
         self.request_redraw();
     }
 
     fn add_effect_area(&mut self) {
-        self.push_undo();
         let (pos, size) = if let Some(sa) = self.select_area.take() {
             let x0 = snap_to_grid(sa.position[0], &self.settings, self.camera.zoom, self.bpm);
             let x1 = snap_to_grid(
@@ -1810,17 +1960,16 @@ impl App {
             let h = effects::EFFECT_REGION_DEFAULT_HEIGHT;
             ([center[0] - w * 0.5, center[1] - h * 0.5], [w, h])
         };
-        self.effect_regions
-            .push(effects::EffectRegion::new(pos, size));
-        let idx = self.effect_regions.len() - 1;
+        let id = new_id();
+        let er = effects::EffectRegion::new(pos, size);
+        self.effect_regions.insert(id, er.clone());
+        self.push_op(operations::Operation::CreateEffectRegion { id, data: er });
         self.selected.clear();
-        self.selected.push(HitTarget::EffectRegion(idx));
-        self.mark_dirty();
+        self.selected.push(HitTarget::EffectRegion(id));
         self.request_redraw();
     }
 
     fn add_render_area(&mut self) {
-        self.push_undo();
         let (pos, size) = if let Some(sa) = self.select_area.take() {
             let x0 = snap_to_grid(sa.position[0], &self.settings, self.camera.zoom, self.bpm);
             let x1 = snap_to_grid(
@@ -1837,20 +1986,17 @@ impl App {
             let h = EXPORT_REGION_DEFAULT_HEIGHT;
             ([center[0] - w * 0.5, center[1] - h * 0.5], [w, h])
         };
-        self.export_regions.push(ExportRegion {
-            position: pos,
-            size,
-        });
-        let idx = self.export_regions.len() - 1;
+        let id = new_id();
+        let data = ExportRegion { position: pos, size };
+        self.export_regions.insert(id, data.clone());
+        self.push_op(operations::Operation::CreateExportRegion { id, data });
         self.selected.clear();
-        self.selected.push(HitTarget::ExportRegion(idx));
-        self.mark_dirty();
+        self.selected.push(HitTarget::ExportRegion(id));
         self.request_redraw();
     }
 
     #[cfg(test)]
     fn add_instrument_area(&mut self) {
-        self.push_undo();
         let (pos, size) = if let Some(sa) = self.select_area.take() {
             let x0 = snap_to_grid(sa.position[0], &self.settings, self.camera.zoom, self.bpm);
             let x1 = snap_to_grid(
@@ -1867,17 +2013,21 @@ impl App {
             let h = instruments::INSTRUMENT_REGION_DEFAULT_HEIGHT;
             ([center[0] - w * 0.5, center[1] - h * 0.5], [w, h])
         };
-        self.instrument_regions
-            .push(instruments::InstrumentRegion::new(pos, size));
-        let idx = self.instrument_regions.len() - 1;
+        let id = new_id();
+        let ir = instruments::InstrumentRegion::new(pos, size);
+        let snap = instruments::InstrumentRegionSnapshot {
+            position: ir.position, size: ir.size,
+            name: ir.name.clone(), plugin_id: ir.plugin_id.clone(),
+            plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone(),
+        };
+        self.instrument_regions.insert(id, ir);
+        self.push_op(operations::Operation::CreateInstrumentRegion { id, data: snap });
         self.selected.clear();
-        self.selected.push(HitTarget::InstrumentRegion(idx));
-        self.mark_dirty();
+        self.selected.push(HitTarget::InstrumentRegion(id));
         self.request_redraw();
     }
 
     fn add_midi_clip(&mut self) {
-        self.push_undo();
         let (sw, sh, _) = self.screen_info();
         let center = self.camera.screen_to_world([sw * 0.5, sh * 0.5]);
         let ppb = grid::pixels_per_beat(self.bpm);
@@ -1887,24 +2037,24 @@ impl App {
         let pos = [center[0] - width * 0.5, center[1] - height * 0.5];
         let mut clip = midi::MidiClip::new(pos, &self.settings);
         clip.size = [width, height];
-        self.midi_clips.push(clip);
-        let idx = self.midi_clips.len() - 1;
+        let id = new_id();
+        self.midi_clips.insert(id, clip.clone());
+        self.push_op(operations::Operation::CreateMidiClip { id, data: clip });
         self.selected.clear();
-        self.selected.push(HitTarget::MidiClip(idx));
-        self.mark_dirty();
+        self.selected.push(HitTarget::MidiClip(id));
         self.request_redraw();
     }
 
     fn sync_instrument_regions(&self) {
         if let Some(engine) = &self.audio_engine {
             let mut instrument_regions = Vec::new();
-            for ir in &self.instrument_regions {
+            for ir in self.instrument_regions.values() {
                 if !ir.has_plugin() {
                     continue;
                 }
                 let mut midi_events = Vec::new();
                 // Find MIDI clips that spatially overlap this region
-                for mc in &self.midi_clips {
+                for mc in self.midi_clips.values() {
                     if !rects_overlap(ir.position, ir.size, mc.position, mc.size) {
                         continue;
                     }
@@ -1946,8 +2096,8 @@ impl App {
             let regions: Vec<(f64, f64)> = self
                 .loop_regions
                 .iter()
-                .filter(|lr| lr.enabled)
-                .map(|lr| {
+                .filter(|(_, lr)| lr.enabled)
+                .map(|(_, lr)| {
                     let start = lr.position[0] as f64 / audio::PIXELS_PER_SECOND as f64;
                     let end = (lr.position[0] + lr.size[0]) as f64 / audio::PIXELS_PER_SECOND as f64;
                     (start, end)
@@ -1972,20 +2122,21 @@ impl App {
         if is_rec {
             let loaded = self.recorder.as_mut().unwrap().stop();
             if let Some(loaded) = loaded {
-                if let Some(idx) = self.recording_waveform_idx.take() {
-                    if idx < self.waveforms.len() {
-                        self.waveforms[idx].size[0] = loaded.width;
-                        self.waveforms[idx].audio = Arc::new(AudioData {
+                if let Some(wf_id) = self.recording_waveform_id.take() {
+                    if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                        let filename = wf.audio.filename.clone();
+                        wf.size[0] = loaded.width;
+                        wf.audio = Arc::new(AudioData {
                             left_peaks: Arc::new(WaveformPeaks::build(&loaded.left_samples)),
                             right_peaks: Arc::new(WaveformPeaks::build(&loaded.right_samples)),
                             left_samples: loaded.left_samples.clone(),
                             right_samples: loaded.right_samples.clone(),
                             sample_rate: loaded.sample_rate,
-                            filename: self.waveforms[idx].audio.filename.clone(),
+                            filename,
                         });
                     }
-                    if idx < self.audio_clips.len() {
-                        self.audio_clips[idx] = AudioClipData {
+                    if let Some(clip) = self.audio_clips.get_mut(&wf_id) {
+                        *clip = AudioClipData {
                             samples: loaded.samples,
                             sample_rate: loaded.sample_rate,
                             duration_secs: loaded.duration_secs,
@@ -1994,13 +2145,9 @@ impl App {
                     self.sync_audio_clips();
                 }
             } else {
-                if let Some(idx) = self.recording_waveform_idx.take() {
-                    if idx < self.waveforms.len() {
-                        self.waveforms.remove(idx);
-                    }
-                    if idx < self.audio_clips.len() {
-                        self.audio_clips.remove(idx);
-                    }
+                if let Some(wf_id) = self.recording_waveform_id.take() {
+                    self.waveforms.shift_remove(&wf_id);
+                    self.audio_clips.shift_remove(&wf_id);
                 }
             }
         } else {
@@ -2009,9 +2156,8 @@ impl App {
             let color_idx = self.waveforms.len() % WAVEFORM_COLORS.len();
             let sample_rate = self.recorder.as_ref().unwrap().sample_rate();
 
-            self.push_undo();
-            let idx = self.waveforms.len();
-            self.waveforms.push(WaveformView {
+            let wf_id = new_id();
+            let wf_data = WaveformView {
                 audio: Arc::new(AudioData {
                     left_samples: Arc::new(Vec::new()),
                     right_samples: Arc::new(Vec::new()),
@@ -2032,33 +2178,37 @@ impl App {
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),
-            });
-            self.audio_clips.push(AudioClipData {
+            };
+            let ac_data = AudioClipData {
                 samples: Arc::new(Vec::new()),
                 sample_rate,
                 duration_secs: 0.0,
-            });
-            self.recording_waveform_idx = Some(idx);
+            };
+            self.waveforms.insert(wf_id, wf_data.clone());
+            self.audio_clips.insert(wf_id, ac_data.clone());
+            self.push_op(operations::Operation::CreateWaveform { id: wf_id, data: wf_data, audio_clip: Some((wf_id, ac_data)) });
+            self.recording_waveform_id = Some(wf_id);
             self.recorder.as_mut().unwrap().start();
         }
     }
 
     fn update_recording_waveform(&mut self) {
-        let idx = match self.recording_waveform_idx {
-            Some(i) => i,
+        let wf_id = match self.recording_waveform_id {
+            Some(id) => id,
             None => return,
         };
         let snapshot = self.recorder.as_ref().and_then(|r| r.current_snapshot());
         if let Some(loaded) = snapshot {
-            if idx < self.waveforms.len() {
-                self.waveforms[idx].size[0] = loaded.width;
-                self.waveforms[idx].audio = Arc::new(AudioData {
+            if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                let filename = wf.audio.filename.clone();
+                wf.size[0] = loaded.width;
+                wf.audio = Arc::new(AudioData {
                     left_peaks: Arc::new(WaveformPeaks::build(&loaded.left_samples)),
                     right_peaks: Arc::new(WaveformPeaks::build(&loaded.right_samples)),
                     left_samples: loaded.left_samples,
                     right_samples: loaded.right_samples,
                     sample_rate: loaded.sample_rate,
-                    filename: self.waveforms[idx].audio.filename.clone(),
+                    filename,
                 });
                 self.mark_dirty();
             }
@@ -2073,7 +2223,7 @@ impl App {
     }
 
     fn trigger_export_render(&mut self) {
-        let er = match self.export_regions.first() {
+        let er = match self.export_regions.values().next() {
             Some(er) => er,
             None => return,
         };
@@ -2101,8 +2251,10 @@ impl App {
         let clips: Vec<audio::ExportClip> = self
             .waveforms
             .iter()
-            .zip(self.audio_clips.iter())
-            .filter(|(wf, _)| !wf.disabled)
+            .filter_map(|(wf_id, wf)| {
+                if wf.disabled { return None; }
+                self.audio_clips.get(wf_id).map(|clip| (wf, clip))
+            })
             .map(|(wf, clip)| audio::ExportClip {
                 buffer: clip.samples.clone(),
                 source_sample_rate: clip.sample_rate,
@@ -2121,17 +2273,18 @@ impl App {
 
         let effect_regions: Vec<audio::AudioEffectRegion> = self
             .effect_regions
-            .iter()
+            .values()
             .map(|er| {
-                let block_indices = effects::collect_plugins_for_region(er, &self.plugin_blocks);
+                let block_ids = effects::collect_plugins_for_region(er, &self.plugin_blocks);
                 audio::AudioEffectRegion {
                     x_start_px: er.position[0],
                     x_end_px: er.position[0] + er.size[0],
                     y_start: er.position[1],
                     y_end: er.position[1] + er.size[1],
-                    plugins: block_indices
+                    plugins: block_ids
                         .iter()
-                        .map(|&i| self.plugin_blocks[i].gui.clone())
+                        .filter_map(|id| self.plugin_blocks.get(id))
+                        .map(|pb| pb.gui.clone())
                         .collect(),
                 }
             })
@@ -2305,10 +2458,10 @@ impl App {
         }
         let world = self.camera.screen_to_world(self.mouse_pos);
         self.waveform_edge_hover = hit_test_waveform_edge(&self.waveforms, world, &self.camera);
-        self.midi_note_edge_hover = if let Some(mc_idx) = self.editing_midi_clip {
-            if mc_idx < self.midi_clips.len() {
+        self.midi_note_edge_hover = if let Some(mc_id) = self.editing_midi_clip {
+            if let Some(mc) = self.midi_clips.get(&mc_id) {
                 matches!(
-                    midi::hit_test_midi_note_editing(&self.midi_clips[mc_idx], world, &self.camera, true),
+                    midi::hit_test_midi_note_editing(mc, world, &self.camera, true),
                     Some((_, midi::MidiNoteHitZone::RightEdge | midi::MidiNoteHitZone::LeftEdge))
                 )
             } else {
@@ -2317,18 +2470,18 @@ impl App {
         } else {
             false
         };
-        self.velocity_divider_hovered = if let Some(mc_idx) = self.editing_midi_clip {
-            if mc_idx < self.midi_clips.len() {
-                midi::hit_test_velocity_divider(&self.midi_clips[mc_idx], world, &self.camera)
+        self.velocity_divider_hovered = if let Some(mc_id) = self.editing_midi_clip {
+            if let Some(mc) = self.midi_clips.get(&mc_id) {
+                midi::hit_test_velocity_divider(mc, world, &self.camera)
             } else {
                 false
             }
         } else {
             false
         };
-        self.velocity_bar_hovered = if let Some(mc_idx) = self.editing_midi_clip {
-            if mc_idx < self.midi_clips.len() && !self.velocity_divider_hovered {
-                midi::hit_test_velocity_bar(&self.midi_clips[mc_idx], world, &self.camera).is_some()
+        self.velocity_bar_hovered = if let Some(mc_id) = self.editing_midi_clip {
+            if let Some(mc) = self.midi_clips.get(&mc_id) {
+                !self.velocity_divider_hovered && midi::hit_test_velocity_bar(mc, world, &self.camera).is_some()
             } else {
                 false
             }
@@ -2336,11 +2489,11 @@ impl App {
             false
         };
         self.cmd_velocity_hover_note = if self.modifiers.super_key() {
-            if let Some(mc_idx) = self.editing_midi_clip {
-                if mc_idx < self.midi_clips.len() {
-                    match midi::hit_test_midi_note_editing(&self.midi_clips[mc_idx], world, &self.camera, true) {
+            if let Some(mc_id) = self.editing_midi_clip {
+                if let Some(mc) = self.midi_clips.get(&mc_id) {
+                    match midi::hit_test_midi_note_editing(mc, world, &self.camera, true) {
                         Some((note_idx, midi::MidiNoteHitZone::Body | midi::MidiNoteHitZone::LeftEdge | midi::MidiNoteHitZone::RightEdge)) => {
-                            Some((mc_idx, note_idx))
+                            Some((mc_id, note_idx))
                         }
                         _ => None,
                     }
@@ -2380,7 +2533,7 @@ impl App {
         );
 
         self.component_def_hover = ComponentDefHover::None;
-        for (ci, def) in self.components.iter().enumerate() {
+        for (&ci, def) in self.components.iter() {
             let handle_sz = 24.0 / self.camera.zoom;
             let hs = handle_sz * 0.5;
             let p = def.position;
@@ -2405,7 +2558,7 @@ impl App {
         }
 
         self.instrument_region_hover = InstrumentRegionHover::None;
-        for (i, ir) in self.instrument_regions.iter().enumerate() {
+        for (&i, ir) in self.instrument_regions.iter() {
             let handle_sz = 24.0 / self.camera.zoom;
             let hs = handle_sz * 0.5;
             let p = ir.position;
@@ -2430,7 +2583,7 @@ impl App {
         }
 
         self.effect_region_hover = EffectRegionHover::None;
-        for (i, er) in self.effect_regions.iter().enumerate() {
+        for (&i, er) in self.effect_regions.iter() {
             let handle_sz = 24.0 / self.camera.zoom;
             let hs = handle_sz * 0.5;
             let p = er.position;
@@ -2455,7 +2608,7 @@ impl App {
         }
 
         self.export_hover = ExportHover::None;
-        for (i, er) in self.export_regions.iter().enumerate() {
+        for (&i, er) in self.export_regions.iter() {
             let handle_sz = 24.0 / self.camera.zoom;
             let hs = handle_sz * 0.5;
             let p = er.position;
@@ -2490,7 +2643,7 @@ impl App {
         }
 
         self.loop_hover = LoopHover::None;
-        for (i, lr) in self.loop_regions.iter().enumerate() {
+        for (&i, lr) in self.loop_regions.iter() {
             if !lr.enabled {
                 continue;
             }
@@ -2529,42 +2682,50 @@ impl App {
 
     fn set_target_pos(&mut self, target: &HitTarget, pos: [f32; 2]) {
         match target {
-            HitTarget::Object(i) => self.objects[*i].position = pos,
-            HitTarget::Waveform(i) => self.waveforms[*i].position = pos,
-            HitTarget::EffectRegion(i) => self.effect_regions[*i].position = pos,
-            HitTarget::PluginBlock(i) => self.plugin_blocks[*i].position = pos,
-            HitTarget::LoopRegion(i) => self.loop_regions[*i].position = pos,
-            HitTarget::ExportRegion(i) => self.export_regions[*i].position = pos,
+            HitTarget::Object(i) => { if let Some(o) = self.objects.get_mut(i) { o.position = pos; } }
+            HitTarget::Waveform(i) => { if let Some(w) = self.waveforms.get_mut(i) { w.position = pos; } }
+            HitTarget::EffectRegion(i) => { if let Some(e) = self.effect_regions.get_mut(i) { e.position = pos; } }
+            HitTarget::PluginBlock(i) => { if let Some(p) = self.plugin_blocks.get_mut(i) { p.position = pos; } }
+            HitTarget::LoopRegion(i) => { if let Some(l) = self.loop_regions.get_mut(i) { l.position = pos; } }
+            HitTarget::ExportRegion(i) => { if let Some(e) = self.export_regions.get_mut(i) { e.position = pos; } }
             HitTarget::ComponentDef(i) => {
-                let old_pos = self.components[*i].position;
-                let dx = pos[0] - old_pos[0];
-                let dy = pos[1] - old_pos[1];
-                self.components[*i].position = pos;
-                for &wf_idx in &self.components[*i].waveform_indices.clone() {
-                    if wf_idx < self.waveforms.len() {
-                        self.waveforms[wf_idx].position[0] += dx;
-                        self.waveforms[wf_idx].position[1] += dy;
+                let wf_ids_and_delta = if let Some(comp) = self.components.get(i) {
+                    let dx = pos[0] - comp.position[0];
+                    let dy = pos[1] - comp.position[1];
+                    Some((comp.waveform_ids.clone(), dx, dy))
+                } else {
+                    None
+                };
+                if let Some((wf_ids, dx, dy)) = wf_ids_and_delta {
+                    if let Some(comp) = self.components.get_mut(i) {
+                        comp.position = pos;
+                    }
+                    for wf_id in &wf_ids {
+                        if let Some(wf) = self.waveforms.get_mut(wf_id) {
+                            wf.position[0] += dx;
+                            wf.position[1] += dy;
+                        }
                     }
                 }
             }
-            HitTarget::ComponentInstance(i) => self.component_instances[*i].position = pos,
-            HitTarget::MidiClip(i) => self.midi_clips[*i].position = pos,
-            HitTarget::InstrumentRegion(i) => self.instrument_regions[*i].position = pos,
+            HitTarget::ComponentInstance(i) => { if let Some(c) = self.component_instances.get_mut(i) { c.position = pos; } }
+            HitTarget::MidiClip(i) => { if let Some(m) = self.midi_clips.get_mut(i) { m.position = pos; } }
+            HitTarget::InstrumentRegion(i) => { if let Some(r) = self.instrument_regions.get_mut(i) { r.position = pos; } }
         }
     }
 
     fn get_target_pos(&self, target: &HitTarget) -> [f32; 2] {
         match target {
-            HitTarget::Object(i) => self.objects[*i].position,
-            HitTarget::Waveform(i) => self.waveforms[*i].position,
-            HitTarget::EffectRegion(i) => self.effect_regions[*i].position,
-            HitTarget::PluginBlock(i) => self.plugin_blocks[*i].position,
-            HitTarget::LoopRegion(i) => self.loop_regions[*i].position,
-            HitTarget::ExportRegion(i) => self.export_regions[*i].position,
-            HitTarget::ComponentDef(i) => self.components[*i].position,
-            HitTarget::ComponentInstance(i) => self.component_instances[*i].position,
-            HitTarget::MidiClip(i) => self.midi_clips[*i].position,
-            HitTarget::InstrumentRegion(i) => self.instrument_regions[*i].position,
+            HitTarget::Object(i) => self.objects.get(i).map(|o| o.position).unwrap_or([0.0; 2]),
+            HitTarget::Waveform(i) => self.waveforms.get(i).map(|w| w.position).unwrap_or([0.0; 2]),
+            HitTarget::EffectRegion(i) => self.effect_regions.get(i).map(|e| e.position).unwrap_or([0.0; 2]),
+            HitTarget::PluginBlock(i) => self.plugin_blocks.get(i).map(|p| p.position).unwrap_or([0.0; 2]),
+            HitTarget::LoopRegion(i) => self.loop_regions.get(i).map(|l| l.position).unwrap_or([0.0; 2]),
+            HitTarget::ExportRegion(i) => self.export_regions.get(i).map(|e| e.position).unwrap_or([0.0; 2]),
+            HitTarget::ComponentDef(i) => self.components.get(i).map(|c| c.position).unwrap_or([0.0; 2]),
+            HitTarget::ComponentInstance(i) => self.component_instances.get(i).map(|c| c.position).unwrap_or([0.0; 2]),
+            HitTarget::MidiClip(i) => self.midi_clips.get(i).map(|m| m.position).unwrap_or([0.0; 2]),
+            HitTarget::InstrumentRegion(i) => self.instrument_regions.get(i).map(|r| r.position).unwrap_or([0.0; 2]),
         }
     }
 
@@ -2573,123 +2734,153 @@ impl App {
     }
 
     pub(crate) fn begin_move_selection(&mut self, world: [f32; 2], alt_copy: bool) {
-        self.push_undo();
-
         if alt_copy {
             let mut new_selected: Vec<HitTarget> = Vec::new();
+            let mut copy_ops: Vec<operations::Operation> = Vec::new();
             for target in self.selected.clone() {
                 match target {
                     HitTarget::Waveform(i) => {
-                        if i < self.waveforms.len() {
-                            let wf = self.waveforms[i].clone();
-                            self.waveforms.push(wf);
-                            let new_i = self.waveforms.len() - 1;
-                            if i < self.audio_clips.len() {
-                                let clip = self.audio_clips[i].clone();
-                                self.audio_clips.push(clip);
+                        if let Some(wf) = self.waveforms.get(&i).cloned() {
+                            let nid = new_id();
+                            let ac = self.audio_clips.get(&i).cloned();
+                            self.waveforms.insert(nid, wf.clone());
+                            if let Some(clip) = &ac {
+                                self.audio_clips.insert(nid, clip.clone());
                             }
-                            new_selected.push(HitTarget::Waveform(new_i));
+                            copy_ops.push(operations::Operation::CreateWaveform { id: nid, data: wf, audio_clip: ac.map(|c| (nid, c)) });
+                            new_selected.push(HitTarget::Waveform(nid));
                         }
                     }
                     HitTarget::Object(i) => {
-                        if i < self.objects.len() {
-                            let obj = self.objects[i].clone();
-                            self.objects.push(obj);
-                            new_selected.push(HitTarget::Object(self.objects.len() - 1));
+                        if let Some(obj) = self.objects.get(&i).cloned() {
+                            let nid = new_id();
+                            self.objects.insert(nid, obj.clone());
+                            copy_ops.push(operations::Operation::CreateObject { id: nid, data: obj });
+                            new_selected.push(HitTarget::Object(nid));
                         }
                     }
                     HitTarget::EffectRegion(i) => {
-                        if i < self.effect_regions.len() {
-                            let er = self.effect_regions[i].clone();
-                            self.effect_regions.push(er);
-                            new_selected
-                                .push(HitTarget::EffectRegion(self.effect_regions.len() - 1));
+                        if let Some(er) = self.effect_regions.get(&i).cloned() {
+                            let nid = new_id();
+                            self.effect_regions.insert(nid, er.clone());
+                            copy_ops.push(operations::Operation::CreateEffectRegion { id: nid, data: er });
+                            new_selected.push(HitTarget::EffectRegion(nid));
                         }
                     }
                     HitTarget::PluginBlock(i) => {
-                        if i < self.plugin_blocks.len() {
-                            let pb = self.plugin_blocks[i].clone();
-                            self.plugin_blocks.push(pb);
-                            new_selected
-                                .push(HitTarget::PluginBlock(self.plugin_blocks.len() - 1));
+                        if let Some(pb) = self.plugin_blocks.get(&i).cloned() {
+                            let nid = new_id();
+                            let snap = pb.snapshot();
+                            self.plugin_blocks.insert(nid, pb);
+                            copy_ops.push(operations::Operation::CreatePluginBlock { id: nid, data: snap });
+                            new_selected.push(HitTarget::PluginBlock(nid));
                         }
                     }
                     HitTarget::LoopRegion(i) => {
-                        if i < self.loop_regions.len() {
-                            let lr = self.loop_regions[i].clone();
-                            self.loop_regions.push(lr);
-                            new_selected
-                                .push(HitTarget::LoopRegion(self.loop_regions.len() - 1));
+                        if let Some(lr) = self.loop_regions.get(&i).cloned() {
+                            let nid = new_id();
+                            self.loop_regions.insert(nid, lr.clone());
+                            copy_ops.push(operations::Operation::CreateLoopRegion { id: nid, data: lr });
+                            new_selected.push(HitTarget::LoopRegion(nid));
                         }
                     }
                     HitTarget::ExportRegion(i) => {
-                        if i < self.export_regions.len() {
-                            let xr = self.export_regions[i].clone();
-                            self.export_regions.push(xr);
-                            new_selected
-                                .push(HitTarget::ExportRegion(self.export_regions.len() - 1));
+                        if let Some(xr) = self.export_regions.get(&i).cloned() {
+                            let nid = new_id();
+                            self.export_regions.insert(nid, xr.clone());
+                            copy_ops.push(operations::Operation::CreateExportRegion { id: nid, data: xr });
+                            new_selected.push(HitTarget::ExportRegion(nid));
                         }
                     }
                     HitTarget::ComponentInstance(i) => {
-                        if i < self.component_instances.len() {
-                            let inst = self.component_instances[i].clone();
-                            self.component_instances.push(inst);
-                            new_selected.push(HitTarget::ComponentInstance(
-                                self.component_instances.len() - 1,
-                            ));
+                        if let Some(inst) = self.component_instances.get(&i).cloned() {
+                            let nid = new_id();
+                            self.component_instances.insert(nid, inst.clone());
+                            copy_ops.push(operations::Operation::CreateComponentInstance { id: nid, data: inst });
+                            new_selected.push(HitTarget::ComponentInstance(nid));
                         }
                     }
                     HitTarget::MidiClip(i) => {
-                        if i < self.midi_clips.len() {
-                            let mc = self.midi_clips[i].clone();
-                            self.midi_clips.push(mc);
-                            new_selected.push(HitTarget::MidiClip(self.midi_clips.len() - 1));
+                        if let Some(mc) = self.midi_clips.get(&i).cloned() {
+                            let nid = new_id();
+                            self.midi_clips.insert(nid, mc.clone());
+                            copy_ops.push(operations::Operation::CreateMidiClip { id: nid, data: mc });
+                            new_selected.push(HitTarget::MidiClip(nid));
                         }
                     }
                     HitTarget::InstrumentRegion(i) => {
-                        if i < self.instrument_regions.len() {
-                            let ir = self.instrument_regions[i].clone();
-                            self.instrument_regions.push(ir);
-                            new_selected.push(HitTarget::InstrumentRegion(self.instrument_regions.len() - 1));
+                        if let Some(ir) = self.instrument_regions.get(&i).cloned() {
+                            let nid = new_id();
+                            let snap = instruments::InstrumentRegionSnapshot {
+                                position: ir.position, size: ir.size,
+                                name: ir.name.clone(), plugin_id: ir.plugin_id.clone(),
+                                plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone(),
+                            };
+                            self.instrument_regions.insert(nid, ir);
+                            copy_ops.push(operations::Operation::CreateInstrumentRegion { id: nid, data: snap });
+                            new_selected.push(HitTarget::InstrumentRegion(nid));
                         }
                     }
                     HitTarget::ComponentDef(i) => {
-                        if i < self.components.len() {
-                            let src = &self.components[i];
-                            let new_id = self.next_component_id;
-                            self.next_component_id += 1;
-                            let src_indices = src.waveform_indices.clone();
-                            let new_comp = component::ComponentDef {
-                                id: new_id,
+                        if let Some(src) = self.components.get(&i).cloned() {
+                            let comp_nid = new_id();
+                            self.next_component_id = new_id();
+                            let src_wf_ids = src.waveform_ids.clone();
+                            let mut new_wf_ids = Vec::new();
+                            for &wi in &src_wf_ids {
+                                if let Some(wf) = self.waveforms.get(&wi).cloned() {
+                                    let wf_nid = new_id();
+                                    let ac = self.audio_clips.get(&wi).cloned();
+                                    self.waveforms.insert(wf_nid, wf.clone());
+                                    new_wf_ids.push(wf_nid);
+                                    if let Some(clip) = &ac {
+                                        self.audio_clips.insert(wf_nid, clip.clone());
+                                    }
+                                    copy_ops.push(operations::Operation::CreateWaveform { id: wf_nid, data: wf, audio_clip: ac.map(|c| (wf_nid, c)) });
+                                }
+                            }
+                            let def = component::ComponentDef {
+                                id: comp_nid,
                                 name: format!("{} copy", src.name),
                                 position: src.position,
                                 size: src.size,
-                                waveform_indices: Vec::new(),
+                                waveform_ids: new_wf_ids,
                             };
-                            let mut new_wf_indices = Vec::new();
-                            for &wi in &src_indices {
-                                if wi < self.waveforms.len() {
-                                    let wf = self.waveforms[wi].clone();
-                                    self.waveforms.push(wf);
-                                    let new_wi = self.waveforms.len() - 1;
-                                    new_wf_indices.push(new_wi);
-                                    if wi < self.audio_clips.len() {
-                                        let clip = self.audio_clips[wi].clone();
-                                        self.audio_clips.push(clip);
-                                    }
-                                }
-                            }
-                            self.components.push(component::ComponentDef {
-                                waveform_indices: new_wf_indices,
-                                ..new_comp
-                            });
-                            new_selected.push(HitTarget::ComponentDef(self.components.len() - 1));
+                            self.components.insert(comp_nid, def.clone());
+                            copy_ops.push(operations::Operation::CreateComponent { id: comp_nid, data: def });
+                            new_selected.push(HitTarget::ComponentDef(comp_nid));
                         }
                     }
                 }
             }
             self.selected = new_selected;
+            if !copy_ops.is_empty() {
+                self.push_op(operations::Operation::Batch(copy_ops));
+            }
         }
+
+        // Capture before states for all selected entities
+        let before_states: Vec<(HitTarget, EntityBeforeState)> = self.selected.iter().filter_map(|t| {
+            match t {
+                HitTarget::Object(id) => self.objects.get(id).map(|o| (*t, EntityBeforeState::Object(o.clone()))),
+                HitTarget::Waveform(id) => self.waveforms.get(id).map(|w| (*t, EntityBeforeState::Waveform(w.clone()))),
+                HitTarget::EffectRegion(id) => self.effect_regions.get(id).map(|e| (*t, EntityBeforeState::EffectRegion(e.clone()))),
+                HitTarget::PluginBlock(id) => self.plugin_blocks.get(id).map(|p| (*t, EntityBeforeState::PluginBlock(p.snapshot()))),
+                HitTarget::LoopRegion(id) => self.loop_regions.get(id).map(|l| (*t, EntityBeforeState::LoopRegion(l.clone()))),
+                HitTarget::ExportRegion(id) => self.export_regions.get(id).map(|x| (*t, EntityBeforeState::ExportRegion(x.clone()))),
+                HitTarget::ComponentDef(id) => self.components.get(id).map(|c| (*t, EntityBeforeState::ComponentDef(c.clone()))),
+                HitTarget::ComponentInstance(id) => self.component_instances.get(id).map(|c| (*t, EntityBeforeState::ComponentInstance(c.clone()))),
+                HitTarget::MidiClip(id) => self.midi_clips.get(id).map(|m| (*t, EntityBeforeState::MidiClip(m.clone()))),
+                HitTarget::InstrumentRegion(id) => self.instrument_regions.get(id).map(|r| {
+                    let snap = instruments::InstrumentRegionSnapshot {
+                        position: r.position, size: r.size,
+                        name: r.name.clone(), plugin_id: r.plugin_id.clone(),
+                        plugin_name: r.plugin_name.clone(), plugin_path: r.plugin_path.clone(),
+                    };
+                    (*t, EntityBeforeState::InstrumentRegion(snap))
+                }),
+            }
+        }).collect();
 
         let offsets: Vec<(HitTarget, [f32; 2])> = self
             .selected
@@ -2699,7 +2890,7 @@ impl App {
                 (*t, [world[0] - pos[0], world[1] - pos[1]])
             })
             .collect();
-        self.drag = DragState::MovingSelection { offsets };
+        self.drag = DragState::MovingSelection { offsets, before_states };
     }
 
     fn execute_command(&mut self, action: CommandAction) {
@@ -2718,33 +2909,33 @@ impl App {
             }
             CommandAction::SelectAll => {
                 self.selected.clear();
-                for i in 0..self.objects.len() {
-                    self.selected.push(HitTarget::Object(i));
+                for &id in self.objects.keys() {
+                    self.selected.push(HitTarget::Object(id));
                 }
-                for i in 0..self.waveforms.len() {
+                for &id in self.waveforms.keys() {
                     let in_component = self
                         .components
-                        .iter()
-                        .any(|c| c.waveform_indices.contains(&i));
+                        .values()
+                        .any(|c| c.waveform_ids.contains(&id));
                     if !in_component {
-                        self.selected.push(HitTarget::Waveform(i));
+                        self.selected.push(HitTarget::Waveform(id));
                     }
                 }
-                for i in 0..self.effect_regions.len() {
-                    self.selected.push(HitTarget::EffectRegion(i));
+                for &id in self.effect_regions.keys() {
+                    self.selected.push(HitTarget::EffectRegion(id));
                 }
-                for i in 0..self.loop_regions.len() {
-                    self.selected.push(HitTarget::LoopRegion(i));
+                for &id in self.loop_regions.keys() {
+                    self.selected.push(HitTarget::LoopRegion(id));
                 }
-                for i in 0..self.components.len() {
-                    self.selected.push(HitTarget::ComponentDef(i));
+                for &id in self.components.keys() {
+                    self.selected.push(HitTarget::ComponentDef(id));
                 }
-                for i in 0..self.component_instances.len() {
-                    self.selected.push(HitTarget::ComponentInstance(i));
+                for &id in self.component_instances.keys() {
+                    self.selected.push(HitTarget::ComponentInstance(id));
                 }
             }
-            CommandAction::Undo => self.undo(),
-            CommandAction::Redo => self.redo(),
+            CommandAction::Undo => { self.undo_op(); }
+            CommandAction::Redo => { self.redo_op(); }
             CommandAction::SaveProject => self.save_project(),
             CommandAction::ZoomIn => {
                 let (sw, sh, _) = self.screen_info();
@@ -2787,12 +2978,12 @@ impl App {
                         None
                     }
                 });
-                if let Some(idx) = selected_wf {
-                    if idx < self.waveforms.len() {
+                if let Some(wf_id) = selected_wf {
+                    if let Some(wf) = self.waveforms.get(&wf_id) {
                         if let Some(p) = &mut self.command_palette {
                             p.mode = PaletteMode::SampleVolumeFader;
-                            p.fader_value = self.waveforms[idx].volume;
-                            p.fader_target_waveform = Some(idx);
+                            p.fader_value = wf.volume;
+                            p.fader_target_waveform = Some(wf_id);
                             p.search_text.clear();
                         }
                         self.request_redraw();
@@ -2824,10 +3015,10 @@ impl App {
                         None
                     }
                 });
-                if let Some(idx) = selected_er {
-                    if idx < self.effect_regions.len() {
-                        let current = self.effect_regions[idx].name.clone();
-                        self.editing_effect_name = Some((idx, current));
+                if let Some(er_id) = selected_er {
+                    if let Some(er) = self.effect_regions.get(&er_id) {
+                        let current = er.name.clone();
+                        self.editing_effect_name = Some((er_id, current));
                     }
                 }
             }
@@ -2839,10 +3030,10 @@ impl App {
                         None
                     }
                 });
-                if let Some(idx) = selected_wf {
-                    if idx < self.waveforms.len() {
-                        let current = self.waveforms[idx].audio.filename.clone();
-                        self.editing_waveform_name = Some((idx, current));
+                if let Some(wf_id) = selected_wf {
+                    if let Some(wf) = self.waveforms.get(&wf_id) {
+                        let current = wf.audio.filename.clone();
+                        self.editing_waveform_name = Some((wf_id, current));
                     }
                 }
             }
@@ -2890,38 +3081,38 @@ impl App {
                 self.settings.save();
             }
             CommandAction::SetMidiClipGridFixed(fg) => {
-                if let Some(idx) = self.editing_midi_clip {
-                    if idx < self.midi_clips.len() {
-                        self.midi_clips[idx].grid_mode = GridMode::Fixed(fg);
+                if let Some(mc_id) = self.editing_midi_clip {
+                    if let Some(mc) = self.midi_clips.get_mut(&mc_id) {
+                        mc.grid_mode = GridMode::Fixed(fg);
                         self.mark_dirty();
                     }
                 }
             }
             CommandAction::SetMidiClipGridAdaptive(size) => {
-                if let Some(idx) = self.editing_midi_clip {
-                    if idx < self.midi_clips.len() {
-                        self.midi_clips[idx].grid_mode = GridMode::Adaptive(size);
+                if let Some(mc_id) = self.editing_midi_clip {
+                    if let Some(mc) = self.midi_clips.get_mut(&mc_id) {
+                        mc.grid_mode = GridMode::Adaptive(size);
                         self.mark_dirty();
                     }
                 }
             }
             CommandAction::ToggleMidiClipTripletGrid => {
-                if let Some(idx) = self.editing_midi_clip {
-                    if idx < self.midi_clips.len() {
-                        self.midi_clips[idx].triplet_grid = !self.midi_clips[idx].triplet_grid;
+                if let Some(mc_id) = self.editing_midi_clip {
+                    if let Some(mc) = self.midi_clips.get_mut(&mc_id) {
+                        mc.triplet_grid = !mc.triplet_grid;
                         self.mark_dirty();
                     }
                 }
             }
             CommandAction::NarrowMidiClipGrid => {
-                if let Some(idx) = self.editing_midi_clip {
-                    if idx < self.midi_clips.len() {
-                        match self.midi_clips[idx].grid_mode {
+                if let Some(mc_id) = self.editing_midi_clip {
+                    if let Some(mc) = self.midi_clips.get_mut(&mc_id) {
+                        match mc.grid_mode {
                             GridMode::Adaptive(s) => {
-                                self.midi_clips[idx].grid_mode = GridMode::Adaptive(s.narrower());
+                                mc.grid_mode = GridMode::Adaptive(s.narrower());
                             }
                             GridMode::Fixed(f) => {
-                                self.midi_clips[idx].grid_mode = GridMode::Fixed(f.finer());
+                                mc.grid_mode = GridMode::Fixed(f.finer());
                             }
                         }
                         self.mark_dirty();
@@ -2929,14 +3120,14 @@ impl App {
                 }
             }
             CommandAction::WidenMidiClipGrid => {
-                if let Some(idx) = self.editing_midi_clip {
-                    if idx < self.midi_clips.len() {
-                        match self.midi_clips[idx].grid_mode {
+                if let Some(mc_id) = self.editing_midi_clip {
+                    if let Some(mc) = self.midi_clips.get_mut(&mc_id) {
+                        match mc.grid_mode {
                             GridMode::Adaptive(s) => {
-                                self.midi_clips[idx].grid_mode = GridMode::Adaptive(s.wider());
+                                mc.grid_mode = GridMode::Adaptive(s.wider());
                             }
                             GridMode::Fixed(f) => {
-                                self.midi_clips[idx].grid_mode = GridMode::Fixed(f.coarser());
+                                mc.grid_mode = GridMode::Fixed(f.coarser());
                             }
                         }
                         self.mark_dirty();
@@ -2985,15 +3176,15 @@ impl App {
                         None
                     }
                 });
-                if let Some(idx) = selected_wf {
-                    if idx < self.waveforms.len() && idx < self.audio_clips.len() {
-                        self.push_undo();
+                if let Some(wf_id) = selected_wf {
+                    if self.waveforms.contains_key(&wf_id) && self.audio_clips.contains_key(&wf_id) {
+                        let before = self.waveforms[&wf_id].clone();
 
-                        let mut mono = (*self.audio_clips[idx].samples).clone();
+                        let mut mono = (*self.audio_clips[&wf_id].samples).clone();
                         mono.reverse();
-                        self.audio_clips[idx].samples = Arc::new(mono);
+                        self.audio_clips.get_mut(&wf_id).unwrap().samples = Arc::new(mono);
 
-                        let old = &self.waveforms[idx].audio;
+                        let old = &self.waveforms[&wf_id].audio;
                         let mut left = (*old.left_samples).clone();
                         let mut right = (*old.right_samples).clone();
                         left.reverse();
@@ -3008,10 +3199,11 @@ impl App {
                             sample_rate: old.sample_rate,
                             filename: old.filename.clone(),
                         });
-                        self.waveforms[idx].audio = new_audio;
+                        self.waveforms.get_mut(&wf_id).unwrap().audio = new_audio;
 
+                        let after = self.waveforms[&wf_id].clone();
+                        self.push_op(operations::Operation::UpdateWaveform { id: wf_id, before, after });
                         self.sync_audio_clips();
-                        self.mark_dirty();
                     }
                 }
             }
@@ -3076,7 +3268,7 @@ impl App {
                 if let Some(&color) = WAVEFORM_COLORS.get(idx) {
                     for target in self.selected.clone() {
                         if let HitTarget::Waveform(i) = target {
-                            self.waveforms[i].color = color;
+                            if let Some(wf) = self.waveforms.get_mut(&i) { wf.color = color; }
                         }
                     }
                 }
@@ -3102,28 +3294,33 @@ impl App {
             world,
             &self.camera,
         );
-        let wf_idx = match hit {
+        let wf_id = match hit {
             Some(HitTarget::Waveform(i)) => i,
             _ => return,
         };
-        if wf_idx >= self.waveforms.len() || wf_idx >= self.audio_clips.len() {
-            return;
-        }
+        let wf = match self.waveforms.get(&wf_id) {
+            Some(w) => w,
+            None => return,
+        };
+        let clip = match self.audio_clips.get(&wf_id) {
+            Some(c) => c,
+            None => return,
+        };
 
-        let pos = self.waveforms[wf_idx].position;
-        let size = self.waveforms[wf_idx].size;
-        let offset_px = self.waveforms[wf_idx].sample_offset_px;
+        let pos = wf.position;
+        let size = wf.size;
+        let offset_px = wf.sample_offset_px;
         let split_x = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
         let t = ((split_x - pos[0]) / size[0]).clamp(0.01, 0.99);
 
-        let audio = Arc::clone(&self.waveforms[wf_idx].audio);
-        let mono_samples = Arc::clone(&self.audio_clips[wf_idx].samples);
+        let audio = Arc::clone(&wf.audio);
+        let mono_samples = Arc::clone(&clip.samples);
         let total_mono = mono_samples.len();
         if total_mono == 0 {
             return;
         }
 
-        let full_w = full_audio_width_px(&self.waveforms[wf_idx]);
+        let full_w = full_audio_width_px(wf);
         let vis_start_frac = if full_w > 0.0 { offset_px / full_w } else { 0.0 };
         let vis_end_frac = if full_w > 0.0 { (offset_px + size[0]) / full_w } else { 1.0 };
         let split_frac = vis_start_frac + t * (vis_end_frac - vis_start_frac);
@@ -3140,15 +3337,15 @@ impl App {
         let vis_end_right = (vis_end_frac * audio.right_samples.len() as f32).min(audio.right_samples.len() as f32) as usize;
         let split_right = (split_frac * audio.right_samples.len() as f32) as usize;
 
-        let orig_color = self.waveforms[wf_idx].color;
-        let orig_border_radius = self.waveforms[wf_idx].border_radius;
-        let orig_fade_in = self.waveforms[wf_idx].fade_in_px;
-        let orig_fade_out = self.waveforms[wf_idx].fade_out_px;
-        let orig_fade_in_curve = self.waveforms[wf_idx].fade_in_curve;
-        let orig_fade_out_curve = self.waveforms[wf_idx].fade_out_curve;
-        let orig_volume = self.waveforms[wf_idx].volume;
+        let orig_color = wf.color;
+        let orig_border_radius = wf.border_radius;
+        let orig_fade_in = wf.fade_in_px;
+        let orig_fade_out = wf.fade_out_px;
+        let orig_fade_in_curve = wf.fade_in_curve;
+        let orig_fade_out_curve = wf.fade_out_curve;
+        let orig_volume = wf.volume;
 
-        self.push_undo();
+        let before_wf = self.waveforms[&wf_id].clone();
 
         let sample_rate = audio.sample_rate;
         let filename = audio.filename.clone();
@@ -3223,46 +3420,42 @@ impl App {
             automation: AutomationData::new(),
         };
 
-        self.waveforms[wf_idx] = left_waveform;
-        self.audio_clips[wf_idx] = left_clip;
-        self.waveforms.insert(wf_idx + 1, right_waveform);
-        self.audio_clips.insert(wf_idx + 1, right_clip);
+        // Replace original with left half
+        *self.waveforms.get_mut(&wf_id).unwrap() = left_waveform;
+        *self.audio_clips.get_mut(&wf_id).unwrap() = left_clip;
 
-        // Fix up indices in component waveform_indices
-        for comp in &mut self.components {
-            let mut new_indices = Vec::new();
-            for &wi in &comp.waveform_indices {
-                if wi == wf_idx {
-                    new_indices.push(wi);
-                    new_indices.push(wi + 1);
-                } else if wi > wf_idx {
-                    new_indices.push(wi + 1);
-                } else {
-                    new_indices.push(wi);
+        // Insert right half as new entity
+        let right_id = new_id();
+        self.waveforms.insert(right_id, right_waveform);
+        self.audio_clips.insert(right_id, right_clip);
+
+        // Fix up waveform_ids in component defs
+        for comp in self.components.values_mut() {
+            let mut new_ids = Vec::new();
+            for &wi in &comp.waveform_ids {
+                new_ids.push(wi);
+                if wi == wf_id {
+                    new_ids.push(right_id);
                 }
             }
-            comp.waveform_indices = new_indices;
+            comp.waveform_ids = new_ids;
         }
 
-        // Fix up selected indices
-        let mut new_selected: Vec<HitTarget> = Vec::new();
-        for t in &self.selected {
-            match t {
-                HitTarget::Waveform(i) if *i > wf_idx => {
-                    new_selected.push(HitTarget::Waveform(i + 1));
-                }
-                other => new_selected.push(*other),
-            }
-        }
-        new_selected.push(HitTarget::Waveform(wf_idx + 1));
-        self.selected = new_selected;
+        // Add right half to selection
+        self.selected.push(HitTarget::Waveform(right_id));
 
+        let after_wf = self.waveforms[&wf_id].clone();
+        let right_wf_data = self.waveforms[&right_id].clone();
+        let right_ac_data = self.audio_clips.get(&right_id).cloned();
+        self.push_op(operations::Operation::Batch(vec![
+            operations::Operation::UpdateWaveform { id: wf_id, before: before_wf, after: after_wf },
+            operations::Operation::CreateWaveform { id: right_id, data: right_wf_data, audio_clip: right_ac_data.map(|c| (right_id, c)) },
+        ]));
         self.sync_audio_clips();
-        self.mark_dirty();
     }
 
     fn create_component_from_selection(&mut self) {
-        let wf_indices: Vec<usize> = self
+        let wf_ids: Vec<EntityId> = self
             .selected
             .iter()
             .filter_map(|t| match t {
@@ -3270,72 +3463,70 @@ impl App {
                 _ => None,
             })
             .collect();
-        if wf_indices.is_empty() {
+        if wf_ids.is_empty() {
             println!("No waveforms selected to create component");
             return;
         }
-        self.push_undo();
-        let (pos, size) = component::bounding_box_of_waveforms(&self.waveforms, &wf_indices);
-        let id = self.next_component_id;
-        self.next_component_id += 1;
-        let name = format!("Component {}", id);
+        let (pos, size) = component::bounding_box_of_waveforms(&self.waveforms, &wf_ids);
+        let comp_id = new_id();
+        self.next_component_id = new_id();
+        let name = format!("Component {}", &comp_id.to_string()[..8]);
+        let wf_count = wf_ids.len();
         let def = component::ComponentDef {
-            id,
+            id: comp_id,
             name: name.clone(),
             position: pos,
             size,
-            waveform_indices: wf_indices,
+            waveform_ids: wf_ids,
         };
-        self.components.push(def);
-        let idx = self.components.len() - 1;
+        self.components.insert(comp_id, def.clone());
+        self.push_op(operations::Operation::CreateComponent { id: comp_id, data: def });
         self.selected.clear();
-        self.selected.push(HitTarget::ComponentDef(idx));
+        self.selected.push(HitTarget::ComponentDef(comp_id));
         println!(
             "Created component '{}' with {} waveforms",
             name,
-            self.components[idx].waveform_indices.len()
+            wf_count
         );
     }
 
     fn create_instance_of_selected_component(&mut self) {
-        let comp_idx = self.selected.iter().find_map(|t| match t {
+        let comp_id = self.selected.iter().find_map(|t| match t {
             HitTarget::ComponentDef(i) => Some(*i),
             _ => None,
         });
-        if let Some(ci) = comp_idx {
-            if ci >= self.components.len() {
-                return;
-            }
-            self.push_undo();
-            let def = &self.components[ci];
-            let offset_x = def.size[0] + 50.0;
-            let inst = component::ComponentInstance {
-                component_id: def.id,
-                position: [def.position[0] + offset_x, def.position[1]],
+        if let Some(ci) = comp_id {
+            let (comp_id_val, offset_x, def_name, inst_pos) = match self.components.get(&ci) {
+                Some(d) => (d.id, d.size[0] + 50.0, d.name.clone(), [d.position[0] + d.size[0] + 50.0, d.position[1]]),
+                None => return,
             };
-            self.component_instances.push(inst);
-            let idx = self.component_instances.len() - 1;
+            let inst = component::ComponentInstance {
+                component_id: comp_id_val,
+                position: inst_pos,
+            };
+            let inst_id = new_id();
+            self.component_instances.insert(inst_id, inst.clone());
+            self.push_op(operations::Operation::CreateComponentInstance { id: inst_id, data: inst });
             self.selected.clear();
-            self.selected.push(HitTarget::ComponentInstance(idx));
-            println!("Created instance of component {}", self.components[ci].name);
+            self.selected.push(HitTarget::ComponentInstance(inst_id));
+            println!("Created instance of component {}", def_name);
             self.sync_audio_clips();
         }
     }
 
     fn go_to_component_of_selected_instance(&mut self) {
-        let inst_idx = self.selected.iter().find_map(|t| match t {
+        let inst_id = self.selected.iter().find_map(|t| match t {
             HitTarget::ComponentInstance(i) => Some(*i),
             _ => None,
         });
-        if let Some(ii) = inst_idx {
-            if ii >= self.component_instances.len() {
-                return;
-            }
-            let comp_id = self.component_instances[ii].component_id;
-            if let Some((ci, def)) = self
+        if let Some(ii) = inst_id {
+            let comp_id = match self.component_instances.get(&ii) {
+                Some(inst) => inst.component_id,
+                None => return,
+            };
+            if let Some((&ci, def)) = self
                 .components
                 .iter()
-                .enumerate()
                 .find(|(_, c)| c.id == comp_id)
             {
                 let (sw, sh, _) = self.screen_info();
@@ -3354,10 +3545,10 @@ impl App {
         if self.selected.is_empty() {
             return;
         }
-        self.push_undo();
         let mut new_selected: Vec<HitTarget> = Vec::new();
+        let mut dup_ops: Vec<operations::Operation> = Vec::new();
 
-        let selected_wf_indices: Vec<usize> = self
+        let selected_wf_ids: Vec<EntityId> = self
             .selected
             .iter()
             .filter_map(|t| {
@@ -3369,15 +3560,15 @@ impl App {
             })
             .collect();
 
-        let wf_group_shift = if selected_wf_indices.len() >= 2 {
-            let min_start = selected_wf_indices
+        let wf_group_shift = if selected_wf_ids.len() >= 2 {
+            let min_start = selected_wf_ids
                 .iter()
-                .filter_map(|&i| self.waveforms.get(i))
+                .filter_map(|i| self.waveforms.get(i))
                 .map(|wf| wf.position[0])
                 .fold(f32::INFINITY, f32::min);
-            let max_end = selected_wf_indices
+            let max_end = selected_wf_ids
                 .iter()
-                .filter_map(|&i| self.waveforms.get(i))
+                .filter_map(|i| self.waveforms.get(i))
                 .map(|wf| wf.position[0] + wf.size[0])
                 .fold(f32::NEG_INFINITY, f32::max);
             Some(max_end - min_start)
@@ -3388,128 +3579,144 @@ impl App {
         for target in self.selected.clone() {
             match target {
                 HitTarget::ComponentInstance(i) => {
-                    if i < self.component_instances.len() {
-                        let src = &self.component_instances[i];
-                        let def = self.components.iter().find(|c| c.id == src.component_id);
+                    if let Some(src) = self.component_instances.get(&i).cloned() {
+                        let def = self.components.values().find(|c| c.id == src.component_id);
                         let shift = def.map(|d| d.size[0]).unwrap_or(100.0);
                         let inst = component::ComponentInstance {
                             component_id: src.component_id,
                             position: [src.position[0] + shift, src.position[1]],
                         };
-                        self.component_instances.push(inst);
-                        new_selected.push(HitTarget::ComponentInstance(
-                            self.component_instances.len() - 1,
-                        ));
+                        let nid = new_id();
+                        self.component_instances.insert(nid, inst);
+                        new_selected.push(HitTarget::ComponentInstance(nid));
                     }
                 }
                 HitTarget::ComponentDef(i) => {
-                    if i < self.components.len() {
-                        let src = &self.components[i];
+                    if let Some(src) = self.components.get(&i).cloned() {
                         let shift = src.size[0];
-                        let new_id = self.next_component_id;
-                        self.next_component_id += 1;
-                        let new_comp = component::ComponentDef {
-                            id: new_id,
-                            name: format!("{} copy", src.name),
-                            position: [src.position[0] + shift, src.position[1]],
-                            size: src.size,
-                            waveform_indices: Vec::new(),
-                        };
-                        let src_indices = src.waveform_indices.clone();
-                        let mut new_wf_indices = Vec::new();
-                        for &wi in &src_indices {
-                            if wi < self.waveforms.len() {
-                                let mut wf = self.waveforms[wi].clone();
+                        let comp_nid = new_id();
+                        self.next_component_id = new_id();
+                        let src_wf_ids = src.waveform_ids.clone();
+                        let mut new_wf_ids = Vec::new();
+                        for &wi in &src_wf_ids {
+                            if let Some(wf) = self.waveforms.get(&wi).cloned() {
+                                let mut wf = wf;
                                 wf.position[0] += shift;
-                                self.waveforms.push(wf);
-                                let new_wi = self.waveforms.len() - 1;
-                                new_wf_indices.push(new_wi);
-                                if wi < self.audio_clips.len() {
-                                    let clip = self.audio_clips[wi].clone();
-                                    self.audio_clips.push(clip);
+                                let wf_nid = new_id();
+                                self.waveforms.insert(wf_nid, wf);
+                                new_wf_ids.push(wf_nid);
+                                if let Some(clip) = self.audio_clips.get(&wi).cloned() {
+                                    self.audio_clips.insert(wf_nid, clip);
                                 }
                             }
                         }
-                        self.components.push(component::ComponentDef {
-                            waveform_indices: new_wf_indices,
-                            ..new_comp
+                        self.components.insert(comp_nid, component::ComponentDef {
+                            id: comp_nid,
+                            name: format!("{} copy", src.name),
+                            position: [src.position[0] + shift, src.position[1]],
+                            size: src.size,
+                            waveform_ids: new_wf_ids,
                         });
-                        new_selected.push(HitTarget::ComponentDef(self.components.len() - 1));
+                        new_selected.push(HitTarget::ComponentDef(comp_nid));
                     }
                 }
                 HitTarget::Waveform(i) => {
-                    if i < self.waveforms.len() {
-                        let mut wf = self.waveforms[i].clone();
+                    if let Some(wf) = self.waveforms.get(&i).cloned() {
+                        let mut wf = wf;
                         let shift = wf_group_shift.unwrap_or(wf.size[0]);
                         wf.position[0] += shift;
-                        self.waveforms.push(wf);
-                        let new_i = self.waveforms.len() - 1;
-                        if i < self.audio_clips.len() {
-                            let clip = self.audio_clips[i].clone();
-                            self.audio_clips.push(clip);
+                        let nid = new_id();
+                        self.waveforms.insert(nid, wf);
+                        if let Some(clip) = self.audio_clips.get(&i).cloned() {
+                            self.audio_clips.insert(nid, clip);
                         }
-                        new_selected.push(HitTarget::Waveform(new_i));
+                        new_selected.push(HitTarget::Waveform(nid));
                     }
                 }
                 HitTarget::EffectRegion(i) => {
-                    if i < self.effect_regions.len() {
-                        let mut er = self.effect_regions[i].clone();
+                    if let Some(er) = self.effect_regions.get(&i).cloned() {
+                        let mut er = er;
                         er.position[0] += er.size[0];
-                        self.effect_regions.push(er);
-                        new_selected.push(HitTarget::EffectRegion(self.effect_regions.len() - 1));
+                        let nid = new_id();
+                        self.effect_regions.insert(nid, er);
+                        new_selected.push(HitTarget::EffectRegion(nid));
                     }
                 }
                 HitTarget::PluginBlock(i) => {
-                    if i < self.plugin_blocks.len() {
-                        let mut pb = self.plugin_blocks[i].clone();
+                    if let Some(pb) = self.plugin_blocks.get(&i).cloned() {
+                        let mut pb = pb;
                         pb.position[0] += pb.size[0];
-                        self.plugin_blocks.push(pb);
-                        new_selected.push(HitTarget::PluginBlock(self.plugin_blocks.len() - 1));
+                        let nid = new_id();
+                        self.plugin_blocks.insert(nid, pb);
+                        new_selected.push(HitTarget::PluginBlock(nid));
                     }
                 }
                 HitTarget::LoopRegion(i) => {
-                    if i < self.loop_regions.len() {
-                        let mut lr = self.loop_regions[i].clone();
+                    if let Some(lr) = self.loop_regions.get(&i).cloned() {
+                        let mut lr = lr;
                         lr.position[0] += lr.size[0];
-                        self.loop_regions.push(lr);
-                        new_selected.push(HitTarget::LoopRegion(self.loop_regions.len() - 1));
+                        let nid = new_id();
+                        self.loop_regions.insert(nid, lr);
+                        new_selected.push(HitTarget::LoopRegion(nid));
                     }
                 }
                 HitTarget::ExportRegion(i) => {
-                    if i < self.export_regions.len() {
-                        let mut xr = self.export_regions[i].clone();
+                    if let Some(xr) = self.export_regions.get(&i).cloned() {
+                        let mut xr = xr;
                         xr.position[0] += xr.size[0];
-                        self.export_regions.push(xr);
-                        new_selected.push(HitTarget::ExportRegion(self.export_regions.len() - 1));
+                        let nid = new_id();
+                        self.export_regions.insert(nid, xr);
+                        new_selected.push(HitTarget::ExportRegion(nid));
                     }
                 }
                 HitTarget::Object(i) => {
-                    if i < self.objects.len() {
-                        let mut obj = self.objects[i].clone();
+                    if let Some(obj) = self.objects.get(&i).cloned() {
+                        let mut obj = obj;
                         obj.position[0] += obj.size[0];
-                        self.objects.push(obj);
-                        new_selected.push(HitTarget::Object(self.objects.len() - 1));
+                        let nid = new_id();
+                        self.objects.insert(nid, obj);
+                        new_selected.push(HitTarget::Object(nid));
                     }
                 }
                 HitTarget::MidiClip(i) => {
-                    if i < self.midi_clips.len() {
-                        let mut mc = self.midi_clips[i].clone();
+                    if let Some(mc) = self.midi_clips.get(&i).cloned() {
+                        let mut mc = mc;
                         mc.position[0] += mc.size[0];
-                        self.midi_clips.push(mc);
-                        new_selected.push(HitTarget::MidiClip(self.midi_clips.len() - 1));
+                        let nid = new_id();
+                        self.midi_clips.insert(nid, mc);
+                        new_selected.push(HitTarget::MidiClip(nid));
                     }
                 }
                 HitTarget::InstrumentRegion(i) => {
-                    if i < self.instrument_regions.len() {
-                        let mut ir = self.instrument_regions[i].clone();
+                    if let Some(ir) = self.instrument_regions.get(&i).cloned() {
+                        let mut ir = ir;
                         ir.position[0] += ir.size[0];
-                        self.instrument_regions.push(ir);
-                        new_selected.push(HitTarget::InstrumentRegion(self.instrument_regions.len() - 1));
+                        let nid = new_id();
+                        self.instrument_regions.insert(nid, ir);
+                        new_selected.push(HitTarget::InstrumentRegion(nid));
                     }
                 }
             }
         }
 
+        // Build ops from all duplicated entities
+        for t in &new_selected {
+            match t {
+                HitTarget::Object(id) => { if let Some(d) = self.objects.get(id) { dup_ops.push(operations::Operation::CreateObject { id: *id, data: d.clone() }); } }
+                HitTarget::Waveform(id) => { if let Some(d) = self.waveforms.get(id) { let ac = self.audio_clips.get(id).cloned(); dup_ops.push(operations::Operation::CreateWaveform { id: *id, data: d.clone(), audio_clip: ac.map(|c| (*id, c)) }); } }
+                HitTarget::EffectRegion(id) => { if let Some(d) = self.effect_regions.get(id) { dup_ops.push(operations::Operation::CreateEffectRegion { id: *id, data: d.clone() }); } }
+                HitTarget::PluginBlock(id) => { if let Some(d) = self.plugin_blocks.get(id) { dup_ops.push(operations::Operation::CreatePluginBlock { id: *id, data: d.snapshot() }); } }
+                HitTarget::LoopRegion(id) => { if let Some(d) = self.loop_regions.get(id) { dup_ops.push(operations::Operation::CreateLoopRegion { id: *id, data: d.clone() }); } }
+                HitTarget::ExportRegion(id) => { if let Some(d) = self.export_regions.get(id) { dup_ops.push(operations::Operation::CreateExportRegion { id: *id, data: d.clone() }); } }
+                HitTarget::ComponentDef(id) => { if let Some(d) = self.components.get(id) { dup_ops.push(operations::Operation::CreateComponent { id: *id, data: d.clone() }); } }
+                HitTarget::ComponentInstance(id) => { if let Some(d) = self.component_instances.get(id) { dup_ops.push(operations::Operation::CreateComponentInstance { id: *id, data: d.clone() }); } }
+                HitTarget::MidiClip(id) => { if let Some(d) = self.midi_clips.get(id) { dup_ops.push(operations::Operation::CreateMidiClip { id: *id, data: d.clone() }); } }
+                HitTarget::InstrumentRegion(id) => { if let Some(ir) = self.instrument_regions.get(id) { let snap = instruments::InstrumentRegionSnapshot { position: ir.position, size: ir.size, name: ir.name.clone(), plugin_id: ir.plugin_id.clone(), plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone() }; dup_ops.push(operations::Operation::CreateInstrumentRegion { id: *id, data: snap }); } }
+            }
+        }
+        if !dup_ops.is_empty() {
+            self.push_op(operations::Operation::Batch(dup_ops));
+        }
         self.selected = new_selected;
         self.sync_audio_clips();
     }
@@ -3517,115 +3724,89 @@ impl App {
     fn copy_selected(&mut self) {
         self.clipboard.items.clear();
         // If editing a MIDI clip with selected notes, copy those instead
-        if let Some(mc_idx) = self.editing_midi_clip {
-            if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
-                let notes = &self.midi_clips[mc_idx].notes;
-                let min_start = self.selected_midi_notes.iter()
-                    .filter(|&&ni| ni < notes.len())
-                    .map(|&ni| notes[ni].start_px)
-                    .fold(f32::INFINITY, f32::min);
-                let mut copied: Vec<midi::MidiNote> = Vec::new();
-                for &ni in &self.selected_midi_notes {
-                    if ni < self.midi_clips[mc_idx].notes.len() {
-                        let mut n = self.midi_clips[mc_idx].notes[ni].clone();
-                        n.start_px -= min_start;
-                        copied.push(n);
+        if let Some(mc_id) = self.editing_midi_clip {
+            if let Some(mc) = self.midi_clips.get(&mc_id) {
+                if !self.selected_midi_notes.is_empty() {
+                    let notes = &mc.notes;
+                    let min_start = self.selected_midi_notes.iter()
+                        .filter(|&&ni| ni < notes.len())
+                        .map(|&ni| notes[ni].start_px)
+                        .fold(f32::INFINITY, f32::min);
+                    let mut copied: Vec<midi::MidiNote> = Vec::new();
+                    for &ni in &self.selected_midi_notes {
+                        if ni < notes.len() {
+                            let mut n = notes[ni].clone();
+                            n.start_px -= min_start;
+                            copied.push(n);
+                        }
                     }
+                    self.clipboard.items.push(ClipboardItem::MidiNotes(copied));
+                    return;
                 }
-                self.clipboard.items.push(ClipboardItem::MidiNotes(copied));
-                return;
             }
         }
         for target in &self.selected {
             match target {
                 HitTarget::Object(i) => {
-                    if *i < self.objects.len() {
-                        self.clipboard
-                            .items
-                            .push(ClipboardItem::Object(self.objects[*i].clone()));
+                    if let Some(obj) = self.objects.get(i) {
+                        self.clipboard.items.push(ClipboardItem::Object(obj.clone()));
                     }
                 }
                 HitTarget::Waveform(i) => {
-                    if *i < self.waveforms.len() {
-                        let clip = if *i < self.audio_clips.len() {
-                            Some(self.audio_clips[*i].clone())
-                        } else {
-                            None
-                        };
-                        self.clipboard
-                            .items
-                            .push(ClipboardItem::Waveform(self.waveforms[*i].clone(), clip));
+                    if let Some(wf) = self.waveforms.get(i) {
+                        let clip = self.audio_clips.get(i).cloned();
+                        self.clipboard.items.push(ClipboardItem::Waveform(wf.clone(), clip));
                     }
                 }
                 HitTarget::EffectRegion(i) => {
-                    if *i < self.effect_regions.len() {
-                        self.clipboard
-                            .items
-                            .push(ClipboardItem::EffectRegion(self.effect_regions[*i].clone()));
+                    if let Some(er) = self.effect_regions.get(i) {
+                        self.clipboard.items.push(ClipboardItem::EffectRegion(er.clone()));
                     }
                 }
                 HitTarget::PluginBlock(i) => {
-                    if *i < self.plugin_blocks.len() {
-                        self.clipboard
-                            .items
-                            .push(ClipboardItem::PluginBlock(self.plugin_blocks[*i].clone()));
+                    if let Some(pb) = self.plugin_blocks.get(i) {
+                        self.clipboard.items.push(ClipboardItem::PluginBlock(pb.clone()));
                     }
                 }
                 HitTarget::LoopRegion(i) => {
-                    if *i < self.loop_regions.len() {
-                        self.clipboard
-                            .items
-                            .push(ClipboardItem::LoopRegion(self.loop_regions[*i].clone()));
+                    if let Some(lr) = self.loop_regions.get(i) {
+                        self.clipboard.items.push(ClipboardItem::LoopRegion(lr.clone()));
                     }
                 }
                 HitTarget::ExportRegion(i) => {
-                    if *i < self.export_regions.len() {
-                        self.clipboard
-                            .items
-                            .push(ClipboardItem::ExportRegion(self.export_regions[*i].clone()));
+                    if let Some(xr) = self.export_regions.get(i) {
+                        self.clipboard.items.push(ClipboardItem::ExportRegion(xr.clone()));
                     }
                 }
                 HitTarget::ComponentDef(i) => {
-                    if *i < self.components.len() {
-                        let def = &self.components[*i];
+                    if let Some(def) = self.components.get(i) {
                         let wfs: Vec<(WaveformView, Option<AudioClipData>)> = def
-                            .waveform_indices
+                            .waveform_ids
                             .iter()
-                            .filter_map(|&wi| {
-                                if wi < self.waveforms.len() {
-                                    let clip = if wi < self.audio_clips.len() {
-                                        Some(self.audio_clips[wi].clone())
-                                    } else {
-                                        None
-                                    };
-                                    Some((self.waveforms[wi].clone(), clip))
+                            .filter_map(|wi| {
+                                if let Some(wf) = self.waveforms.get(wi) {
+                                    let clip = self.audio_clips.get(wi).cloned();
+                                    Some((wf.clone(), clip))
                                 } else {
                                     None
                                 }
                             })
                             .collect();
-                        self.clipboard
-                            .items
-                            .push(ClipboardItem::ComponentDef(def.clone(), wfs));
+                        self.clipboard.items.push(ClipboardItem::ComponentDef(def.clone(), wfs));
                     }
                 }
                 HitTarget::ComponentInstance(i) => {
-                    if *i < self.component_instances.len() {
-                        self.clipboard.items.push(ClipboardItem::ComponentInstance(
-                            self.component_instances[*i].clone(),
-                        ));
+                    if let Some(inst) = self.component_instances.get(i) {
+                        self.clipboard.items.push(ClipboardItem::ComponentInstance(inst.clone()));
                     }
                 }
                 HitTarget::MidiClip(i) => {
-                    if *i < self.midi_clips.len() {
-                        self.clipboard.items.push(ClipboardItem::MidiClip(
-                            self.midi_clips[*i].clone(),
-                        ));
+                    if let Some(mc) = self.midi_clips.get(i) {
+                        self.clipboard.items.push(ClipboardItem::MidiClip(mc.clone()));
                     }
                 }
                 HitTarget::InstrumentRegion(i) => {
-                    if *i < self.instrument_regions.len() {
-                        let ir = &self.instrument_regions[*i];
+                    if let Some(ir) = self.instrument_regions.get(i) {
                         self.clipboard.items.push(ClipboardItem::InstrumentRegion(
                             instruments::InstrumentRegionSnapshot {
                                 position: ir.position,
@@ -3647,33 +3828,42 @@ impl App {
             return;
         }
         // If editing a MIDI clip and clipboard has MIDI notes, paste them
-        if let Some(mc_idx) = self.editing_midi_clip {
+        if let Some(mc_id) = self.editing_midi_clip {
             let midi_notes = self.clipboard.items.iter().find_map(|item| {
                 if let ClipboardItem::MidiNotes(notes) = item { Some(notes.clone()) } else { None }
             });
             if let Some(notes) = midi_notes {
-                if mc_idx < self.midi_clips.len() {
-                    self.push_undo();
-                    let clip_x = self.midi_clips[mc_idx].position[0];
+                let clip_x = self.midi_clips.get(&mc_id).map(|mc| mc.position[0]);
+                if let Some(clip_x) = clip_x {
+                    let before_notes = self.midi_clips[&mc_id].notes.clone();
                     let paste_x = self.audio_engine.as_ref()
                         .map(|e| (e.position_seconds() * PIXELS_PER_SECOND as f64) as f32)
                         .unwrap_or_else(|| self.camera.screen_to_world(self.mouse_pos)[0]);
                     let offset = (paste_x - clip_x).max(0.0);
-                    let mut new_indices: Vec<usize> = Vec::new();
-                    for n in &notes {
-                        let mut pasted = n.clone();
-                        pasted.start_px += offset;
-                        self.midi_clips[mc_idx].notes.push(pasted);
-                        new_indices.push(self.midi_clips[mc_idx].notes.len() - 1);
+                    let new_indices = if let Some(mc) = self.midi_clips.get_mut(&mc_id) {
+                        let mut indices: Vec<usize> = Vec::new();
+                        for n in &notes {
+                            let mut pasted = n.clone();
+                            pasted.start_px += offset;
+                            mc.notes.push(pasted);
+                            indices.push(mc.notes.len() - 1);
+                        }
+                        Some(indices)
+                    } else {
+                        None
+                    };
+                    if let Some(indices) = new_indices {
+                        if let Some(mc) = self.midi_clips.get_mut(&mc_id) {
+                            self.selected_midi_notes = mc.resolve_note_overlaps(&indices);
+                        }
                     }
-                    self.selected_midi_notes = self.midi_clips[mc_idx].resolve_note_overlaps(&new_indices);
+                    let after_notes = self.midi_clips[&mc_id].notes.clone();
+                    self.push_op(operations::Operation::UpdateMidiNotes { clip_id: mc_id, before: before_notes, after: after_notes });
                     self.sync_audio_clips();
-                    self.mark_dirty();
                     return;
                 }
             }
         }
-        self.push_undo();
         let world = self.camera.screen_to_world(self.mouse_pos);
 
         let mut min_x = f32::MAX;
@@ -3709,92 +3899,83 @@ impl App {
                 ClipboardItem::Object(mut o) => {
                     o.position[0] += dx;
                     o.position[1] += dy;
-                    self.objects.push(o);
-                    new_selected.push(HitTarget::Object(self.objects.len() - 1));
+                    let nid = new_id();
+                    self.objects.insert(nid, o);
+                    new_selected.push(HitTarget::Object(nid));
                 }
                 ClipboardItem::Waveform(mut w, clip) => {
                     w.position[0] += dx;
                     w.position[1] += dy;
-                    self.waveforms.push(w);
-                    let idx = self.waveforms.len() - 1;
+                    let nid = new_id();
+                    self.waveforms.insert(nid, w);
                     if let Some(c) = clip {
-                        while self.audio_clips.len() < idx {
-                            self.audio_clips.push(AudioClipData {
-                                samples: std::sync::Arc::new(Vec::new()),
-                                sample_rate: 44100,
-                                duration_secs: 0.0,
-                            });
-                        }
-                        self.audio_clips.push(c);
+                        self.audio_clips.insert(nid, c);
                     }
-                    new_selected.push(HitTarget::Waveform(idx));
+                    new_selected.push(HitTarget::Waveform(nid));
                 }
                 ClipboardItem::EffectRegion(mut e) => {
                     e.position[0] += dx;
                     e.position[1] += dy;
-                    self.effect_regions.push(e);
-                    new_selected.push(HitTarget::EffectRegion(self.effect_regions.len() - 1));
+                    let nid = new_id();
+                    self.effect_regions.insert(nid, e);
+                    new_selected.push(HitTarget::EffectRegion(nid));
                 }
                 ClipboardItem::PluginBlock(mut pb) => {
                     pb.position[0] += dx;
                     pb.position[1] += dy;
-                    self.plugin_blocks.push(pb);
-                    new_selected.push(HitTarget::PluginBlock(self.plugin_blocks.len() - 1));
+                    let nid = new_id();
+                    self.plugin_blocks.insert(nid, pb);
+                    new_selected.push(HitTarget::PluginBlock(nid));
                 }
                 ClipboardItem::LoopRegion(mut l) => {
                     l.position[0] += dx;
                     l.position[1] += dy;
-                    self.loop_regions.push(l);
-                    new_selected.push(HitTarget::LoopRegion(self.loop_regions.len() - 1));
+                    let nid = new_id();
+                    self.loop_regions.insert(nid, l);
+                    new_selected.push(HitTarget::LoopRegion(nid));
                 }
                 ClipboardItem::ExportRegion(mut x) => {
                     x.position[0] += dx;
                     x.position[1] += dy;
-                    self.export_regions.push(x);
-                    new_selected.push(HitTarget::ExportRegion(self.export_regions.len() - 1));
+                    let nid = new_id();
+                    self.export_regions.insert(nid, x);
+                    new_selected.push(HitTarget::ExportRegion(nid));
                 }
                 ClipboardItem::ComponentDef(mut d, wfs) => {
-                    let new_id = self.next_component_id;
-                    self.next_component_id += 1;
-                    d.id = new_id;
+                    let comp_nid = new_id();
+                    self.next_component_id = new_id();
+                    d.id = comp_nid;
                     d.position[0] += dx;
                     d.position[1] += dy;
                     d.name = format!("{} copy", d.name);
-                    let mut new_wf_indices = Vec::new();
+                    let mut new_wf_ids = Vec::new();
                     for (mut wf, clip) in wfs {
                         wf.position[0] += dx;
                         wf.position[1] += dy;
-                        self.waveforms.push(wf);
-                        let wi = self.waveforms.len() - 1;
-                        new_wf_indices.push(wi);
+                        let wf_nid = new_id();
+                        self.waveforms.insert(wf_nid, wf);
+                        new_wf_ids.push(wf_nid);
                         if let Some(c) = clip {
-                            while self.audio_clips.len() < wi {
-                                self.audio_clips.push(AudioClipData {
-                                    samples: std::sync::Arc::new(Vec::new()),
-                                    sample_rate: 44100,
-                                    duration_secs: 0.0,
-                                });
-                            }
-                            self.audio_clips.push(c);
+                            self.audio_clips.insert(wf_nid, c);
                         }
                     }
-                    d.waveform_indices = new_wf_indices;
-                    self.components.push(d);
-                    new_selected.push(HitTarget::ComponentDef(self.components.len() - 1));
+                    d.waveform_ids = new_wf_ids;
+                    self.components.insert(comp_nid, d);
+                    new_selected.push(HitTarget::ComponentDef(comp_nid));
                 }
                 ClipboardItem::ComponentInstance(mut ci) => {
                     ci.position[0] += dx;
                     ci.position[1] += dy;
-                    self.component_instances.push(ci);
-                    new_selected.push(HitTarget::ComponentInstance(
-                        self.component_instances.len() - 1,
-                    ));
+                    let nid = new_id();
+                    self.component_instances.insert(nid, ci);
+                    new_selected.push(HitTarget::ComponentInstance(nid));
                 }
                 ClipboardItem::MidiClip(mut mc) => {
                     mc.position[0] += dx;
                     mc.position[1] += dy;
-                    self.midi_clips.push(mc);
-                    new_selected.push(HitTarget::MidiClip(self.midi_clips.len() - 1));
+                    let nid = new_id();
+                    self.midi_clips.insert(nid, mc);
+                    new_selected.push(HitTarget::MidiClip(nid));
                 }
                 ClipboardItem::MidiNotes(_) => {
                     // Handled in MIDI editing mode (events.rs), skip in global paste
@@ -3807,12 +3988,32 @@ impl App {
                     ir.plugin_id = snap.plugin_id;
                     ir.plugin_name = snap.plugin_name;
                     ir.plugin_path = snap.plugin_path;
-                    self.instrument_regions.push(ir);
-                    new_selected.push(HitTarget::InstrumentRegion(self.instrument_regions.len() - 1));
+                    let nid = new_id();
+                    self.instrument_regions.insert(nid, ir);
+                    new_selected.push(HitTarget::InstrumentRegion(nid));
                 }
             }
         }
 
+        // Build ops from pasted entities
+        let mut paste_ops: Vec<operations::Operation> = Vec::new();
+        for t in &new_selected {
+            match t {
+                HitTarget::Object(id) => { if let Some(d) = self.objects.get(id) { paste_ops.push(operations::Operation::CreateObject { id: *id, data: d.clone() }); } }
+                HitTarget::Waveform(id) => { if let Some(d) = self.waveforms.get(id) { let ac = self.audio_clips.get(id).cloned(); paste_ops.push(operations::Operation::CreateWaveform { id: *id, data: d.clone(), audio_clip: ac.map(|c| (*id, c)) }); } }
+                HitTarget::EffectRegion(id) => { if let Some(d) = self.effect_regions.get(id) { paste_ops.push(operations::Operation::CreateEffectRegion { id: *id, data: d.clone() }); } }
+                HitTarget::PluginBlock(id) => { if let Some(d) = self.plugin_blocks.get(id) { paste_ops.push(operations::Operation::CreatePluginBlock { id: *id, data: d.snapshot() }); } }
+                HitTarget::LoopRegion(id) => { if let Some(d) = self.loop_regions.get(id) { paste_ops.push(operations::Operation::CreateLoopRegion { id: *id, data: d.clone() }); } }
+                HitTarget::ExportRegion(id) => { if let Some(d) = self.export_regions.get(id) { paste_ops.push(operations::Operation::CreateExportRegion { id: *id, data: d.clone() }); } }
+                HitTarget::ComponentDef(id) => { if let Some(d) = self.components.get(id) { paste_ops.push(operations::Operation::CreateComponent { id: *id, data: d.clone() }); } }
+                HitTarget::ComponentInstance(id) => { if let Some(d) = self.component_instances.get(id) { paste_ops.push(operations::Operation::CreateComponentInstance { id: *id, data: d.clone() }); } }
+                HitTarget::MidiClip(id) => { if let Some(d) = self.midi_clips.get(id) { paste_ops.push(operations::Operation::CreateMidiClip { id: *id, data: d.clone() }); } }
+                HitTarget::InstrumentRegion(id) => { if let Some(ir) = self.instrument_regions.get(id) { let snap = instruments::InstrumentRegionSnapshot { position: ir.position, size: ir.size, name: ir.name.clone(), plugin_id: ir.plugin_id.clone(), plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone() }; paste_ops.push(operations::Operation::CreateInstrumentRegion { id: *id, data: snap }); } }
+            }
+        }
+        if !paste_ops.is_empty() {
+            self.push_op(operations::Operation::Batch(paste_ops));
+        }
         self.selected = new_selected;
         self.sync_audio_clips();
     }
@@ -3821,179 +4022,51 @@ impl App {
         if self.selected.is_empty() {
             return;
         }
-        self.push_undo();
-        let mut obj_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::Object(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut wf_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::Waveform(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut er_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::EffectRegion(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut pb_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::PluginBlock(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut lr_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::LoopRegion(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut xr_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::ExportRegion(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut comp_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::ComponentDef(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut inst_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::ComponentInstance(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut mc_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::MidiClip(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let mut ir_indices: Vec<usize> = self
-            .selected
-            .iter()
-            .filter_map(|t| match t {
-                HitTarget::InstrumentRegion(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
+        let mut del_ops: Vec<operations::Operation> = Vec::new();
+        let obj_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::Object(i) => Some(*i), _ => None }).collect();
+        let wf_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::Waveform(i) => Some(*i), _ => None }).collect();
+        let er_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::EffectRegion(i) => Some(*i), _ => None }).collect();
+        let pb_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::PluginBlock(i) => Some(*i), _ => None }).collect();
+        let lr_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::LoopRegion(i) => Some(*i), _ => None }).collect();
+        let xr_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ExportRegion(i) => Some(*i), _ => None }).collect();
+        let comp_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ComponentDef(i) => Some(*i), _ => None }).collect();
+        let inst_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ComponentInstance(i) => Some(*i), _ => None }).collect();
+        let mc_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::MidiClip(i) => Some(*i), _ => None }).collect();
+        let ir_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::InstrumentRegion(i) => Some(*i), _ => None }).collect();
 
-        obj_indices.sort_unstable_by(|a, b| b.cmp(a));
-        wf_indices.sort_unstable_by(|a, b| b.cmp(a));
-        er_indices.sort_unstable_by(|a, b| b.cmp(a));
-        pb_indices.sort_unstable_by(|a, b| b.cmp(a));
-        lr_indices.sort_unstable_by(|a, b| b.cmp(a));
-        xr_indices.sort_unstable_by(|a, b| b.cmp(a));
-        comp_indices.sort_unstable_by(|a, b| b.cmp(a));
-        inst_indices.sort_unstable_by(|a, b| b.cmp(a));
-        mc_indices.sort_unstable_by(|a, b| b.cmp(a));
-        ir_indices.sort_unstable_by(|a, b| b.cmp(a));
-
-        // Delete instances first
-        for &i in &inst_indices {
-            if i < self.component_instances.len() {
-                self.component_instances.remove(i);
-            }
+        // Capture before removing
+        for &id in &inst_ids {
+            if let Some(d) = self.component_instances.get(&id) { del_ops.push(operations::Operation::DeleteComponentInstance { id, data: d.clone() }); }
+            self.component_instances.shift_remove(&id);
         }
-
-        // Delete component defs (also removes their instances and releases waveforms)
-        for &i in &comp_indices {
-            if i < self.components.len() {
-                let comp = self.components.remove(i);
-                // Remove instances that reference this component
-                self.component_instances
-                    .retain(|inst| inst.component_id != comp.id);
-                // Also delete the owned waveforms (sorted descending)
-                let mut owned_wf: Vec<usize> = comp.waveform_indices;
-                owned_wf.sort_unstable_by(|a, b| b.cmp(a));
-                for &wi in &owned_wf {
-                    if wi < self.waveforms.len() {
-                        self.waveforms.remove(wi);
+        for &id in &comp_ids {
+            if let Some(comp) = self.components.shift_remove(&id) {
+                del_ops.push(operations::Operation::DeleteComponent { id, data: comp.clone() });
+                self.component_instances.retain(|_, inst| inst.component_id != comp.id);
+                for &wi in &comp.waveform_ids {
+                    if let Some(wf) = self.waveforms.get(&wi) {
+                        let ac = self.audio_clips.get(&wi).cloned();
+                        del_ops.push(operations::Operation::DeleteWaveform { id: wi, data: wf.clone(), audio_clip: ac.map(|c| (wi, c)) });
                     }
-                    if wi < self.audio_clips.len() {
-                        self.audio_clips.remove(wi);
-                    }
-                }
-                // Fix waveform indices in remaining components
-                for other in &mut self.components {
-                    for idx in &mut other.waveform_indices {
-                        for &removed in &owned_wf {
-                            if *idx > removed {
-                                *idx -= 1;
-                            }
-                        }
-                    }
+                    self.waveforms.shift_remove(&wi);
+                    self.audio_clips.shift_remove(&wi);
                 }
             }
         }
-
-        for &i in &obj_indices {
-            if i < self.objects.len() {
-                self.objects.remove(i);
-            }
+        for &id in &obj_ids { if let Some(d) = self.objects.get(&id) { del_ops.push(operations::Operation::DeleteObject { id, data: d.clone() }); } self.objects.shift_remove(&id); }
+        for &id in &wf_ids {
+            if let Some(d) = self.waveforms.get(&id) { let ac = self.audio_clips.get(&id).cloned(); del_ops.push(operations::Operation::DeleteWaveform { id, data: d.clone(), audio_clip: ac.map(|c| (id, c)) }); }
+            self.waveforms.shift_remove(&id);
+            self.audio_clips.shift_remove(&id);
         }
-        for &i in &wf_indices {
-            if i < self.waveforms.len() {
-                self.waveforms.remove(i);
-            }
-            if i < self.audio_clips.len() {
-                self.audio_clips.remove(i);
-            }
-        }
-        for &i in &er_indices {
-            if i < self.effect_regions.len() {
-                self.effect_regions.remove(i);
-            }
-        }
-        for &i in &pb_indices {
-            if i < self.plugin_blocks.len() {
-                self.plugin_blocks.remove(i);
-            }
-        }
-        for &i in &lr_indices {
-            if i < self.loop_regions.len() {
-                self.loop_regions.remove(i);
-            }
-        }
-        for &i in &xr_indices {
-            if i < self.export_regions.len() {
-                self.export_regions.remove(i);
-            }
-        }
-        for &i in &mc_indices {
-            if i < self.midi_clips.len() {
-                self.midi_clips.remove(i);
-            }
-        }
-        for &i in &ir_indices {
-            if i < self.instrument_regions.len() {
-                self.instrument_regions.remove(i);
-            }
+        for &id in &er_ids { if let Some(d) = self.effect_regions.get(&id) { del_ops.push(operations::Operation::DeleteEffectRegion { id, data: d.clone() }); } self.effect_regions.shift_remove(&id); }
+        for &id in &pb_ids { if let Some(d) = self.plugin_blocks.get(&id) { del_ops.push(operations::Operation::DeletePluginBlock { id, data: d.snapshot() }); } self.plugin_blocks.shift_remove(&id); }
+        for &id in &lr_ids { if let Some(d) = self.loop_regions.get(&id) { del_ops.push(operations::Operation::DeleteLoopRegion { id, data: d.clone() }); } self.loop_regions.shift_remove(&id); }
+        for &id in &xr_ids { if let Some(d) = self.export_regions.get(&id) { del_ops.push(operations::Operation::DeleteExportRegion { id, data: d.clone() }); } self.export_regions.shift_remove(&id); }
+        for &id in &mc_ids { if let Some(d) = self.midi_clips.get(&id) { del_ops.push(operations::Operation::DeleteMidiClip { id, data: d.clone() }); } self.midi_clips.shift_remove(&id); }
+        for &id in &ir_ids { if let Some(ir) = self.instrument_regions.get(&id) { let snap = instruments::InstrumentRegionSnapshot { position: ir.position, size: ir.size, name: ir.name.clone(), plugin_id: ir.plugin_id.clone(), plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone() }; del_ops.push(operations::Operation::DeleteInstrumentRegion { id, data: snap }); } self.instrument_regions.shift_remove(&id); }
+        if !del_ops.is_empty() {
+            self.push_op(operations::Operation::Batch(del_ops));
         }
 
         self.selected.clear();
@@ -4013,7 +4086,6 @@ impl App {
         }
 
         if let Some(loaded) = load_audio_file(path) {
-            self.push_undo();
             let world = self.camera.screen_to_world(self.mouse_pos);
             let height = 150.0;
             let color_idx = self.waveforms.len() % WAVEFORM_COLORS.len();
@@ -4031,7 +4103,8 @@ impl App {
             );
             let left_peaks = Arc::new(WaveformPeaks::build(&loaded.left_samples));
             let right_peaks = Arc::new(WaveformPeaks::build(&loaded.right_samples));
-            self.waveforms.push(WaveformView {
+            let wf_id = new_id();
+            let wf_data = WaveformView {
                 audio: Arc::new(AudioData {
                     left_samples: loaded.left_samples,
                     right_samples: loaded.right_samples,
@@ -4052,12 +4125,15 @@ impl App {
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),
-            });
-            self.audio_clips.push(AudioClipData {
+            };
+            let ac_data = AudioClipData {
                 samples: loaded.samples,
                 sample_rate: loaded.sample_rate,
                 duration_secs: loaded.duration_secs,
-            });
+            };
+            self.waveforms.insert(wf_id, wf_data.clone());
+            self.audio_clips.insert(wf_id, ac_data.clone());
+            self.push_op(operations::Operation::CreateWaveform { id: wf_id, data: wf_data, audio_clip: Some((wf_id, ac_data)) });
             self.sync_audio_clips();
         } else {
             let filename = path
@@ -4233,11 +4309,19 @@ fn main() {
 
     let skip_load = std::env::args().any(|a| a == "--empty");
 
+    let connect_url = std::env::args()
+        .position(|a| a == "--connect")
+        .and_then(|i| std::env::args().nth(i + 1));
+
     let event_loop = EventLoop::new().unwrap();
 
     let mut app = App::new(skip_load);
     let menu_state = build_app_menu(app.storage.as_ref());
     app.menu_state = Some(menu_state);
+
+    if let Some(url) = connect_url {
+        app.connect_to_server(&url);
+    }
 
     event_loop.run_app(&mut app).unwrap();
 }

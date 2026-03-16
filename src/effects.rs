@@ -114,7 +114,7 @@ const EFFECT_ACTIVE_BORDER: [f32; 4] = [0.35, 0.60, 1.00, 0.70];
 // EffectRegion — spatial zone that controls when plugins sound
 // ---------------------------------------------------------------------------
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EffectRegion {
     pub position: [f32; 2],
     pub size: [f32; 2],
@@ -209,12 +209,24 @@ impl PluginBlock {
         }
     }
 
+    pub fn snapshot(&self) -> PluginBlockSnapshot {
+        PluginBlockSnapshot {
+            position: self.position,
+            size: self.size,
+            color: self.color,
+            plugin_id: self.plugin_id.clone(),
+            plugin_name: self.plugin_name.clone(),
+            plugin_path: self.plugin_path.clone(),
+            bypass: self.bypass,
+        }
+    }
+
     pub fn contains(&self, world_pos: [f32; 2]) -> bool {
         point_in_rect(world_pos, self.position, self.size)
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PluginBlockSnapshot {
     pub position: [f32; 2],
     pub size: [f32; 2],
@@ -225,27 +237,24 @@ pub struct PluginBlockSnapshot {
     pub bypass: bool,
 }
 
-/// Returns indices of plugin_blocks that spatially overlap the given effect region,
+/// Returns EntityIds of plugin_blocks that spatially overlap the given effect region,
 /// sorted by X position (left-to-right chaining order).
 pub fn collect_plugins_for_region(
     region: &EffectRegion,
-    blocks: &[PluginBlock],
-) -> Vec<usize> {
-    let mut overlapping: Vec<usize> = blocks
+    blocks: &indexmap::IndexMap<crate::entity_id::EntityId, PluginBlock>,
+) -> Vec<crate::entity_id::EntityId> {
+    let mut overlapping: Vec<(crate::entity_id::EntityId, f32)> = blocks
         .iter()
-        .enumerate()
         .filter(|(_, b)| {
             !b.bypass
                 && rects_overlap(region.position, region.size, b.position, b.size)
         })
-        .map(|(i, _)| i)
+        .map(|(&id, b)| (id, b.position[0]))
         .collect();
-    overlapping.sort_by(|&a, &b| {
-        blocks[a].position[0]
-            .partial_cmp(&blocks[b].position[0])
-            .unwrap_or(std::cmp::Ordering::Equal)
+    overlapping.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
     });
-    overlapping
+    overlapping.into_iter().map(|(id, _)| id).collect()
 }
 
 pub fn build_plugin_block_instances(

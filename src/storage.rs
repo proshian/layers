@@ -4,6 +4,7 @@ use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
 
+use crate::entity_id::{EntityId, new_id};
 use crate::settings::{AdaptiveGridSize, FixedGrid, GridMode};
 use crate::CanvasObject;
 
@@ -51,11 +52,33 @@ pub fn grid_mode_from_stored(tag: &str, value: &str) -> GridMode {
 }
 
 // ---------------------------------------------------------------------------
+// EntityId <-> String helpers for SurrealDB serialisation
+// ---------------------------------------------------------------------------
+
+fn entity_id_to_string(id: EntityId) -> String {
+    id.to_string()
+}
+
+fn entity_id_from_string(s: &str) -> EntityId {
+    s.parse::<EntityId>().unwrap_or_else(|_| new_id())
+}
+
+// ---------------------------------------------------------------------------
 // Per-project schema
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, SurrealValue)]
+pub struct StoredCanvasObject {
+    pub id: String,
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub color: [f32; 4],
+    pub border_radius: f32,
+}
+
+#[derive(Clone, SurrealValue)]
 pub struct StoredWaveform {
+    pub id: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub color: [f32; 4],
@@ -75,6 +98,7 @@ pub struct StoredWaveform {
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredEffectRegion {
+    pub id: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub plugin_ids: Vec<String>,
@@ -84,6 +108,7 @@ pub struct StoredEffectRegion {
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredPluginBlock {
+    pub id: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub color: [f32; 4],
@@ -96,6 +121,7 @@ pub struct StoredPluginBlock {
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredLoopRegion {
+    pub id: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub enabled: bool,
@@ -103,16 +129,17 @@ pub struct StoredLoopRegion {
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredComponent {
-    pub id: u64,
+    pub id: String,
     pub name: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
-    pub waveform_indices: Vec<u64>,
+    pub waveform_ids: Vec<String>,
 }
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredComponentInstance {
-    pub component_id: u64,
+    pub id: String,
+    pub component_id: String,
     pub position: [f32; 2],
 }
 
@@ -126,6 +153,7 @@ pub struct StoredMidiNote {
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredMidiClip {
+    pub id: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub color: [f32; 4],
@@ -139,6 +167,7 @@ pub struct StoredMidiClip {
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredInstrumentRegion {
+    pub id: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub name: String,
@@ -150,10 +179,11 @@ pub struct StoredInstrumentRegion {
 
 #[derive(SurrealValue)]
 pub struct ProjectState {
+    pub version: u32,
     pub name: String,
     pub camera_position: [f32; 2],
     pub camera_zoom: f32,
-    pub objects: Vec<CanvasObject>,
+    pub objects: Vec<StoredCanvasObject>,
     pub waveforms: Vec<StoredWaveform>,
     pub browser_folders: Vec<String>,
     pub browser_width: f32,
@@ -170,12 +200,180 @@ pub struct ProjectState {
 }
 
 // ---------------------------------------------------------------------------
+// Conversion: IndexMap <-> Vec<Stored*> for save/load
+// ---------------------------------------------------------------------------
+
+use indexmap::IndexMap;
+
+/// Convert an IndexMap of CanvasObjects to stored format.
+pub fn objects_to_stored(map: &IndexMap<EntityId, CanvasObject>) -> Vec<StoredCanvasObject> {
+    map.iter()
+        .map(|(id, obj)| StoredCanvasObject {
+            id: entity_id_to_string(*id),
+            position: obj.position,
+            size: obj.size,
+            color: obj.color,
+            border_radius: obj.border_radius,
+        })
+        .collect()
+}
+
+/// Convert stored objects back to an IndexMap. Old projects without `id` get new UUIDs.
+pub fn objects_from_stored(stored: Vec<StoredCanvasObject>) -> IndexMap<EntityId, CanvasObject> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            let obj = CanvasObject {
+                position: s.position,
+                size: s.size,
+                color: s.color,
+                border_radius: s.border_radius,
+            };
+            (id, obj)
+        })
+        .collect()
+}
+
+/// Extract the EntityId and stored data for a waveform vec.
+/// Returns (EntityId, StoredWaveform) pairs for downstream processing.
+pub fn waveforms_from_stored(stored: Vec<StoredWaveform>) -> Vec<(EntityId, StoredWaveform)> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            (id, s)
+        })
+        .collect()
+}
+
+pub fn effect_regions_from_stored(
+    stored: Vec<StoredEffectRegion>,
+) -> Vec<(EntityId, StoredEffectRegion)> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            (id, s)
+        })
+        .collect()
+}
+
+pub fn plugin_blocks_from_stored(
+    stored: Vec<StoredPluginBlock>,
+) -> Vec<(EntityId, StoredPluginBlock)> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            (id, s)
+        })
+        .collect()
+}
+
+pub fn loop_regions_from_stored(
+    stored: Vec<StoredLoopRegion>,
+) -> Vec<(EntityId, StoredLoopRegion)> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            (id, s)
+        })
+        .collect()
+}
+
+pub fn components_from_stored(
+    stored: Vec<StoredComponent>,
+) -> Vec<(EntityId, StoredComponent)> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            (id, s)
+        })
+        .collect()
+}
+
+pub fn component_instances_from_stored(
+    stored: Vec<StoredComponentInstance>,
+) -> Vec<(EntityId, StoredComponentInstance)> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            (id, s)
+        })
+        .collect()
+}
+
+pub fn midi_clips_from_stored(
+    stored: Vec<StoredMidiClip>,
+) -> Vec<(EntityId, StoredMidiClip)> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            (id, s)
+        })
+        .collect()
+}
+
+pub fn instrument_regions_from_stored(
+    stored: Vec<StoredInstrumentRegion>,
+) -> Vec<(EntityId, StoredInstrumentRegion)> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            (id, s)
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Audio / peaks stored per waveform
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredAudioData {
-    pub waveform_index: u64,
+    pub waveform_id: String,
     pub left_samples: Vec<u8>,
     pub right_samples: Vec<u8>,
     pub mono_samples: Vec<u8>,
@@ -185,7 +383,7 @@ pub struct StoredAudioData {
 
 #[derive(Clone, SurrealValue)]
 pub struct StoredPeaks {
-    pub waveform_index: u64,
+    pub waveform_id: String,
     pub block_size: u64,
     pub left_peaks: Vec<u8>,
     pub right_peaks: Vec<u8>,
@@ -465,12 +663,12 @@ impl Storage {
     }
 
     // -----------------------------------------------------------------------
-    // Audio data (per-project DB)
+    // Audio data (per-project DB) — keyed by EntityId string
     // -----------------------------------------------------------------------
 
     pub fn save_audio(
         &self,
-        index: u64,
+        waveform_id: &str,
         left: &[f32],
         right: &[f32],
         mono: &[f32],
@@ -482,62 +680,68 @@ impl Storage {
             None => return,
         };
         let data = StoredAudioData {
-            waveform_index: index,
+            waveform_id: waveform_id.to_string(),
             left_samples: f32_slice_to_u8(left),
             right_samples: f32_slice_to_u8(right),
             mono_samples: f32_slice_to_u8(mono),
             sample_rate,
             duration_secs,
         };
-        let key = format!("{index}");
         let result = self.rt.block_on(async {
-            let _: Option<StoredAudioData> = db.upsert(("audio", &*key)).content(data).await?;
+            let _: Option<StoredAudioData> =
+                db.upsert(("audio", waveform_id)).content(data).await?;
             Ok::<(), surrealdb::Error>(())
         });
         if let Err(e) = result {
-            log::error!("Failed to save audio data for waveform {index}: {e}");
+            log::error!("Failed to save audio data for waveform {waveform_id}: {e}");
         }
     }
 
-    pub fn load_audio(&self, index: u64) -> Option<StoredAudioData> {
+    pub fn load_audio(&self, waveform_id: &str) -> Option<StoredAudioData> {
         let db = self.project_db.as_ref()?;
-        let key = format!("{index}");
         self.rt.block_on(async {
-            let data: Option<StoredAudioData> = db.select(("audio", &*key)).await.ok()?;
+            let data: Option<StoredAudioData> =
+                db.select(("audio", waveform_id)).await.ok()?;
             data
         })
     }
 
     // -----------------------------------------------------------------------
-    // Peaks data (per-project DB)
+    // Peaks data (per-project DB) — keyed by EntityId string
     // -----------------------------------------------------------------------
 
-    pub fn save_peaks(&self, index: u64, block_size: u64, left_peaks: &[f32], right_peaks: &[f32]) {
+    pub fn save_peaks(
+        &self,
+        waveform_id: &str,
+        block_size: u64,
+        left_peaks: &[f32],
+        right_peaks: &[f32],
+    ) {
         let db = match &self.project_db {
             Some(db) => db,
             None => return,
         };
         let data = StoredPeaks {
-            waveform_index: index,
+            waveform_id: waveform_id.to_string(),
             block_size,
             left_peaks: f32_slice_to_u8(left_peaks),
             right_peaks: f32_slice_to_u8(right_peaks),
         };
-        let key = format!("{index}");
         let result = self.rt.block_on(async {
-            let _: Option<StoredPeaks> = db.upsert(("peaks", &*key)).content(data).await?;
+            let _: Option<StoredPeaks> =
+                db.upsert(("peaks", waveform_id)).content(data).await?;
             Ok::<(), surrealdb::Error>(())
         });
         if let Err(e) = result {
-            log::error!("Failed to save peaks for waveform {index}: {e}");
+            log::error!("Failed to save peaks for waveform {waveform_id}: {e}");
         }
     }
 
-    pub fn load_peaks(&self, index: u64) -> Option<StoredPeaks> {
+    pub fn load_peaks(&self, waveform_id: &str) -> Option<StoredPeaks> {
         let db = self.project_db.as_ref()?;
-        let key = format!("{index}");
         self.rt.block_on(async {
-            let data: Option<StoredPeaks> = db.select(("peaks", &*key)).await.ok()?;
+            let data: Option<StoredPeaks> =
+                db.select(("peaks", waveform_id)).await.ok()?;
             data
         })
     }

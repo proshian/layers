@@ -3,6 +3,7 @@ mod browser;
 mod history;
 mod hit_testing;
 mod midi_and_instruments;
+mod operations;
 mod palette;
 mod plugins;
 mod state_mutations;

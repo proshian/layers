@@ -1,3 +1,4 @@
+use crate::entity_id::EntityId;
 use crate::InstanceRaw;
 
 pub const PALETTE_WIDTH: f32 = 520.0;
@@ -336,7 +337,7 @@ pub struct CommandPalette {
     pub fader_value: f32,
     pub fader_rms: f32,
     pub fader_dragging: bool,
-    pub fader_target_waveform: Option<usize>,
+    pub fader_target_waveform: Option<EntityId>,
     pub scroll_accumulator: f32,
     // Plugin picker state
     pub plugin_entries: Vec<PluginPickerEntry>,

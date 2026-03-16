@@ -1,6 +1,8 @@
+use crate::entity_id::EntityId;
 use crate::{push_border, Camera, InstanceRaw, WaveformView};
+use indexmap::IndexMap;
 
-pub type ComponentId = u64;
+pub type ComponentId = EntityId;
 
 const COMPONENT_BORDER_COLOR: [f32; 4] = [0.85, 0.55, 0.20, 0.50];
 const COMPONENT_FILL_COLOR: [f32; 4] = [0.85, 0.55, 0.20, 0.06];
@@ -9,16 +11,16 @@ const INSTANCE_FILL_COLOR: [f32; 4] = [0.85, 0.55, 0.20, 0.04];
 const INSTANCE_BORDER_COLOR: [f32; 4] = [0.85, 0.55, 0.20, 0.30];
 const LOCK_ICON_COLOR: [f32; 4] = [0.85, 0.55, 0.20, 0.60];
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ComponentDef {
     pub id: ComponentId,
     pub name: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
-    pub waveform_indices: Vec<usize>,
+    pub waveform_ids: Vec<EntityId>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ComponentInstance {
     pub component_id: ComponentId,
     pub position: [f32; 2],
@@ -126,7 +128,7 @@ pub fn build_component_def_instances(
 pub fn build_component_instance_instances(
     inst: &ComponentInstance,
     def: &ComponentDef,
-    waveforms: &[WaveformView],
+    waveforms: &IndexMap<EntityId, WaveformView>,
     camera: &Camera,
     world_left: f32,
     world_right: f32,
@@ -164,11 +166,11 @@ pub fn build_component_instance_instances(
     push_border(&mut out, inst.position, size, bw, bc);
 
     // Ghost waveforms: render each waveform belonging to the component at the offset position
-    for &wf_idx in &def.waveform_indices {
-        if wf_idx >= waveforms.len() {
-            continue;
-        }
-        let wf = &waveforms[wf_idx];
+    for &wf_id in &def.waveform_ids {
+        let wf = match waveforms.get(&wf_id) {
+            Some(wf) => wf,
+            None => continue,
+        };
         let ghost_pos = [wf.position[0] + offset[0], wf.position[1] + offset[1]];
         let ghost_right = ghost_pos[0] + wf.size[0];
 
@@ -276,18 +278,18 @@ pub fn build_component_instance_instances(
 }
 
 pub fn bounding_box_of_waveforms(
-    waveforms: &[WaveformView],
-    indices: &[usize],
+    waveforms: &IndexMap<EntityId, WaveformView>,
+    ids: &[EntityId],
 ) -> ([f32; 2], [f32; 2]) {
     let mut min_x = f32::MAX;
     let mut min_y = f32::MAX;
     let mut max_x = f32::MIN;
     let mut max_y = f32::MIN;
-    for &i in indices {
-        if i >= waveforms.len() {
-            continue;
-        }
-        let wf = &waveforms[i];
+    for &id in ids {
+        let wf = match waveforms.get(&id) {
+            Some(wf) => wf,
+            None => continue,
+        };
         min_x = min_x.min(wf.position[0]);
         min_y = min_y.min(wf.position[1]);
         max_x = max_x.max(wf.position[0] + wf.size[0]);

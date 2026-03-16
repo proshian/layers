@@ -1,7 +1,9 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+
+use indexmap::IndexMap;
 
 use crate::effects::{self, EffectRegion, PluginBlock};
+use crate::entity_id::{EntityId, new_id};
 use crate::{App, HitTarget};
 
 /// Create a dummy plugin block (no real VST3, gui=None) for structural tests.
@@ -51,18 +53,17 @@ fn open_headless(path: &PathBuf, id: &str) -> Option<vst3_gui::Vst3Gui> {
     vst3_gui::Vst3Gui::open_headless(&path_str, id)
 }
 
-/// Helper: check if the plugin block at index has a live GUI.
-fn has_gui(app: &App, idx: usize) -> bool {
-    app.plugin_blocks[idx]
-        .gui
-        .lock()
-        .ok()
+/// Helper: check if the plugin block with given id has a live GUI.
+fn has_gui(app: &App, id: &EntityId) -> bool {
+    app.plugin_blocks
+        .get(id)
+        .and_then(|pb| pb.gui.lock().ok())
         .map_or(false, |g| g.is_some())
 }
 
 // =========================================================================
 // Integration tests using real VST3 plugins (e.g. FabFilter Pro-Q 4)
-// Uses headless mode — no GUI window, works from any thread.
+// Uses headless mode -- no GUI window, works from any thread.
 // Skip on CI / machines without VST3 effects installed.
 // =========================================================================
 
@@ -78,12 +79,14 @@ fn test_plugin_block_create_with_real_vst3() {
     let gui = open_headless(&path, &id).expect(&format!("should open '{}' headlessly", name));
     let mut pb = PluginBlock::new([100.0, 200.0], id.clone(), name.clone(), path);
     *pb.gui.lock().unwrap() = Some(gui);
-    app.plugin_blocks.push(pb);
+    let pb_id = new_id();
+    app.plugin_blocks.insert(pb_id, pb);
 
     assert_eq!(app.plugin_blocks.len(), 1);
-    assert_eq!(app.plugin_blocks[0].position, [100.0, 200.0]);
-    assert_eq!(app.plugin_blocks[0].plugin_name, name);
-    assert!(has_gui(&app, 0), "gui should be Some for '{}'", name);
+    let pb = app.plugin_blocks.get(&pb_id).unwrap();
+    assert_eq!(pb.position, [100.0, 200.0]);
+    assert_eq!(pb.plugin_name, name);
+    assert!(has_gui(&app, &pb_id), "gui should be Some for '{}'", name);
 }
 
 #[test]
@@ -205,64 +208,71 @@ fn test_plugin_block_audio_processing() {
 fn test_plugin_block_bypass_excludes_from_region() {
     let region = EffectRegion::new([0.0, 0.0], [500.0, 300.0]);
 
-    let mut blocks = vec![
-        make_plugin_block(50.0, 50.0, "id-a", "PluginA"),
-        make_plugin_block(200.0, 50.0, "id-b", "PluginB"),
-    ];
-    blocks[0].bypass = true;
+    let mut blocks: IndexMap<EntityId, PluginBlock> = IndexMap::new();
+    let id_a = new_id();
+    let id_b = new_id();
+    let mut pb_a = make_plugin_block(50.0, 50.0, "id-a", "PluginA");
+    pb_a.bypass = true;
+    blocks.insert(id_a, pb_a);
+    blocks.insert(id_b, make_plugin_block(200.0, 50.0, "id-b", "PluginB"));
 
     let chain = effects::collect_plugins_for_region(&region, &blocks);
     assert_eq!(chain.len(), 1, "only non-bypassed plugin should be in chain");
-    assert_eq!(chain[0], 1, "the second plugin block should be in the chain");
+    assert_eq!(chain[0], id_b, "the second plugin block should be in the chain");
 }
 
 #[test]
 fn test_plugin_block_spatial_chain_ordering() {
     let region = EffectRegion::new([0.0, 0.0], [800.0, 300.0]);
 
-    let blocks = vec![
-        make_plugin_block(400.0, 50.0, "id-a", "Right"),   // index 0
-        make_plugin_block(100.0, 50.0, "id-b", "Left"),    // index 1
-        make_plugin_block(250.0, 50.0, "id-c", "Middle"),  // index 2
-    ];
+    let mut blocks: IndexMap<EntityId, PluginBlock> = IndexMap::new();
+    let id_right = new_id();
+    let id_left = new_id();
+    let id_mid = new_id();
+    blocks.insert(id_right, make_plugin_block(400.0, 50.0, "id-a", "Right"));
+    blocks.insert(id_left, make_plugin_block(100.0, 50.0, "id-b", "Left"));
+    blocks.insert(id_mid, make_plugin_block(250.0, 50.0, "id-c", "Middle"));
 
     let chain = effects::collect_plugins_for_region(&region, &blocks);
     assert_eq!(chain.len(), 3);
-    // Sorted by X: index 1 (x=100), index 2 (x=250), index 0 (x=400)
-    assert_eq!(chain, vec![1, 2, 0]);
+    // Sorted by X: Left (x=100), Middle (x=250), Right (x=400)
+    assert_eq!(chain, vec![id_left, id_mid, id_right]);
 }
 
 #[test]
 fn test_plugin_block_delete() {
     let mut app = App::new_headless();
 
-    app.plugin_blocks.push(make_plugin_block(0.0, 0.0, "id-a", "PluginA"));
-    app.plugin_blocks.push(make_plugin_block(200.0, 0.0, "id-b", "PluginB"));
+    let id_a = new_id();
+    let id_b = new_id();
+    app.plugin_blocks.insert(id_a, make_plugin_block(0.0, 0.0, "id-a", "PluginA"));
+    app.plugin_blocks.insert(id_b, make_plugin_block(200.0, 0.0, "id-b", "PluginB"));
 
-    app.selected.push(HitTarget::PluginBlock(0));
+    app.selected.push(HitTarget::PluginBlock(id_a));
     app.delete_selected();
 
     assert_eq!(app.plugin_blocks.len(), 1);
-    assert_eq!(app.plugin_blocks[0].plugin_id, "id-b");
+    assert_eq!(app.plugin_blocks.get(&id_b).unwrap().plugin_id, "id-b");
 }
 
 #[test]
 fn test_plugin_block_undo_redo() {
     let mut app = App::new_headless();
 
-    app.plugin_blocks.push(make_plugin_block(0.0, 0.0, "id-a", "PluginA"));
-    app.push_undo();
+    let pb_id = new_id();
+    app.plugin_blocks.insert(pb_id, make_plugin_block(0.0, 0.0, "id-a", "PluginA"));
 
-    // Delete it
-    app.selected.push(HitTarget::PluginBlock(0));
+    // Delete it (delete_selected now uses push_op)
+    app.selected.push(HitTarget::PluginBlock(pb_id));
     app.delete_selected();
     assert_eq!(app.plugin_blocks.len(), 0);
 
-    // Undo should restore it
-    app.undo();
+    // Undo should restore it via op system
+    app.undo_op();
     assert_eq!(app.plugin_blocks.len(), 1);
-    assert_eq!(app.plugin_blocks[0].plugin_name, "PluginA");
-    assert_eq!(app.plugin_blocks[0].plugin_id, "id-a");
+    let pb = app.plugin_blocks.get(&pb_id).unwrap();
+    assert_eq!(pb.plugin_name, "PluginA");
+    assert_eq!(pb.plugin_id, "id-a");
 }
 
 #[test]
@@ -270,8 +280,8 @@ fn test_plugin_block_sync_audio_clips() {
     let mut app = App::new_headless();
 
     let region = EffectRegion::new([0.0, 0.0], [500.0, 300.0]);
-    app.effect_regions.push(region);
-    app.plugin_blocks.push(make_plugin_block(50.0, 50.0, "id-a", "PluginA"));
+    app.effect_regions.insert(new_id(), region);
+    app.plugin_blocks.insert(new_id(), make_plugin_block(50.0, 50.0, "id-a", "PluginA"));
 
     // sync_audio_clips should not panic even with no audio engine (headless)
     app.sync_audio_clips();
@@ -281,12 +291,13 @@ fn test_plugin_block_sync_audio_clips() {
 fn test_plugin_block_outside_region_not_collected() {
     let region = EffectRegion::new([0.0, 0.0], [200.0, 200.0]);
 
-    let blocks = vec![
-        make_plugin_block(50.0, 50.0, "id-a", "Inside"),
-        make_plugin_block(500.0, 500.0, "id-b", "Outside"),
-    ];
+    let mut blocks: IndexMap<EntityId, PluginBlock> = IndexMap::new();
+    let id_in = new_id();
+    let id_out = new_id();
+    blocks.insert(id_in, make_plugin_block(50.0, 50.0, "id-a", "Inside"));
+    blocks.insert(id_out, make_plugin_block(500.0, 500.0, "id-b", "Outside"));
 
     let chain = effects::collect_plugins_for_region(&region, &blocks);
     assert_eq!(chain.len(), 1);
-    assert_eq!(chain[0], 0);
+    assert_eq!(chain[0], id_in);
 }

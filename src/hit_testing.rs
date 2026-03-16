@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
+use indexmap::IndexMap;
+
 use crate::automation::AutomationParam;
 use crate::component;
 use crate::effects;
+use crate::entity_id::EntityId;
 use crate::grid::snap_to_grid;
 use crate::instruments;
 use crate::midi;
@@ -94,74 +97,74 @@ pub(crate) const WAVEFORM_EDGE_HIT_PX: f32 = 5.0;
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum WaveformEdgeHover {
     None,
-    LeftEdge(usize),
-    RightEdge(usize),
+    LeftEdge(EntityId),
+    RightEdge(EntityId),
 }
 
 pub(crate) fn hit_test_waveform_edge(
-    waveforms: &[WaveformView],
+    waveforms: &IndexMap<EntityId, WaveformView>,
     world_pos: [f32; 2],
     camera: &Camera,
 ) -> WaveformEdgeHover {
     let margin = WAVEFORM_EDGE_HIT_PX / camera.zoom;
-    for (i, wf) in waveforms.iter().enumerate().rev() {
+    for (&id, wf) in waveforms.iter().rev() {
         if world_pos[1] < wf.position[1] || world_pos[1] > wf.position[1] + wf.size[1] {
             continue;
         }
         let left_edge = wf.position[0];
         let right_edge = wf.position[0] + wf.size[0];
         if (world_pos[0] - left_edge).abs() < margin {
-            return WaveformEdgeHover::LeftEdge(i);
+            return WaveformEdgeHover::LeftEdge(id);
         }
         if (world_pos[0] - right_edge).abs() < margin {
-            return WaveformEdgeHover::RightEdge(i);
+            return WaveformEdgeHover::RightEdge(id);
         }
     }
     WaveformEdgeHover::None
 }
 
-/// Returns (waveform_index, is_fade_in) if the cursor is over a fade handle.
+/// Returns (waveform_id, is_fade_in) if the cursor is over a fade handle.
 pub(crate) fn hit_test_fade_handle(
-    waveforms: &[WaveformView],
+    waveforms: &IndexMap<EntityId, WaveformView>,
     world_pos: [f32; 2],
     camera: &Camera,
-) -> Option<(usize, bool)> {
+) -> Option<(EntityId, bool)> {
     let handle_sz = ui::waveform::FADE_HANDLE_SIZE / camera.zoom;
     let hit_margin = handle_sz * 0.8;
-    for (i, wf) in waveforms.iter().enumerate().rev() {
+    for (&id, wf) in waveforms.iter().rev() {
         let fi_cx = wf.position[0] + wf.fade_in_px;
         let fi_cy = wf.position[1];
         if (world_pos[0] - fi_cx).abs() < hit_margin && (world_pos[1] - fi_cy).abs() < hit_margin {
-            return Some((i, true));
+            return Some((id, true));
         }
 
         let fo_cx = wf.position[0] + wf.size[0] - wf.fade_out_px;
         let fo_cy = wf.position[1];
         if (world_pos[0] - fo_cx).abs() < hit_margin && (world_pos[1] - fo_cy).abs() < hit_margin {
-            return Some((i, false));
+            return Some((id, false));
         }
     }
     None
 }
 
-/// Returns (waveform_index, is_fade_in) if the cursor is near the fade curve midpoint dot.
+/// Returns (waveform_id, is_fade_in) if the cursor is near the fade curve midpoint dot.
 pub(crate) fn hit_test_fade_curve_dot(
-    waveforms: &[WaveformView],
+    waveforms: &IndexMap<EntityId, WaveformView>,
     world_pos: [f32; 2],
     camera: &Camera,
-) -> Option<(usize, bool)> {
+) -> Option<(EntityId, bool)> {
     let hit_radius = ui::waveform::FADE_HANDLE_SIZE / camera.zoom;
-    for (i, wf) in waveforms.iter().enumerate().rev() {
+    for (&id, wf) in waveforms.iter().rev() {
         if wf.fade_in_px > 0.0 {
             let [dx, dy] = ui::waveform::fade_curve_dot_pos(wf, true);
             if (world_pos[0] - dx).abs() < hit_radius && (world_pos[1] - dy).abs() < hit_radius {
-                return Some((i, true));
+                return Some((id, true));
             }
         }
         if wf.fade_out_px > 0.0 {
             let [dx, dy] = ui::waveform::fade_curve_dot_pos(wf, false);
             if (world_pos[0] - dx).abs() < hit_radius && (world_pos[1] - dy).abs() < hit_radius {
-                return Some((i, false));
+                return Some((id, false));
             }
         }
     }
@@ -169,31 +172,27 @@ pub(crate) fn hit_test_fade_curve_dot(
 }
 
 pub(crate) fn hit_test(
-    objects: &[CanvasObject],
-    waveforms: &[WaveformView],
-    effect_regions: &[effects::EffectRegion],
-    plugin_blocks: &[effects::PluginBlock],
-    loop_regions: &[LoopRegion],
-    export_regions: &[ExportRegion],
-    components: &[component::ComponentDef],
-    component_instances: &[component::ComponentInstance],
-    midi_clips: &[midi::MidiClip],
-    instrument_regions: &[instruments::InstrumentRegion],
-    editing_component: Option<usize>,
+    objects: &IndexMap<EntityId, CanvasObject>,
+    waveforms: &IndexMap<EntityId, WaveformView>,
+    effect_regions: &IndexMap<EntityId, effects::EffectRegion>,
+    plugin_blocks: &IndexMap<EntityId, effects::PluginBlock>,
+    loop_regions: &IndexMap<EntityId, LoopRegion>,
+    export_regions: &IndexMap<EntityId, ExportRegion>,
+    components: &IndexMap<EntityId, component::ComponentDef>,
+    component_instances: &IndexMap<EntityId, component::ComponentInstance>,
+    midi_clips: &IndexMap<EntityId, midi::MidiClip>,
+    instrument_regions: &IndexMap<EntityId, instruments::InstrumentRegion>,
+    editing_component: Option<EntityId>,
     world_pos: [f32; 2],
     camera: &Camera,
 ) -> Option<HitTarget> {
     // When editing a component, only its waveforms are hittable
-    if let Some(ec_idx) = editing_component {
-        if let Some(def) = components.get(ec_idx) {
-            for &wf_idx in def.waveform_indices.iter().rev() {
-                if wf_idx < waveforms.len() {
-                    if point_in_rect(
-                        world_pos,
-                        waveforms[wf_idx].position,
-                        waveforms[wf_idx].size,
-                    ) {
-                        return Some(HitTarget::Waveform(wf_idx));
+    if let Some(ec_id) = editing_component {
+        if let Some(def) = components.get(&ec_id) {
+            for &wf_id in def.waveform_ids.iter().rev() {
+                if let Some(wf) = waveforms.get(&wf_id) {
+                    if point_in_rect(world_pos, wf.position, wf.size) {
+                        return Some(HitTarget::Waveform(wf_id));
                     }
                 }
             }
@@ -201,105 +200,94 @@ pub(crate) fn hit_test(
         return None;
     }
 
-    let wf_in_component: HashSet<usize> = components
-        .iter()
-        .flat_map(|c| c.waveform_indices.iter().copied())
-        .collect();
-    let comp_map: std::collections::HashMap<component::ComponentId, usize> = components
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id, i))
+    let wf_in_component: HashSet<EntityId> = components
+        .values()
+        .flat_map(|c| c.waveform_ids.iter().copied())
         .collect();
 
     // Instances first (on top)
-    for (i, inst) in component_instances.iter().enumerate().rev() {
-        if let Some(&def_idx) = comp_map.get(&inst.component_id) {
-            let def = &components[def_idx];
+    for (&id, inst) in component_instances.iter().rev() {
+        if let Some(def) = components.get(&inst.component_id) {
             if point_in_rect(world_pos, inst.position, def.size) {
-                return Some(HitTarget::ComponentInstance(i));
+                return Some(HitTarget::ComponentInstance(id));
             }
         }
     }
-    for (i, wf) in waveforms.iter().enumerate().rev() {
-        if wf_in_component.contains(&i) {
+    for (&id, wf) in waveforms.iter().rev() {
+        if wf_in_component.contains(&id) {
             continue;
         }
         if point_in_rect(world_pos, wf.position, wf.size) {
-            return Some(HitTarget::Waveform(i));
+            return Some(HitTarget::Waveform(id));
         }
     }
-    for (i, obj) in objects.iter().enumerate().rev() {
+    for (&id, obj) in objects.iter().rev() {
         if point_in_rect(world_pos, obj.position, obj.size) {
-            return Some(HitTarget::Object(i));
+            return Some(HitTarget::Object(id));
         }
     }
-    for (i, def) in components.iter().enumerate().rev() {
+    for (&id, def) in components.iter().rev() {
         if point_in_rect(world_pos, def.position, def.size) {
-            return Some(HitTarget::ComponentDef(i));
+            return Some(HitTarget::ComponentDef(id));
         }
     }
-    for (i, pb) in plugin_blocks.iter().enumerate().rev() {
+    for (&id, pb) in plugin_blocks.iter().rev() {
         if pb.contains(world_pos) {
-            return Some(HitTarget::PluginBlock(i));
+            return Some(HitTarget::PluginBlock(id));
         }
     }
-    for (i, mc) in midi_clips.iter().enumerate().rev() {
+    for (&id, mc) in midi_clips.iter().rev() {
         if mc.contains(world_pos) {
-            return Some(HitTarget::MidiClip(i));
+            return Some(HitTarget::MidiClip(id));
         }
     }
-    for (i, er) in effect_regions.iter().enumerate().rev() {
+    for (&id, er) in effect_regions.iter().rev() {
         if er.hit_test_border(world_pos, camera) {
-            return Some(HitTarget::EffectRegion(i));
+            return Some(HitTarget::EffectRegion(id));
         }
     }
-    for (i, ir) in instrument_regions.iter().enumerate().rev() {
+    for (&id, ir) in instrument_regions.iter().rev() {
         if ir.hit_test_border(world_pos, camera) {
-            return Some(HitTarget::InstrumentRegion(i));
+            return Some(HitTarget::InstrumentRegion(id));
         }
     }
-    for (i, lr) in loop_regions.iter().enumerate().rev() {
+    for (&id, lr) in loop_regions.iter().rev() {
         if lr.hit_test_border(world_pos, camera) {
-            return Some(HitTarget::LoopRegion(i));
+            return Some(HitTarget::LoopRegion(id));
         }
     }
-    for (i, xr) in export_regions.iter().enumerate().rev() {
+    for (&id, xr) in export_regions.iter().rev() {
         if xr.hit_test_border(world_pos, camera) {
-            return Some(HitTarget::ExportRegion(i));
+            return Some(HitTarget::ExportRegion(id));
         }
     }
     None
 }
 
 pub(crate) fn targets_in_rect(
-    objects: &[CanvasObject],
-    waveforms: &[WaveformView],
-    effect_regions: &[effects::EffectRegion],
-    plugin_blocks: &[effects::PluginBlock],
-    loop_regions: &[LoopRegion],
-    export_regions: &[ExportRegion],
-    components: &[component::ComponentDef],
-    component_instances: &[component::ComponentInstance],
-    midi_clips: &[midi::MidiClip],
-    instrument_regions: &[instruments::InstrumentRegion],
-    editing_component: Option<usize>,
+    objects: &IndexMap<EntityId, CanvasObject>,
+    waveforms: &IndexMap<EntityId, WaveformView>,
+    effect_regions: &IndexMap<EntityId, effects::EffectRegion>,
+    plugin_blocks: &IndexMap<EntityId, effects::PluginBlock>,
+    loop_regions: &IndexMap<EntityId, LoopRegion>,
+    export_regions: &IndexMap<EntityId, ExportRegion>,
+    components: &IndexMap<EntityId, component::ComponentDef>,
+    component_instances: &IndexMap<EntityId, component::ComponentInstance>,
+    midi_clips: &IndexMap<EntityId, midi::MidiClip>,
+    instrument_regions: &IndexMap<EntityId, instruments::InstrumentRegion>,
+    editing_component: Option<EntityId>,
     rect_pos: [f32; 2],
     rect_size: [f32; 2],
 ) -> Vec<HitTarget> {
     let mut result = Vec::new();
 
     // When editing a component, only its waveforms are selectable via rect
-    if let Some(ec_idx) = editing_component {
-        if let Some(def) = components.get(ec_idx) {
-            for &wf_idx in &def.waveform_indices {
-                if wf_idx < waveforms.len() {
-                    if rects_overlap(
-                        rect_pos,
-                        rect_size,
-                        waveforms[wf_idx].position,
-                        waveforms[wf_idx].size,
-                    ) {
-                        result.push(HitTarget::Waveform(wf_idx));
+    if let Some(ec_id) = editing_component {
+        if let Some(def) = components.get(&ec_id) {
+            for &wf_id in &def.waveform_ids {
+                if let Some(wf) = waveforms.get(&wf_id) {
+                    if rects_overlap(rect_pos, rect_size, wf.position, wf.size) {
+                        result.push(HitTarget::Waveform(wf_id));
                     }
                 }
             }
@@ -307,84 +295,78 @@ pub(crate) fn targets_in_rect(
         return result;
     }
 
-    let wf_in_component: HashSet<usize> = components
-        .iter()
-        .flat_map(|c| c.waveform_indices.iter().copied())
-        .collect();
-    let comp_map: std::collections::HashMap<component::ComponentId, usize> = components
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id, i))
+    let wf_in_component: HashSet<EntityId> = components
+        .values()
+        .flat_map(|c| c.waveform_ids.iter().copied())
         .collect();
 
-    for (i, obj) in objects.iter().enumerate() {
+    for (&id, obj) in objects.iter() {
         if rects_overlap(rect_pos, rect_size, obj.position, obj.size) {
-            result.push(HitTarget::Object(i));
+            result.push(HitTarget::Object(id));
         }
     }
-    for (i, wf) in waveforms.iter().enumerate() {
-        if wf_in_component.contains(&i) {
+    for (&id, wf) in waveforms.iter() {
+        if wf_in_component.contains(&id) {
             continue;
         }
         if rects_overlap(rect_pos, rect_size, wf.position, wf.size) {
-            result.push(HitTarget::Waveform(i));
+            result.push(HitTarget::Waveform(id));
         }
     }
-    for (i, er) in effect_regions.iter().enumerate() {
+    for (&id, er) in effect_regions.iter() {
         if rects_overlap(rect_pos, rect_size, er.position, er.size) {
-            result.push(HitTarget::EffectRegion(i));
+            result.push(HitTarget::EffectRegion(id));
         }
     }
-    for (i, pb) in plugin_blocks.iter().enumerate() {
+    for (&id, pb) in plugin_blocks.iter() {
         if rects_overlap(rect_pos, rect_size, pb.position, pb.size) {
-            result.push(HitTarget::PluginBlock(i));
+            result.push(HitTarget::PluginBlock(id));
         }
     }
-    for (i, lr) in loop_regions.iter().enumerate() {
+    for (&id, lr) in loop_regions.iter() {
         if rects_overlap(rect_pos, rect_size, lr.position, lr.size) {
-            result.push(HitTarget::LoopRegion(i));
+            result.push(HitTarget::LoopRegion(id));
         }
     }
-    for (i, xr) in export_regions.iter().enumerate() {
+    for (&id, xr) in export_regions.iter() {
         if rects_overlap(rect_pos, rect_size, xr.position, xr.size) {
-            result.push(HitTarget::ExportRegion(i));
+            result.push(HitTarget::ExportRegion(id));
         }
     }
-    for (i, def) in components.iter().enumerate() {
+    for (&id, def) in components.iter() {
         if rects_overlap(rect_pos, rect_size, def.position, def.size) {
-            result.push(HitTarget::ComponentDef(i));
+            result.push(HitTarget::ComponentDef(id));
         }
     }
-    for (i, inst) in component_instances.iter().enumerate() {
-        if let Some(&def_idx) = comp_map.get(&inst.component_id) {
-            let def = &components[def_idx];
+    for (&id, inst) in component_instances.iter() {
+        if let Some(def) = components.get(&inst.component_id) {
             if rects_overlap(rect_pos, rect_size, inst.position, def.size) {
-                result.push(HitTarget::ComponentInstance(i));
+                result.push(HitTarget::ComponentInstance(id));
             }
         }
     }
-    for (i, mc) in midi_clips.iter().enumerate() {
+    for (&id, mc) in midi_clips.iter() {
         if rects_overlap(rect_pos, rect_size, mc.position, mc.size) {
-            result.push(HitTarget::MidiClip(i));
+            result.push(HitTarget::MidiClip(id));
         }
     }
-    for (i, ir) in instrument_regions.iter().enumerate() {
+    for (&id, ir) in instrument_regions.iter() {
         if rects_overlap(rect_pos, rect_size, ir.position, ir.size) {
-            result.push(HitTarget::InstrumentRegion(i));
+            result.push(HitTarget::InstrumentRegion(id));
         }
     }
     result
 }
 
-/// Returns (waveform_idx, point_idx) if cursor is near an automation breakpoint.
+/// Returns (waveform_id, point_idx) if cursor is near an automation breakpoint.
 pub(crate) fn hit_test_automation_point(
-    waveforms: &[WaveformView],
+    waveforms: &IndexMap<EntityId, WaveformView>,
     world_pos: [f32; 2],
     camera: &Camera,
     param: AutomationParam,
-) -> Option<(usize, usize)> {
+) -> Option<(EntityId, usize)> {
     let hit_radius = 8.0 / camera.zoom;
-    for (i, wf) in waveforms.iter().enumerate().rev() {
+    for (&id, wf) in waveforms.iter().rev() {
         let lane = wf.automation.lane_for(param);
         let y_top = wf.position[1];
         let y_bot = wf.position[1] + wf.size[1];
@@ -392,22 +374,22 @@ pub(crate) fn hit_test_automation_point(
             let px = wf.position[0] + p.t * wf.size[0];
             let py = y_bot + (y_top - y_bot) * p.value;
             if (world_pos[0] - px).abs() < hit_radius && (world_pos[1] - py).abs() < hit_radius {
-                return Some((i, pi));
+                return Some((id, pi));
             }
         }
     }
     None
 }
 
-/// Returns (waveform_idx, t, value) if cursor is near an automation line segment (for inserting).
+/// Returns (waveform_id, t, value) if cursor is near an automation line segment (for inserting).
 pub(crate) fn hit_test_automation_line(
-    waveforms: &[WaveformView],
+    waveforms: &IndexMap<EntityId, WaveformView>,
     world_pos: [f32; 2],
     camera: &Camera,
     param: AutomationParam,
-) -> Option<(usize, f32, f32)> {
+) -> Option<(EntityId, f32, f32)> {
     let threshold = 4.0 / camera.zoom;
-    for (i, wf) in waveforms.iter().enumerate().rev() {
+    for (&id, wf) in waveforms.iter().rev() {
         // Check if point is inside waveform rect first
         if !point_in_rect(world_pos, wf.position, wf.size) {
             continue;
@@ -450,7 +432,7 @@ pub(crate) fn hit_test_automation_line(
                 // Convert world_pos to (t, value) in automation space
                 let t = ((world_pos[0] - wf.position[0]) / wf.size[0]).clamp(0.0, 1.0);
                 let value = ((world_pos[1] - y_bot) / (y_top - y_bot)).clamp(0.0, 1.0);
-                return Some((i, t, value));
+                return Some((id, t, value));
             }
         }
     }

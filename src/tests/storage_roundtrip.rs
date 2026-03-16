@@ -86,6 +86,7 @@ fn test_midi_clip_survives_save_load_roundtrip() {
     // Save path: MidiClip -> StoredMidiClip
     let (grid_tag, grid_val) = storage::grid_mode_to_stored(original.grid_mode);
     let stored = storage::StoredMidiClip {
+        id: crate::entity_id::new_id().to_string(),
         position: original.position,
         size: original.size,
         color: original.color,

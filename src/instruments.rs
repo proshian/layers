@@ -128,7 +128,7 @@ pub fn ensure_region_contains_clip(
 // Snapshot (for undo/redo — no Arc fields)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InstrumentRegionSnapshot {
     pub position: [f32; 2],
     pub size: [f32; 2],

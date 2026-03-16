@@ -10,11 +10,16 @@ pub const PIXELS_PER_SECOND: f32 = 120.0;
 
 const EFFECT_BLOCK_SIZE: usize = 512;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AudioClipData {
+    #[serde(skip, default = "default_empty_samples")]
     pub samples: Arc<Vec<f32>>,
     pub sample_rate: u32,
     pub duration_secs: f32,
+}
+
+fn default_empty_samples() -> Arc<Vec<f32>> {
+    Arc::new(Vec::new())
 }
 
 pub struct LoadedAudio {

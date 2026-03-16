@@ -1,16 +1,16 @@
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AutomationParam {
     Volume,
     Pan,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AutomationPoint {
     pub t: f32,
     pub value: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AutomationLane {
     pub param: AutomationParam,
     pub points: Vec<AutomationPoint>,
@@ -74,7 +74,7 @@ impl AutomationLane {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AutomationData {
     pub lanes: Vec<AutomationLane>,
 }

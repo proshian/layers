@@ -6,7 +6,7 @@ use crate::{push_border, Camera, InstanceRaw};
 // MIDI data types
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MidiNote {
     pub pitch: u8,        // MIDI note 0-127
     pub start_px: f32,    // relative to clip left edge, in pixels
@@ -14,7 +14,7 @@ pub struct MidiNote {
     pub velocity: u8,     // 0-127, default 100
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MidiClip {
     pub position: [f32; 2],
     pub size: [f32; 2], // [width, height]
