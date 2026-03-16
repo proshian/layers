@@ -257,7 +257,14 @@ impl Operation {
             }
             Operation::UpdateWaveform { id, after, .. } => {
                 if let Some(wf) = app.waveforms.get_mut(id) {
+                    let existing_audio = wf.audio.clone();
                     *wf = after.clone();
+                    // Preserve audio/peaks if the incoming waveform has empty audio
+                    // (audio is #[serde(skip)] so remote operations always have empty audio)
+                    if wf.audio.left_samples.is_empty() && !existing_audio.left_samples.is_empty()
+                    {
+                        wf.audio = existing_audio;
+                    }
                 }
             }
 
@@ -487,8 +494,88 @@ impl App {
         }
         log::info!("[SYNC] apply_remote_op: {} (user={}, seq={})", committed.op.variant_name(), committed.user_id, committed.seq);
         committed.op.apply(self);
+
+        // After applying, load audio from remote storage for any new waveforms
+        if self.remote_storage.is_some() {
+            let wf_ids = collect_create_waveform_ids(&committed.op);
+            for wf_id in wf_ids {
+                self.load_waveform_audio_from_remote(wf_id);
+            }
+        }
+
         self.mark_dirty();
         self.sync_audio_clips();
         self.request_redraw();
     }
+
+    fn load_waveform_audio_from_remote(&mut self, wf_id: EntityId) {
+        let wf = match self.waveforms.get(&wf_id) {
+            Some(wf) => wf,
+            None => return,
+        };
+
+        // Only load if audio data is empty (i.e. lost during serialization)
+        if !wf.audio.left_samples.is_empty() {
+            return;
+        }
+
+        let rs = match &self.remote_storage {
+            Some(rs) => rs.clone(),
+            None => return,
+        };
+
+        let filename = wf.filename.clone();
+        let tx = self.pending_remote_audio_tx.clone();
+
+        std::thread::spawn(move || {
+            let wf_id_str = wf_id.to_string();
+
+            if let Some((file_bytes, ext)) = rs.load_audio(&wf_id_str) {
+                use crate::ui::waveform::{AudioData, WaveformPeaks};
+
+                let Some(loaded) = crate::audio::load_audio_from_bytes(&file_bytes, &ext) else {
+                    eprintln!("[RemoteAudio] Failed to decode audio for {wf_id_str}");
+                    return;
+                };
+
+                let left_peaks = WaveformPeaks::build(&loaded.left_samples);
+                let right_peaks = WaveformPeaks::build(&loaded.right_samples);
+
+                let new_audio = std::sync::Arc::new(AudioData {
+                    left_samples: loaded.left_samples.clone(),
+                    right_samples: loaded.right_samples.clone(),
+                    left_peaks: std::sync::Arc::new(left_peaks),
+                    right_peaks: std::sync::Arc::new(right_peaks),
+                    sample_rate: loaded.sample_rate,
+                    filename,
+                });
+
+                let ac = crate::audio::AudioClipData {
+                    samples: loaded.samples,
+                    sample_rate: loaded.sample_rate,
+                    duration_secs: loaded.duration_secs,
+                };
+
+                let _ = tx.send(crate::PendingRemoteAudioFetch {
+                    wf_id,
+                    audio: new_audio,
+                    ac,
+                });
+            }
+        });
+    }
+}
+
+fn collect_create_waveform_ids(op: &Operation) -> Vec<EntityId> {
+    let mut ids = Vec::new();
+    match op {
+        Operation::CreateWaveform { id, .. } => ids.push(*id),
+        Operation::Batch(ops) => {
+            for o in ops {
+                ids.extend(collect_create_waveform_ids(o));
+            }
+        }
+        _ => {}
+    }
+    ids
 }

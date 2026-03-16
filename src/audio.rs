@@ -839,6 +839,25 @@ fn deinterleave_stereo(interleaved: &[f32], channels: usize) -> (Vec<f32>, Vec<f
     }
 }
 
+/// Quickly probe an audio file's duration from its header metadata
+/// without decoding the full stream. Returns `(duration_secs, width_px)`.
+pub fn probe_audio_duration(path: &Path) -> Option<(f32, f32)> {
+    let file = std::fs::File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &Default::default(), &Default::default())
+        .ok()?;
+    let track = probed.format.default_track()?;
+    let sample_rate = track.codec_params.sample_rate? as f64;
+    let n_frames = track.codec_params.n_frames? as f64;
+    let dur = (n_frames / sample_rate) as f32;
+    Some((dur, dur * PIXELS_PER_SECOND))
+}
+
 pub fn load_audio_file(path: &Path) -> Option<LoadedAudio> {
     let file = std::fs::File::open(path).ok()?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -885,6 +904,87 @@ pub fn load_audio_file(path: &Path) -> Option<LoadedAudio> {
         duration_secs,
         width,
     })
+}
+
+pub fn load_audio_from_bytes(file_bytes: &[u8], extension: &str) -> Option<LoadedAudio> {
+    let cursor = std::io::Cursor::new(file_bytes.to_vec());
+    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+
+    let mut hint = Hint::new();
+    hint.with_extension(extension);
+
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &Default::default(), &Default::default())
+        .ok()?;
+
+    let mut format = probed.format;
+    let track = format.default_track()?;
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &Default::default())
+        .ok()?;
+
+    let sample_rate = track.codec_params.sample_rate?;
+    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(1);
+
+    let mut interleaved = Vec::new();
+    while let Ok(packet) = format.next_packet() {
+        if let Ok(buffer) = decoder.decode(&packet) {
+            decode_buffer(&buffer, &mut interleaved);
+        }
+    }
+
+    if interleaved.is_empty() {
+        return None;
+    }
+
+    let (left, right, mono) = deinterleave_stereo(&interleaved, channels);
+
+    let duration_secs = mono.len() as f32 / sample_rate as f32;
+    let width = duration_secs * PIXELS_PER_SECOND;
+
+    Some(LoadedAudio {
+        samples: Arc::new(mono),
+        left_samples: Arc::new(left),
+        right_samples: Arc::new(right),
+        sample_rate,
+        duration_secs,
+        width,
+    })
+}
+
+/// Encode stereo PCM samples as WAV bytes in memory.
+pub fn encode_wav_bytes(left: &[f32], right: &[f32], sample_rate: u32) -> Vec<u8> {
+    let num_samples = left.len().min(right.len());
+    let num_channels: u16 = 2;
+    let bits_per_sample: u16 = 16;
+    let byte_rate = sample_rate * num_channels as u32 * bits_per_sample as u32 / 8;
+    let block_align = num_channels * bits_per_sample / 8;
+    let data_size = (num_samples * num_channels as usize * (bits_per_sample as usize / 8)) as u32;
+
+    let mut buf = Vec::with_capacity(44 + data_size as usize);
+    // RIFF header
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&(36 + data_size).to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+    // fmt chunk
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&num_channels.to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&byte_rate.to_le_bytes());
+    buf.extend_from_slice(&block_align.to_le_bytes());
+    buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+    // data chunk
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_size.to_le_bytes());
+    for i in 0..num_samples {
+        let l = (left[i].clamp(-1.0, 1.0) * 32767.0) as i16;
+        let r = (right[i].clamp(-1.0, 1.0) * 32767.0) as i16;
+        buf.extend_from_slice(&l.to_le_bytes());
+        buf.extend_from_slice(&r.to_le_bytes());
+    }
+    buf
 }
 
 pub struct ExportClip {

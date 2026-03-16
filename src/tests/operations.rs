@@ -145,6 +145,7 @@ fn make_waveform(x: f32, y: f32) -> WaveformView {
             sample_rate: 48000,
             filename: "test.wav".to_string(),
         }),
+        filename: "test.wav".to_string(),
         position: [x, y],
         size: [200.0, 80.0],
         color: [0.0, 1.0, 0.0, 1.0],

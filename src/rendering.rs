@@ -551,7 +551,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
     let sel_bw = 2.0 / camera.zoom;
     let handle_sz = 8.0 / camera.zoom;
     for target in ctx.selected.iter() {
-        let (pos, size) = target_rect(
+        let Some((pos, size)) = target_rect(
             ctx.objects,
             ctx.waveforms,
             ctx.effect_regions,
@@ -563,7 +563,9 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             ctx.midi_clips,
             ctx.instrument_regions,
             target,
-        );
+        ) else {
+            continue;
+        };
         push_border(out, pos, size, sel_bw, SEL_COLOR);
 
         for &hx in &[pos[0] - handle_sz * 0.5, pos[0] + size[0] - handle_sz * 0.5] {
@@ -821,51 +823,51 @@ pub(crate) fn target_rect(
     midi_clips: &IndexMap<EntityId, midi::MidiClip>,
     instrument_regions: &IndexMap<EntityId, instruments::InstrumentRegion>,
     target: &HitTarget,
-) -> ([f32; 2], [f32; 2]) {
+) -> Option<([f32; 2], [f32; 2])> {
     match target {
         HitTarget::Object(id) => {
-            let o = &objects[id];
-            (o.position, o.size)
+            let o = objects.get(id)?;
+            Some((o.position, o.size))
         }
         HitTarget::Waveform(id) => {
-            let w = &waveforms[id];
-            (w.position, w.size)
+            let w = waveforms.get(id)?;
+            Some((w.position, w.size))
         }
         HitTarget::EffectRegion(id) => {
-            let e = &effect_regions[id];
-            (e.position, e.size)
+            let e = effect_regions.get(id)?;
+            Some((e.position, e.size))
         }
         HitTarget::PluginBlock(id) => {
-            let p = &plugin_blocks[id];
-            (p.position, p.size)
+            let p = plugin_blocks.get(id)?;
+            Some((p.position, p.size))
         }
         HitTarget::LoopRegion(id) => {
-            let l = &loop_regions[id];
-            (l.position, l.size)
+            let l = loop_regions.get(id)?;
+            Some((l.position, l.size))
         }
         HitTarget::ExportRegion(id) => {
-            let e = &export_regions[id];
-            (e.position, e.size)
+            let e = export_regions.get(id)?;
+            Some((e.position, e.size))
         }
         HitTarget::ComponentDef(id) => {
-            let c = &components[id];
-            (c.position, c.size)
+            let c = components.get(id)?;
+            Some((c.position, c.size))
         }
         HitTarget::ComponentInstance(id) => {
-            let inst = &component_instances[id];
+            let inst = component_instances.get(id)?;
             let def = components.get(&inst.component_id);
             match def {
-                Some(d) => (inst.position, d.size),
-                None => (inst.position, [100.0, 100.0]),
+                Some(d) => Some((inst.position, d.size)),
+                None => Some((inst.position, [100.0, 100.0])),
             }
         }
         HitTarget::MidiClip(id) => {
-            let m = &midi_clips[id];
-            (m.position, m.size)
+            let m = midi_clips.get(id)?;
+            Some((m.position, m.size))
         }
         HitTarget::InstrumentRegion(id) => {
-            let ir = &instrument_regions[id];
-            (ir.position, ir.size)
+            let ir = instrument_regions.get(id)?;
+            Some((ir.position, ir.size))
         }
     }
 }

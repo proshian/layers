@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use crate::automation::AutomationData;
 use crate::midi;
 use crate::settings::{FixedGrid, GridMode};
 use crate::storage::{self, f32_slice_to_u8, u8_slice_to_f32};
+use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView};
 
 #[test]
 fn test_f32_u8_roundtrip() {
@@ -133,4 +136,44 @@ fn test_midi_clip_survives_save_load_roundtrip() {
     }
     assert_eq!(restored.grid_mode, original.grid_mode);
     assert_eq!(restored.triplet_grid, original.triplet_grid);
+}
+
+#[test]
+fn test_waveform_filename_survives_serde_roundtrip() {
+    let wf = WaveformView {
+        audio: Arc::new(AudioData {
+            left_samples: Arc::new(vec![0.1, 0.2, 0.3]),
+            right_samples: Arc::new(vec![0.4, 0.5, 0.6]),
+            left_peaks: Arc::new(WaveformPeaks::empty()),
+            right_peaks: Arc::new(WaveformPeaks::empty()),
+            sample_rate: 44100,
+            filename: "kick.wav".to_string(),
+        }),
+        filename: "kick.wav".to_string(),
+        position: [100.0, 200.0],
+        size: [300.0, 80.0],
+        color: [1.0, 0.0, 0.0, 1.0],
+        border_radius: 8.0,
+        fade_in_px: 0.0,
+        fade_out_px: 0.0,
+        fade_in_curve: 0.0,
+        fade_out_curve: 0.0,
+        volume: 1.0,
+        disabled: false,
+        sample_offset_px: 0.0,
+        automation: AutomationData::new(),
+    };
+
+    // Serialize and deserialize (simulates network transfer)
+    let json = serde_json::to_string(&wf).unwrap();
+    let restored: WaveformView = serde_json::from_str(&json).unwrap();
+
+    // filename on WaveformView survives (not skipped)
+    assert_eq!(restored.filename, "kick.wav");
+    // audio data is lost (serde skip) but filename on WaveformView persists
+    assert!(restored.audio.left_samples.is_empty());
+    assert!(restored.audio.filename.is_empty());
+    // position and other fields survive
+    assert_eq!(restored.position, wf.position);
+    assert_eq!(restored.size, wf.size);
 }

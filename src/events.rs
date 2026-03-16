@@ -57,6 +57,11 @@ impl ApplicationHandler for App {
             self.request_redraw();
         }
 
+        // Keep redrawing while background audio loads are in flight
+        if self.pending_audio_loads_count > 0 {
+            self.request_redraw();
+        }
+
         if let Ok(event) = muda::MenuEvent::receiver().try_recv() {
             self.handle_menu_event(event.id);
         }
@@ -228,68 +233,16 @@ impl ApplicationHandler for App {
                     .extension()
                     .map(|e| e.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
-                let filename = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
 
                 if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
-                    if let Some(loaded) = load_audio_file(&path) {
-                        let world = self.camera.screen_to_world(self.mouse_pos);
-                        let height = 150.0;
-                        let color_idx = self.waveforms.len() % WAVEFORM_COLORS.len();
-                        println!(
-                            "  Loaded: {} ({:.1}s, {} Hz, {} samples/ch)",
-                            filename,
-                            loaded.duration_secs,
-                            loaded.sample_rate,
-                            loaded.left_samples.len(),
-                        );
-                        let left_peaks = Arc::new(WaveformPeaks::build(&loaded.left_samples));
-                        let right_peaks = Arc::new(WaveformPeaks::build(&loaded.right_samples));
-                        let wf_id = new_id();
-                        let wf_data = WaveformView {
-                            audio: Arc::new(AudioData {
-                                left_samples: loaded.left_samples,
-                                right_samples: loaded.right_samples,
-                                left_peaks,
-                                right_peaks,
-                                sample_rate: loaded.sample_rate,
-                                filename: filename.clone(),
-                            }),
-                            position: [world[0] - loaded.width * 0.5, world[1] - height * 0.5],
-                            size: [loaded.width, height],
-                            color: WAVEFORM_COLORS[color_idx],
-                            border_radius: 8.0,
-                            fade_in_px: 0.0,
-                            fade_out_px: 0.0,
-                            fade_in_curve: 0.0,
-                            fade_out_curve: 0.0,
-                            volume: 1.0,
-                            disabled: false,
-                            sample_offset_px: 0.0,
-                            automation: crate::automation::AutomationData::new(),
-                        };
-                        let ac_data = AudioClipData {
-                            samples: loaded.samples,
-                            sample_rate: loaded.sample_rate,
-                            duration_secs: loaded.duration_secs,
-                        };
-                        self.waveforms.insert(wf_id, wf_data.clone());
-                        self.audio_clips.insert(wf_id, ac_data.clone());
-                        self.push_op(crate::operations::Operation::CreateWaveform { id: wf_id, data: wf_data, audio_clip: Some((wf_id, ac_data)) });
-                        self.sync_audio_clips();
-                    } else {
-                        self.toast_manager.push(
-                            format!(
-                                "Cannot load '{}' \u{2014} unsupported or corrupted file",
-                                filename
-                            ),
-                            ui::toast::ToastKind::Error,
-                        );
-                    }
+                    // Reuse the same background-thread path as browser drag-drop.
+                    self.drop_audio_from_browser(&path);
                 } else {
+                    let filename = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
                     self.toast_manager.push(
                         format!(
                             "Cannot load '{}' \u{2014} not a supported audio format",
@@ -3514,6 +3467,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 self.toast_manager.tick();
                 self.update_recording_waveform();
+                self.poll_pending_audio_loads();
                 if let Some(gpu) = &mut self.gpu {
                     let w = gpu.config.width as f32;
                     let h = gpu.config.height as f32;
@@ -3669,6 +3623,7 @@ impl ApplicationHandler for App {
                             }
                             _ => self.cmd_velocity_hover_note,
                         },
+                        self.remote_storage.is_some(),
                     );
                 }
                 if self.toast_manager.has_active() {

@@ -85,6 +85,8 @@ fn default_empty_peaks_arc() -> Arc<WaveformPeaks> {
 pub struct WaveformView {
     #[serde(skip, default = "default_empty_audio")]
     pub audio: Arc<AudioData>,
+    #[serde(default)]
+    pub filename: String,
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub color: [f32; 4],

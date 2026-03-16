@@ -656,6 +656,7 @@ impl Gpu {
         editing_midi_clip: Option<crate::entity_id::EntityId>,
         mouse_world: [f32; 2],
         cmd_velocity_hover_note: Option<(crate::entity_id::EntityId, usize)>,
+        has_remote_storage: bool,
     ) {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
@@ -1674,11 +1675,22 @@ impl Gpu {
             let display_name = if let Some((idx, ref text)) = editing_waveform_name {
                 if idx == *wf_idx {
                     format!("{}|", text)
-                } else {
+                } else if !wf.audio.filename.is_empty() {
                     wf.audio.filename.clone()
+                } else {
+                    wf.filename.clone()
                 }
             } else {
-                wf.audio.filename.clone()
+                let base = if !wf.audio.filename.is_empty() {
+                    wf.audio.filename.clone()
+                } else {
+                    wf.filename.clone()
+                };
+                if wf.disabled && has_remote_storage {
+                    format!("{} (uploading...)", base)
+                } else {
+                    base
+                }
             };
 
             let name_font = 10.0 * scale;

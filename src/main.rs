@@ -18,6 +18,7 @@ mod protocol;
 mod ws_client;
 mod plugins;
 mod regions;
+mod remote_storage;
 mod rendering;
 mod settings;
 mod storage;
@@ -48,6 +49,7 @@ use rendering::{build_instances, build_waveform_vertices, default_objects, Rende
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc;
 
 use indexmap::IndexMap;
 use entity_id::{EntityId, new_id};
@@ -378,6 +380,33 @@ struct MenuState {
     initialized: bool,
 }
 
+/// Result of fetching audio from remote storage on a background thread.
+struct PendingRemoteAudioFetch {
+    wf_id: EntityId,
+    audio: Arc<AudioData>,
+    ac: AudioClipData,
+}
+
+/// Result of decoding an audio file on a background thread.
+/// The wf_id refers to a placeholder waveform already visible on canvas.
+enum PendingAudioLoad {
+    /// Audio decoded — update local display immediately.
+    Decoded {
+        wf_id: EntityId,
+        wf_data: WaveformView,
+        ac_data: AudioClipData,
+    },
+    /// Remote storage save finished — safe to push op to network now.
+    /// Carries the decoded audio data so it can be applied at this point.
+    SyncReady {
+        wf_id: EntityId,
+        wf_data: WaveformView,
+        ac_data: AudioClipData,
+    },
+    /// Load failed — remove placeholder.
+    Failed { wf_id: EntityId },
+}
+
 struct App {
     gpu: Option<Gpu>,
     camera: Camera,
@@ -448,7 +477,14 @@ struct App {
     toast_manager: ui::toast::ToastManager,
     automation_mode: bool,
     active_automation_param: AutomationParam,
+    // Background audio loading
+    pending_audio_tx: mpsc::Sender<PendingAudioLoad>,
+    pending_audio_rx: mpsc::Receiver<PendingAudioLoad>,
+    pending_remote_audio_tx: mpsc::Sender<PendingRemoteAudioFetch>,
+    pending_remote_audio_rx: mpsc::Receiver<PendingRemoteAudioFetch>,
+    pending_audio_loads_count: usize,
     // Collaboration
+    remote_storage: Option<Arc<remote_storage::RemoteStorage>>,
     local_user: user::User,
     remote_users: std::collections::HashMap<user::UserId, user::RemoteUserState>,
     applied_remote_seqs: std::collections::HashSet<(user::UserId, u64)>,
@@ -471,6 +507,8 @@ struct App {
 impl App {
     #[cfg(test)]
     pub(crate) fn new_headless() -> Self {
+        let (pending_audio_tx, pending_audio_rx) = mpsc::channel();
+        let (pending_remote_audio_tx, pending_remote_audio_rx) = mpsc::channel();
         Self {
             gpu: None,
             camera: Camera::new(),
@@ -541,6 +579,12 @@ impl App {
             toast_manager: ui::toast::ToastManager::new(),
             automation_mode: false,
             active_automation_param: AutomationParam::Volume,
+            pending_audio_tx,
+            pending_audio_rx,
+            pending_remote_audio_tx,
+            pending_remote_audio_rx,
+            pending_audio_loads_count: 0,
+            remote_storage: None,
             local_user: user::User {
                 id: entity_id::new_id(),
                 name: "Local".to_string(),
@@ -690,8 +734,9 @@ impl App {
                             left_peaks: Arc::new(WaveformPeaks::empty()),
                             right_peaks: Arc::new(WaveformPeaks::empty()),
                             sample_rate: sw.sample_rate,
-                            filename: sw.filename,
+                            filename: sw.filename.clone(),
                         }),
+                        filename: sw.filename,
                         position: sw.position,
                         size: sw.size,
                         color: sw.color,
@@ -1009,6 +1054,9 @@ impl App {
             })
             .collect();
 
+        let (pending_audio_tx, pending_audio_rx) = mpsc::channel();
+        let (pending_remote_audio_tx, pending_remote_audio_rx) = mpsc::channel();
+
         Self {
             gpu: None,
             camera,
@@ -1079,6 +1127,12 @@ impl App {
             toast_manager: ui::toast::ToastManager::new(),
             automation_mode: false,
             active_automation_param: AutomationParam::Volume,
+            pending_audio_tx,
+            pending_audio_rx,
+            pending_remote_audio_tx,
+            pending_remote_audio_rx,
+            pending_audio_loads_count: 0,
+            remote_storage: None,
             local_user: user::User {
                 id: entity_id::new_id(),
                 name: "Local".to_string(),
@@ -1543,8 +1597,9 @@ impl App {
                     left_peaks: Arc::new(WaveformPeaks::empty()),
                     right_peaks: Arc::new(WaveformPeaks::empty()),
                     sample_rate: sw.sample_rate,
-                    filename: sw.filename,
+                    filename: sw.filename.clone(),
                 }),
+                filename: sw.filename,
                 position: sw.position,
                 size: sw.size,
                 color: sw.color,
@@ -2137,10 +2192,20 @@ impl App {
                     }
                     if let Some(clip) = self.audio_clips.get_mut(&wf_id) {
                         *clip = AudioClipData {
-                            samples: loaded.samples,
+                            samples: loaded.samples.clone(),
                             sample_rate: loaded.sample_rate,
                             duration_secs: loaded.duration_secs,
                         };
+                    }
+                    if let Some(rs) = &self.remote_storage {
+                        let wf_id_str = wf_id.to_string();
+                        // Encode recorded PCM as WAV bytes for remote storage
+                        let wav_bytes = audio::encode_wav_bytes(
+                            &loaded.left_samples,
+                            &loaded.right_samples,
+                            loaded.sample_rate,
+                        );
+                        rs.save_audio(&wf_id_str, &wav_bytes, "wav");
                     }
                     self.sync_audio_clips();
                 }
@@ -2166,6 +2231,7 @@ impl App {
                     sample_rate,
                     filename: "Recording".to_string(),
                 }),
+                filename: "Recording".to_string(),
                 position: [world[0], world[1] - height * 0.5],
                 size: [0.0, height],
                 color: WAVEFORM_COLORS[color_idx],
@@ -3416,6 +3482,7 @@ impl App {
         });
         let left_waveform = WaveformView {
             audio: left_audio,
+            filename: filename.clone(),
             position: pos,
             size: [left_width, size[1]],
             color: orig_color,
@@ -3441,10 +3508,11 @@ impl App {
             left_samples: Arc::new(right_l),
             right_samples: Arc::new(right_r),
             sample_rate,
-            filename,
+            filename: filename.clone(),
         });
         let right_waveform = WaveformView {
             audio: right_audio,
+            filename,
             position: [pos[0] + left_width, pos[1]],
             size: [right_width, size[1]],
             color: orig_color,
@@ -4114,6 +4182,10 @@ impl App {
         println!("Deleted selected items");
     }
 
+    /// Spawn audio loading on a background thread. A placeholder waveform
+    /// (empty audio) is placed on the canvas immediately so the user sees
+    /// feedback. When decoding finishes the placeholder is filled in by
+    /// `poll_pending_audio_loads`.
     fn drop_audio_from_browser(&mut self, path: &std::path::Path) {
         let ext = path
             .extension()
@@ -4124,37 +4196,82 @@ impl App {
             return;
         }
 
-        if let Some(loaded) = load_audio_file(path) {
-            let world = self.camera.screen_to_world(self.mouse_pos);
-            let height = 150.0;
-            let color_idx = self.waveforms.len() % WAVEFORM_COLORS.len();
-            let filename = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
+        let world = self.camera.screen_to_world(self.mouse_pos);
+        let color_idx = self.waveforms.len() % WAVEFORM_COLORS.len();
+        let color = WAVEFORM_COLORS[color_idx];
+        let snap_x = snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm);
+        let wf_id = new_id();
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let height = 150.0;
+        // Probe header for duration so placeholder has correct width.
+        let placeholder_width = audio::probe_audio_duration(&path)
+            .map(|(_, w)| w)
+            .unwrap_or(200.0);
+
+        // Insert an empty placeholder waveform on the canvas immediately.
+        let placeholder = WaveformView {
+            audio: Arc::new(AudioData {
+                left_samples: Arc::new(Vec::new()),
+                right_samples: Arc::new(Vec::new()),
+                left_peaks: Arc::new(WaveformPeaks::empty()),
+                right_peaks: Arc::new(WaveformPeaks::empty()),
+                sample_rate: 0,
+                filename: filename.clone(),
+            }),
+            filename: filename.clone(),
+            position: [snap_x, world[1] - height * 0.5],
+            size: [placeholder_width, height],
+            color,
+            border_radius: 8.0,
+            fade_in_px: 0.0,
+            fade_out_px: 0.0,
+            fade_in_curve: 0.0,
+            fade_out_curve: 0.0,
+            volume: 1.0,
+            disabled: true, // disabled until loaded
+            sample_offset_px: 0.0,
+            automation: AutomationData::new(),
+        };
+        self.waveforms.insert(wf_id, placeholder);
+        self.pending_audio_loads_count += 1;
+        self.mark_dirty();
+
+        let path = path.to_owned();
+        let tx = self.pending_audio_tx.clone();
+        let rs = self.remote_storage.clone();
+
+        std::thread::spawn(move || {
+            let Some(loaded) = load_audio_file(&path) else {
+                eprintln!("Failed to load audio: {}", path.display());
+                let _ = tx.send(PendingAudioLoad::Failed { wf_id });
+                return;
+            };
+
             println!(
                 "  Loaded: {} ({:.1}s, {} Hz, {} samples/ch)",
-                filename,
-                loaded.duration_secs,
-                loaded.sample_rate,
-                loaded.left_samples.len(),
+                filename, loaded.duration_secs, loaded.sample_rate, loaded.left_samples.len(),
             );
+
             let left_peaks = Arc::new(WaveformPeaks::build(&loaded.left_samples));
             let right_peaks = Arc::new(WaveformPeaks::build(&loaded.right_samples));
-            let wf_id = new_id();
+
             let wf_data = WaveformView {
                 audio: Arc::new(AudioData {
-                    left_samples: loaded.left_samples,
-                    right_samples: loaded.right_samples,
-                    left_peaks,
-                    right_peaks,
+                    left_samples: loaded.left_samples.clone(),
+                    right_samples: loaded.right_samples.clone(),
+                    left_peaks: left_peaks.clone(),
+                    right_peaks: right_peaks.clone(),
                     sample_rate: loaded.sample_rate,
-                    filename,
+                    filename: filename.clone(),
                 }),
-                position: [snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm), world[1] - height * 0.5],
+                filename,
+                position: [snap_x, world[1] - height * 0.5],
                 size: [loaded.width, height],
-                color: WAVEFORM_COLORS[color_idx],
+                color,
                 border_radius: 8.0,
                 fade_in_px: 0.0,
                 fade_out_px: 0.0,
@@ -4166,27 +4283,101 @@ impl App {
                 automation: AutomationData::new(),
             };
             let ac_data = AudioClipData {
-                samples: loaded.samples,
+                samples: loaded.samples.clone(),
                 sample_rate: loaded.sample_rate,
                 duration_secs: loaded.duration_secs,
             };
-            self.waveforms.insert(wf_id, wf_data.clone());
-            self.audio_clips.insert(wf_id, ac_data.clone());
-            self.push_op(operations::Operation::CreateWaveform { id: wf_id, data: wf_data, audio_clip: Some((wf_id, ac_data)) });
+
+            if let Some(rs) = &rs {
+                // Remote storage mode: defer waveform display until upload completes.
+                // Do NOT send Decoded — keep the placeholder visible with "uploading..." label.
+                let wf_id_str = wf_id.to_string();
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("wav")
+                    .to_string();
+                let save_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Ok(file_bytes) = std::fs::read(&path) {
+                        rs.save_audio(&wf_id_str, &file_bytes, &ext);
+                    } else {
+                        eprintln!("[BgAudioLoad] Failed to re-read file for remote save: {}", path.display());
+                    }
+                }));
+                match save_result {
+                    Ok(()) => {
+                        println!("[BgAudioLoad] Remote save done for {wf_id}, sending SyncReady");
+                        let _ = tx.send(PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data });
+                    }
+                    Err(e) => {
+                        eprintln!("[BgAudioLoad] Remote save PANICKED for {wf_id}: {e:?}");
+                        // Still send SyncReady so the op gets pushed (data may be missing on remote)
+                        let _ = tx.send(PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data });
+                    }
+                }
+            } else {
+                // Local-only mode: show waveform immediately after decode.
+                let _ = tx.send(PendingAudioLoad::Decoded {
+                    wf_id,
+                    wf_data,
+                    ac_data,
+                });
+            }
+        });
+    }
+
+    /// Called each frame to finalize any background audio loads.
+    /// Replaces placeholder waveforms with the fully-decoded version.
+    fn poll_pending_audio_loads(&mut self) {
+        let mut any = false;
+        while let Ok(load) = self.pending_audio_rx.try_recv() {
+            match load {
+                PendingAudioLoad::Decoded { wf_id, wf_data, ac_data } => {
+                    // Local-only mode: replace placeholder and push op immediately.
+                    self.waveforms.insert(wf_id, wf_data.clone());
+                    self.audio_clips.insert(wf_id, ac_data.clone());
+                    self.push_op(operations::Operation::CreateWaveform {
+                        id: wf_id,
+                        data: wf_data,
+                        audio_clip: Some((wf_id, ac_data)),
+                    });
+                    self.pending_audio_loads_count = self.pending_audio_loads_count.saturating_sub(1);
+                }
+                PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data } => {
+                    // Remote storage upload done — now apply waveform data and broadcast.
+                    self.waveforms.insert(wf_id, wf_data.clone());
+                    self.audio_clips.insert(wf_id, ac_data.clone());
+                    self.push_op(operations::Operation::CreateWaveform {
+                        id: wf_id,
+                        data: wf_data,
+                        audio_clip: Some((wf_id, ac_data)),
+                    });
+                    self.pending_audio_loads_count = self.pending_audio_loads_count.saturating_sub(1);
+                }
+                PendingAudioLoad::Failed { wf_id } => {
+                    // Load failed — remove the placeholder.
+                    self.waveforms.swap_remove(&wf_id);
+                    self.toast_manager.push(
+                        "Failed to load audio file".to_string(),
+                        ui::toast::ToastKind::Error,
+                    );
+                    self.pending_audio_loads_count = self.pending_audio_loads_count.saturating_sub(1);
+                }
+            }
+            any = true;
+        }
+        while let Ok(fetch) = self.pending_remote_audio_rx.try_recv() {
+            if let Some(wf) = self.waveforms.get_mut(&fetch.wf_id) {
+                wf.audio = fetch.audio;
+            }
+            self.audio_clips.insert(fetch.wf_id, fetch.ac);
+            any = true;
+            log::info!("[SYNC] Applied remote audio fetch for waveform {}", fetch.wf_id);
+        }
+        if any {
             self.sync_audio_clips();
-        } else {
-            let filename = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            self.toast_manager.push(
-                format!(
-                    "Cannot load '{}' \u{2014} unsupported or corrupted file",
-                    filename
-                ),
-                ui::toast::ToastKind::Error,
-            );
+            self.mark_dirty();
+            self.request_redraw();
         }
     }
 
@@ -4352,11 +4543,45 @@ fn main() {
         .position(|a| a == "--connect")
         .and_then(|i| std::env::args().nth(i + 1));
 
+    let db_url = std::env::args()
+        .position(|a| a == "--db-url")
+        .and_then(|i| std::env::args().nth(i + 1));
+
+    let project_id = std::env::args()
+        .position(|a| a == "--project")
+        .and_then(|i| std::env::args().nth(i + 1));
+
     let event_loop = EventLoop::new().unwrap();
 
     let mut app = App::new(skip_load);
     let menu_state = build_app_menu(app.storage.as_ref());
     app.menu_state = Some(menu_state);
+
+    if let Some(url) = &db_url {
+        // Reuse existing tokio runtime or create one for remote storage
+        if app.ws_runtime.is_none() {
+            app.ws_runtime = Some(
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime"),
+            );
+        }
+        let rt = std::sync::Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime for remote storage"),
+        );
+        if let Some(rs) = remote_storage::RemoteStorage::connect(url, rt) {
+            let pid = project_id.as_deref().unwrap_or("default");
+            rs.use_project(pid);
+            println!("[RemoteStorage] Connected to {url}, project '{pid}'");
+            app.remote_storage = Some(Arc::new(rs));
+        } else {
+            eprintln!("[RemoteStorage] Failed to connect to {url}");
+        }
+    }
 
     if let Some(url) = connect_url {
         app.connect_to_server(&url);
