@@ -1,3 +1,4 @@
+- feat: show note name label (e.g. C4, D#5) on each MIDI note when editing a clip (23.8k loc)
 - feat: Cmd+C/Cmd+V copy-paste MIDI notes in editing mode, pasting at playhead position (23.7k loc)
 - feat: Cmd+D duplicates MIDI notes as a group, shifting by group span like audio clips (23.5k loc)
 - 2026-03-15: fix: clicking a MIDI note no longer shifts it up by 1 semitone (23.4k loc)

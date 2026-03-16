@@ -2322,59 +2322,6 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
-                        // Cmd+C: copy selected MIDI notes
-                        if matches!(&event.logical_key, Key::Character(ch) if ch.as_ref() == "c") && self.modifiers.super_key() {
-                            if let Some(mc_idx) = self.editing_midi_clip {
-                                if mc_idx < self.midi_clips.len() && !self.selected_midi_notes.is_empty() {
-                                    let notes = &self.midi_clips[mc_idx].notes;
-                                    let min_start = self.selected_midi_notes.iter()
-                                        .filter(|&&ni| ni < notes.len())
-                                        .map(|&ni| notes[ni].start_px)
-                                        .fold(f32::INFINITY, f32::min);
-                                    let mut copied: Vec<midi::MidiNote> = Vec::new();
-                                    for &ni in &self.selected_midi_notes {
-                                        if ni < self.midi_clips[mc_idx].notes.len() {
-                                            let mut n = self.midi_clips[mc_idx].notes[ni].clone();
-                                            n.start_px -= min_start;
-                                            copied.push(n);
-                                        }
-                                    }
-                                    self.clipboard.items.clear();
-                                    self.clipboard.items.push(ClipboardItem::MidiNotes(copied));
-                                    return;
-                                }
-                            }
-                        }
-                        // Cmd+V: paste MIDI notes at playhead
-                        if matches!(&event.logical_key, Key::Character(ch) if ch.as_ref() == "v") && self.modifiers.super_key() {
-                            if let Some(mc_idx) = self.editing_midi_clip {
-                                let midi_notes = self.clipboard.items.iter().find_map(|item| {
-                                    if let ClipboardItem::MidiNotes(notes) = item { Some(notes.clone()) } else { None }
-                                });
-                                if let Some(notes) = midi_notes {
-                                    if mc_idx < self.midi_clips.len() {
-                                        self.push_undo();
-                                        let clip_x = self.midi_clips[mc_idx].position[0];
-                                        let paste_x = self.audio_engine.as_ref()
-                                            .map(|e| (e.position_seconds() * PIXELS_PER_SECOND as f64) as f32)
-                                            .unwrap_or_else(|| self.camera.screen_to_world(self.mouse_pos)[0]);
-                                        let offset = (paste_x - clip_x).max(0.0);
-                                        let mut new_indices: Vec<usize> = Vec::new();
-                                        for n in &notes {
-                                            let mut pasted = n.clone();
-                                            pasted.start_px += offset;
-                                            self.midi_clips[mc_idx].notes.push(pasted);
-                                            new_indices.push(self.midi_clips[mc_idx].notes.len() - 1);
-                                        }
-                                        self.selected_midi_notes = new_indices;
-                                        self.sync_audio_clips();
-                                        self.mark_dirty();
-                                        self.request_redraw();
-                                        return;
-                                    }
-                                }
-                            }
-                        }
                         // Cmd+D: duplicate selected MIDI notes
                         if matches!(&event.logical_key, Key::Character(ch) if ch.as_ref() == "d") && self.modifiers.super_key() {
                             if let Some(mc_idx) = self.editing_midi_clip {
