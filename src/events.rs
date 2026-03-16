@@ -1725,8 +1725,9 @@ impl ApplicationHandler for App {
                                     self.select_area = None;
                                     self.selected.clear();
                                     let mc = &self.midi_clips[idx];
-                                    // Only create notes in the note area, not the velocity lane
-                                    let in_vel_lane = world[1] >= mc.velocity_lane_top();
+                                    // TODO: refactor velocity lane rendering before re-enabling
+                                    // let in_vel_lane = world[1] >= mc.velocity_lane_top();
+                                    let in_vel_lane = false;
                                     let hit_note = midi::hit_test_midi_note_editing(mc, world, &self.camera, true);
                                     if hit_note.is_none() && !in_vel_lane {
                                         self.push_undo();
@@ -1791,44 +1792,45 @@ impl ApplicationHandler for App {
                                         engine.seek_to_seconds(secs);
                                     }
 
-                                    // Check velocity lane divider first (for resizing)
-                                    if midi::hit_test_velocity_divider(&self.midi_clips[mc_idx], world, &self.camera) {
-                                        self.drag = DragState::ResizingVelocityLane {
-                                            clip_idx: mc_idx,
-                                            start_world_y: world[1],
-                                            original_height: self.midi_clips[mc_idx].velocity_lane_height,
-                                        };
-                                        self.update_cursor();
-                                        self.request_redraw();
-                                        return;
-                                    }
+                                    // TODO: refactor velocity lane rendering before re-enabling
+                                    // // Check velocity lane divider first (for resizing)
+                                    // if midi::hit_test_velocity_divider(&self.midi_clips[mc_idx], world, &self.camera) {
+                                    //     self.drag = DragState::ResizingVelocityLane {
+                                    //         clip_idx: mc_idx,
+                                    //         start_world_y: world[1],
+                                    //         original_height: self.midi_clips[mc_idx].velocity_lane_height,
+                                    //     };
+                                    //     self.update_cursor();
+                                    //     self.request_redraw();
+                                    //     return;
+                                    // }
 
-                                    // Check velocity bar
-                                    let vel_hit = midi::hit_test_velocity_bar(&self.midi_clips[mc_idx], world, &self.camera);
-                                    if let Some(note_idx) = vel_hit {
-                                        if self.selected_midi_notes.contains(&note_idx) {
-                                            // already selected
-                                        } else if self.modifiers.shift_key() {
-                                            self.selected_midi_notes.push(note_idx);
-                                        } else {
-                                            self.selected_midi_notes.clear();
-                                            self.selected_midi_notes.push(note_idx);
-                                        }
-                                        self.push_undo();
-                                        let indices = self.selected_midi_notes.clone();
-                                        let velocities: Vec<u8> = indices.iter().map(|&ni| {
-                                            self.midi_clips[mc_idx].notes[ni].velocity
-                                        }).collect();
-                                        self.drag = DragState::DraggingVelocity {
-                                            clip_idx: mc_idx,
-                                            note_indices: indices,
-                                            original_velocities: velocities,
-                                            start_world_y: world[1],
-                                        };
-                                        self.mark_dirty();
-                                        self.request_redraw();
-                                        return;
-                                    }
+                                    // // Check velocity bar
+                                    // let vel_hit = midi::hit_test_velocity_bar(&self.midi_clips[mc_idx], world, &self.camera);
+                                    // if let Some(note_idx) = vel_hit {
+                                    //     if self.selected_midi_notes.contains(&note_idx) {
+                                    //         // already selected
+                                    //     } else if self.modifiers.shift_key() {
+                                    //         self.selected_midi_notes.push(note_idx);
+                                    //     } else {
+                                    //         self.selected_midi_notes.clear();
+                                    //         self.selected_midi_notes.push(note_idx);
+                                    //     }
+                                    //     self.push_undo();
+                                    //     let indices = self.selected_midi_notes.clone();
+                                    //     let velocities: Vec<u8> = indices.iter().map(|&ni| {
+                                    //         self.midi_clips[mc_idx].notes[ni].velocity
+                                    //     }).collect();
+                                    //     self.drag = DragState::DraggingVelocity {
+                                    //         clip_idx: mc_idx,
+                                    //         note_indices: indices,
+                                    //         original_velocities: velocities,
+                                    //         start_world_y: world[1],
+                                    //     };
+                                    //     self.mark_dirty();
+                                    //     self.request_redraw();
+                                    //     return;
+                                    // }
 
                                     // Check if clicking on existing note (editing-aware)
                                     let hit_note = midi::hit_test_midi_note_editing(&self.midi_clips[mc_idx], world, &self.camera, true);

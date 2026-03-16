@@ -53,11 +53,14 @@ impl MidiClip {
     }
 
     pub fn note_area_height(&self, editing: bool) -> f32 {
-        if editing {
-            (self.size[1] - self.velocity_lane_height).max(20.0)
-        } else {
-            self.size[1]
-        }
+        // TODO: refactor velocity lane rendering before re-enabling
+        // if editing {
+        //     (self.size[1] - self.velocity_lane_height).max(20.0)
+        // } else {
+        //     self.size[1]
+        // }
+        let _ = editing;
+        self.size[1]
     }
 
     pub fn velocity_lane_top(&self) -> f32 {

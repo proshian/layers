@@ -215,9 +215,10 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         out.extend(midi::build_midi_note_instances(
             mc, camera, sel_notes, editing,
         ));
-        if editing {
-            out.extend(midi::build_velocity_lane_instances(mc, camera, sel_notes));
-        }
+        // TODO: refactor velocity lane rendering before re-enabling
+        // if editing {
+        //     out.extend(midi::build_velocity_lane_instances(mc, camera, sel_notes));
+        // }
     }
 
     // --- export regions ---
