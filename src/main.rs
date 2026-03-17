@@ -3,7 +3,6 @@ mod automation;
 mod component;
 mod effects;
 mod entity_id;
-mod ephemeral;
 mod events;
 mod gpu;
 mod grid;
@@ -15,7 +14,6 @@ mod operations;
 mod surreal_client;
 mod plugins;
 mod regions;
-mod remote_storage;
 mod settings;
 mod storage;
 mod ui;
@@ -481,7 +479,7 @@ struct App {
     pending_remote_audio_rx: mpsc::Receiver<PendingRemoteAudioFetch>,
     pending_audio_loads_count: usize,
     // Collaboration
-    remote_storage: Option<Arc<remote_storage::RemoteStorage>>,
+    remote_storage: Option<Arc<storage::RemoteStorage>>,
     local_user: user::User,
     remote_users: std::collections::HashMap<user::UserId, user::RemoteUserState>,
     applied_remote_seqs: std::collections::HashSet<(user::UserId, u64)>,
@@ -1175,7 +1173,7 @@ impl App {
             let now = std::time::Instant::now();
             if now.duration_since(self.last_cursor_send).as_millis() >= 25 {
                 let world_pos = self.camera.screen_to_world(self.mouse_pos);
-                self.network.send_ephemeral(crate::ephemeral::EphemeralMessage::CursorMove {
+                self.network.send_ephemeral(crate::user::EphemeralMessage::CursorMove {
                     user_id: self.local_user.id,
                     position: world_pos,
                 });
@@ -2820,7 +2818,7 @@ impl App {
     /// Broadcast a drag preview to remote users (not throttled — called alongside cursor broadcast).
     fn broadcast_drag_preview(&self, preview: crate::user::DragPreview) {
         if self.network.is_connected() {
-            self.network.send_ephemeral(crate::ephemeral::EphemeralMessage::DragUpdate {
+            self.network.send_ephemeral(crate::user::EphemeralMessage::DragUpdate {
                 user_id: self.local_user.id,
                 preview,
             });
@@ -2830,7 +2828,7 @@ impl App {
     /// Broadcast drag end to remote users.
     fn broadcast_drag_end(&self) {
         if self.network.is_connected() {
-            self.network.send_ephemeral(crate::ephemeral::EphemeralMessage::DragEnd {
+            self.network.send_ephemeral(crate::user::EphemeralMessage::DragEnd {
                 user_id: self.local_user.id,
             });
         }
@@ -4565,7 +4563,7 @@ fn main() {
                 .build()
                 .expect("Failed to create tokio runtime for remote storage"),
         );
-        if let Some(rs) = remote_storage::RemoteStorage::connect(url, rt) {
+        if let Some(rs) = storage::RemoteStorage::connect(url, rt) {
             rs.use_project(pid);
             println!("[RemoteStorage] Connected to {url}, project '{pid}'");
             app.remote_storage = Some(Arc::new(rs));

@@ -410,7 +410,7 @@ fn test_network_manager_connected_roundtrip() {
 
     // Simulate ephemeral message roundtrip
     let user_id = new_id();
-    remote_eph_tx.send(crate::ephemeral::EphemeralMessage::CursorMove {
+    remote_eph_tx.send(crate::user::EphemeralMessage::CursorMove {
         user_id,
         position: [100.0, 200.0],
     }).unwrap();
@@ -709,12 +709,12 @@ fn test_committed_op_json_roundtrip() {
 
 #[test]
 fn test_ephemeral_message_json_roundtrip() {
-    let cursor_msg = crate::ephemeral::EphemeralMessage::CursorMove {
+    let cursor_msg = crate::user::EphemeralMessage::CursorMove {
         user_id: new_id(),
         position: [100.0, 200.0],
     };
     let json = serde_json::to_string(&cursor_msg).unwrap();
-    let _: crate::ephemeral::EphemeralMessage = serde_json::from_str(&json).unwrap();
+    let _: crate::user::EphemeralMessage = serde_json::from_str(&json).unwrap();
 }
 
 // ---------------------------------------------------------------------------

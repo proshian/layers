@@ -6,7 +6,7 @@ use surrealdb::Surreal;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::ephemeral::EphemeralMessage;
+use crate::user::EphemeralMessage;
 use crate::network::{NetworkMode, SharedConnectionState};
 use crate::operations::CommittedOp;
 use crate::user::{User, color_for_user_index};

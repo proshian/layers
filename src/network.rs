@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use tokio::sync::mpsc;
 
-use crate::ephemeral::EphemeralMessage;
+use crate::user::EphemeralMessage;
 use crate::operations::CommittedOp;
 
 /// Network mode — offline (local-only) or connected to a server.

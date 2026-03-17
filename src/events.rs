@@ -111,7 +111,7 @@ impl ApplicationHandler for App {
         let ephemeral_msgs = self.network.poll_ephemeral();
         for msg in ephemeral_msgs {
             match msg {
-                crate::ephemeral::EphemeralMessage::CursorMove { user_id, position } => {
+                crate::user::EphemeralMessage::CursorMove { user_id, position } => {
                     if let Some(state) = self.remote_users.get_mut(&user_id) {
                         state.cursor_world = Some(position);
                     } else {
@@ -129,17 +129,17 @@ impl ApplicationHandler for App {
                         });
                     }
                 }
-                crate::ephemeral::EphemeralMessage::DragUpdate { user_id, preview } => {
+                crate::user::EphemeralMessage::DragUpdate { user_id, preview } => {
                     if let Some(state) = self.remote_users.get_mut(&user_id) {
                         state.drag_preview = Some(preview);
                     }
                 }
-                crate::ephemeral::EphemeralMessage::DragEnd { user_id } => {
+                crate::user::EphemeralMessage::DragEnd { user_id } => {
                     if let Some(state) = self.remote_users.get_mut(&user_id) {
                         state.drag_preview = None;
                     }
                 }
-                crate::ephemeral::EphemeralMessage::UserJoined { user } => {
+                crate::user::EphemeralMessage::UserJoined { user } => {
                     self.remote_users.insert(user.id, crate::user::RemoteUserState {
                         user: user.clone(),
                         cursor_world: None,
@@ -147,7 +147,7 @@ impl ApplicationHandler for App {
                         online: true,
                     });
                 }
-                crate::ephemeral::EphemeralMessage::UserLeft { user_id } => {
+                crate::user::EphemeralMessage::UserLeft { user_id } => {
                     self.remote_users.remove(&user_id);
                 }
             }
