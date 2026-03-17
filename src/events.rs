@@ -44,6 +44,32 @@ impl ApplicationHandler for App {
                 .unwrap_or_else(|| document.body().unwrap().into());
             container.append_child(&canvas).ok();
 
+            // Prevent browser from intercepting Ctrl+scroll (used for zoom)
+            window.set_prevent_default(true);
+
+            // Prevent browser from intercepting keyboard shortcuts (Cmd+T, Cmd+, etc.)
+            {
+                use wasm_bindgen::prelude::*;
+                let closure = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+                    if e.meta_key() || e.ctrl_key() {
+                        let key = e.key();
+                        let dominated = matches!(
+                            key.as_str(),
+                            "t" | "p" | "k" | "b" | "," | "r" | "c" | "v" | "d"
+                            | "e" | "l" | "s" | "z" | "1" | "2" | "3" | "4"
+                        );
+                        let shift_combo = e.shift_key() && matches!(key.as_str(), "a" | "z");
+                        if dominated || shift_combo {
+                            e.prevent_default();
+                        }
+                    }
+                });
+                document
+                    .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())
+                    .expect("failed to add keydown listener");
+                closure.forget(); // leak closure to keep it alive
+            }
+
             // Set canvas physical size to fill viewport (CSS 100% on container
             // doesn't set the canvas element's width/height attributes that wgpu reads)
             let dpr = web_window.device_pixel_ratio();
@@ -3401,7 +3427,7 @@ impl ApplicationHandler for App {
                                 };
                                 self.request_redraw();
                             }
-                            "t" => {
+                            "t" | "p" => {
                                 self.context_menu = None;
                                 self.settings_window = None;
                                 self.command_palette = if self.command_palette.is_some() {
@@ -3543,7 +3569,13 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                if self.modifiers.super_key() {
+                let zoom_modifier = if cfg!(target_arch = "wasm32") {
+                    // In browsers, trackpad pinch-to-zoom is reported as ctrl+wheel
+                    self.modifiers.super_key() || self.modifiers.control_key()
+                } else {
+                    self.modifiers.super_key()
+                };
+                if zoom_modifier {
                     let zoom_sensitivity = 0.005;
                     let factor = (1.0 + dy * zoom_sensitivity).clamp(0.5, 2.0);
                     self.camera.zoom_at(self.mouse_pos, factor);
