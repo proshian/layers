@@ -982,8 +982,86 @@ fn test_surreal_json_roundtrip_update_midi_clip() {
 }
 
 // ---------------------------------------------------------------------------
-// Test SurrealDB op JSON roundtrip for CreateMidiClip
+// BPM grid-sync tests
 // ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_bpm_rescales_waveform_positions() {
+    let mut app = App::new_headless();
+    assert_eq!(app.bpm, 120.0);
+
+    // At 120 BPM: pixels_per_beat = PIXELS_PER_SECOND*60/120 = 60px.
+    // Bar 1 starts at beat 0 (0px), bar 2 starts at beat 4 (240px).
+    let id1 = new_id();
+    let id2 = new_id();
+    app.waveforms.insert(id1, make_waveform(0.0, 100.0));   // bar 1
+    app.waveforms.insert(id2, make_waveform(240.0, 100.0)); // bar 2
+
+    // Halve the BPM → scale = 120/60 = 2
+    let op = Operation::SetBpm { before: 120.0, after: 60.0 };
+    op.apply(&mut app);
+
+    assert_eq!(app.bpm, 60.0);
+    // Clip at bar 1 stays at 0
+    assert_eq!(app.waveforms[&id1].position[0], 0.0);
+    // Clip at bar 2 moves to 480px (bar 2 at 60 BPM = beat 4 * 120px/beat)
+    assert_eq!(app.waveforms[&id2].position[0], 480.0);
+    // Audio clip width should NOT be rescaled (audio length is fixed in seconds)
+    assert_eq!(app.waveforms[&id2].size[0], 200.0);
+
+    // Undo by applying the inverse: scale = 60/120 = 0.5
+    op.invert().apply(&mut app);
+
+    assert_eq!(app.bpm, 120.0);
+    assert_eq!(app.waveforms[&id1].position[0], 0.0);
+    assert_eq!(app.waveforms[&id2].position[0], 240.0);
+}
+
+#[test]
+fn test_set_bpm_rescales_midi_clip_and_notes() {
+    let mut app = App::new_headless();
+
+    // Place a MIDI clip at bar 2 (240px at 120 BPM), width = 240px (4 bars).
+    // It contains one note starting at 60px with duration 30px.
+    let id = new_id();
+    let clip = MidiClip {
+        position: [240.0, 50.0],
+        size: [240.0, 100.0],
+        color: [0.5, 0.5, 0.5, 1.0],
+        notes: vec![MidiNote {
+            pitch: 60,
+            start_px: 60.0,
+            duration_px: 30.0,
+            velocity: 100,
+        }],
+        pitch_range: MIDI_CLIP_DEFAULT_PITCH_RANGE,
+        grid_mode: crate::settings::GridMode::default(),
+        triplet_grid: false,
+        velocity_lane_height: 0.0,
+    };
+    app.midi_clips.insert(id, clip);
+
+    // Double the BPM → scale = 120/240 = 0.5
+    let op = Operation::SetBpm { before: 120.0, after: 240.0 };
+    op.apply(&mut app);
+
+    assert_eq!(app.bpm, 240.0);
+    let mc = &app.midi_clips[&id];
+    assert_eq!(mc.position[0], 120.0);  // 240 * 0.5
+    assert_eq!(mc.size[0], 120.0);      // 240 * 0.5 (MIDI clips are beat-based)
+    assert_eq!(mc.notes[0].start_px, 30.0);    // 60 * 0.5
+    assert_eq!(mc.notes[0].duration_px, 15.0); // 30 * 0.5
+
+    // Undo
+    op.invert().apply(&mut app);
+    let mc = &app.midi_clips[&id];
+    assert_eq!(app.bpm, 120.0);
+    assert_eq!(mc.position[0], 240.0);
+    assert_eq!(mc.size[0], 240.0);
+    assert_eq!(mc.notes[0].start_px, 60.0);
+    assert_eq!(mc.notes[0].duration_px, 30.0);
+}
+
 
 #[test]
 fn test_surreal_json_roundtrip_create_midi_clip() {

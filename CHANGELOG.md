@@ -1,3 +1,6 @@
+- fix: BPM change now rescales all clip/region positions to stay locked to the same bar/beat (27.3k loc)
+- 2026-03-17: feat: undo BPM change — push_op(SetBpm) on drag release and text input (27.2k loc)
+- 2026-03-17: feat: universal binary release — `make release` now builds for both Apple Silicon and Intel Macs via lipo (27.2k loc)
 - 2026-03-17: fix: add PWA manifest + service worker so app can be installed standalone, giving full control of Cmd+T/Cmd+, shortcuts (27.2k loc)
 - 2026-03-17: fix: WASM zoom — accept Ctrl+scroll (browser pinch-to-zoom) in addition to Cmd+scroll, set prevent_default on canvas (27.2k loc)
 - 2026-03-17: fix: WASM rendering — fix shader fwidth non-uniform control flow, embed Inter font for WASM, canvas sizing & GPU resize (27.2k loc)

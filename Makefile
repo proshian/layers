@@ -8,7 +8,9 @@ BUNDLE      := build/$(APP_NAME).app
 CONTENTS    := $(BUNDLE)/Contents
 MACOS_DIR   := $(CONTENTS)/MacOS
 RES_DIR     := $(CONTENTS)/Resources
-BINARY      := target/release/layers
+BINARY_ARM  := target/aarch64-apple-darwin/release/layers
+BINARY_X86  := target/x86_64-apple-darwin/release/layers
+BINARY      := target/release/layers-universal
 
 run:
 	@v=$$(cat build_version); v=$$((v + 1)); echo $$v > build_version; echo "build #$$v"
@@ -25,8 +27,11 @@ test-vst3:
 	cargo run --bin test_vst3
 
 release:
-	@echo "Building release binary..."
-	cargo build --release
+	@echo "Building universal release binary (arm64 + x86_64)..."
+	cargo build --release --target aarch64-apple-darwin
+	cargo build --release --target x86_64-apple-darwin
+	@mkdir -p target/release
+	lipo -create "$(BINARY_ARM)" "$(BINARY_X86)" -output "$(BINARY)"
 	@echo "Creating app bundle at $(BUNDLE)..."
 	@rm -rf "$(BUNDLE)"
 	@mkdir -p "$(MACOS_DIR)" "$(RES_DIR)"

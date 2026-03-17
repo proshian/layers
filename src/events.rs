@@ -2261,9 +2261,12 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        if self.dragging_bpm.is_some() {
-                            self.dragging_bpm = None;
+                        if let Some((before_bpm, _)) = self.dragging_bpm.take() {
                             self.bpm = self.bpm.round();
+                            let after = self.bpm;
+                            if (before_bpm - after).abs() > f32::EPSILON {
+                                self.push_op(crate::operations::Operation::SetBpm { before: before_bpm, after });
+                            }
                             self.mark_dirty();
                             self.request_redraw();
                             return;
@@ -2927,7 +2930,12 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Enter) => {
                                 if let Some(text) = self.editing_bpm.take() {
                                     if let Ok(val) = text.parse::<f32>() {
-                                        self.bpm = val.clamp(20.0, 999.0);
+                                        let before = self.bpm;
+                                        let after = val.clamp(20.0, 999.0);
+                                        self.bpm = after;
+                                        if (before - after).abs() > f32::EPSILON {
+                                            self.push_op(crate::operations::Operation::SetBpm { before, after });
+                                        }
                                         self.mark_dirty();
                                     }
                                 }
