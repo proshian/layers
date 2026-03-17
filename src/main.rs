@@ -692,6 +692,40 @@ impl App {
         self.project_dirty = true;
     }
 
+    /// Rescale all time-based X positions and widths by `scale` so that every
+    /// clip/region stays locked to the same bar/beat grid after a BPM change.
+    /// Call this before updating `self.bpm` so that `scale = old_bpm / new_bpm`.
+    pub(crate) fn rescale_clip_positions(&mut self, scale: f32) {
+        for wf in self.waveforms.values_mut() {
+            wf.position[0] *= scale;
+            // size[0] intentionally NOT scaled: audio duration is fixed in seconds.
+        }
+        for mc in self.midi_clips.values_mut() {
+            mc.position[0] *= scale;
+            mc.size[0] *= scale;
+            for note in &mut mc.notes {
+                note.start_px *= scale;
+                note.duration_px *= scale;
+            }
+        }
+        for lr in self.loop_regions.values_mut() {
+            lr.position[0] *= scale;
+            lr.size[0] *= scale;
+        }
+        for er in self.export_regions.values_mut() {
+            er.position[0] *= scale;
+            er.size[0] *= scale;
+        }
+        for ir in self.instrument_regions.values_mut() {
+            ir.position[0] *= scale;
+            ir.size[0] *= scale;
+        }
+        for efr in self.effect_regions.values_mut() {
+            efr.position[0] *= scale;
+            efr.size[0] *= scale;
+        }
+    }
+
     /// Tear down plugin GUIs and instances in the correct order before exit.
     /// GUIs must be destroyed before plugin instances they reference.
     #[cfg(feature = "native")]

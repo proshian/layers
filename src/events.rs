@@ -415,6 +415,11 @@ impl ApplicationHandler for App {
                 if let Some((initial_bpm, initial_y)) = self.dragging_bpm {
                     let dy = initial_y - self.mouse_pos[1];
                     let new_bpm = (initial_bpm + dy * 0.5).clamp(20.0, 999.0);
+                    // Incrementally rescale clips from the current BPM to the new
+                    // one so they stay locked to the grid on every mouse move.
+                    if (self.bpm - new_bpm).abs() > f32::EPSILON {
+                        self.rescale_clip_positions(self.bpm / new_bpm);
+                    }
                     self.bpm = new_bpm;
                     self.mark_dirty();
                     self.request_redraw();
@@ -2262,8 +2267,14 @@ impl ApplicationHandler for App {
                         }
 
                         if let Some((before_bpm, _)) = self.dragging_bpm.take() {
+                            let pre_round = self.bpm;
                             self.bpm = self.bpm.round();
                             let after = self.bpm;
+                            // Apply a tiny rounding correction so clips land exactly on
+                            // the rounded BPM grid (e.g. 139.7 → 140.0).
+                            if (pre_round - after).abs() > f32::EPSILON {
+                                self.rescale_clip_positions(pre_round / after);
+                            }
                             if (before_bpm - after).abs() > f32::EPSILON {
                                 self.push_op(crate::operations::Operation::SetBpm { before: before_bpm, after });
                             }
@@ -2932,8 +2943,9 @@ impl ApplicationHandler for App {
                                     if let Ok(val) = text.parse::<f32>() {
                                         let before = self.bpm;
                                         let after = val.clamp(20.0, 999.0);
-                                        self.bpm = after;
                                         if (before - after).abs() > f32::EPSILON {
+                                            self.rescale_clip_positions(before / after);
+                                            self.bpm = after;
                                             self.push_op(crate::operations::Operation::SetBpm { before, after });
                                         }
                                         self.mark_dirty();

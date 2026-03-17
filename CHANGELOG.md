@@ -1,4 +1,4 @@
-- fix: BPM change now rescales all clip/region positions to stay locked to the same bar/beat (27.3k loc)
+- fix: BPM change (drag + text entry) now rescales all clip/region positions to stay locked to the same bar/beat (27.3k loc)
 - 2026-03-17: feat: undo BPM change — push_op(SetBpm) on drag release and text input (27.2k loc)
 - 2026-03-17: feat: universal binary release — `make release` now builds for both Apple Silicon and Intel Macs via lipo (27.2k loc)
 - 2026-03-17: fix: add PWA manifest + service worker so app can be installed standalone, giving full control of Cmd+T/Cmd+, shortcuts (27.2k loc)

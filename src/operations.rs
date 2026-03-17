@@ -411,39 +411,8 @@ impl Operation {
 
             // --- Global state ---
             Operation::SetBpm { before, after } => {
-                let scale = before / after;
+                app.rescale_clip_positions(before / after);
                 app.bpm = *after;
-                // Rescale all time-based X positions so clips stay locked to
-                // the same bar/beat positions after the tempo change.
-                for wf in app.waveforms.values_mut() {
-                    wf.position[0] *= scale;
-                    // size[0] is intentionally not scaled: audio duration in
-                    // seconds is fixed (it's a real recording, not a beat grid).
-                }
-                for mc in app.midi_clips.values_mut() {
-                    mc.position[0] *= scale;
-                    mc.size[0] *= scale;
-                    for note in &mut mc.notes {
-                        note.start_px *= scale;
-                        note.duration_px *= scale;
-                    }
-                }
-                for lr in app.loop_regions.values_mut() {
-                    lr.position[0] *= scale;
-                    lr.size[0] *= scale;
-                }
-                for er in app.export_regions.values_mut() {
-                    er.position[0] *= scale;
-                    er.size[0] *= scale;
-                }
-                for ir in app.instrument_regions.values_mut() {
-                    ir.position[0] *= scale;
-                    ir.size[0] *= scale;
-                }
-                for efr in app.effect_regions.values_mut() {
-                    efr.position[0] *= scale;
-                    efr.size[0] *= scale;
-                }
             }
 
             // --- Batch ---
