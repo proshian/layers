@@ -26,7 +26,7 @@ impl NetworkMode {
     }
 }
 
-/// Shared connection state that can be updated from the async ws_client task.
+/// Shared connection state that can be updated from the async surreal_client task.
 #[derive(Clone)]
 pub struct SharedConnectionState(pub Arc<AtomicU8>);
 

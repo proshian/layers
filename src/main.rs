@@ -14,8 +14,7 @@ mod midi;
 mod network;
 mod operations;
 mod p2p;
-mod protocol;
-mod ws_client;
+mod surreal_client;
 mod plugins;
 mod regions;
 mod remote_storage;
@@ -491,6 +490,7 @@ struct App {
     network: network::NetworkManager,
     ws_runtime: Option<tokio::runtime::Runtime>,
     connect_url: Option<String>,
+    connect_project_id: Option<String>,
     pending_welcome: Option<tokio::sync::oneshot::Receiver<user::User>>,
     reconnect_attempt: u32,
     last_reconnect_time: Option<std::time::Instant>,
@@ -595,6 +595,7 @@ impl App {
             network: network::NetworkManager::new_offline(),
             ws_runtime: None,
             connect_url: None,
+            connect_project_id: None,
             pending_welcome: None,
             reconnect_attempt: 0,
             last_reconnect_time: None,
@@ -1143,6 +1144,7 @@ impl App {
             network: network::NetworkManager::new_offline(),
             ws_runtime: None,
             connect_url: None,
+            connect_project_id: None,
             pending_welcome: None,
             reconnect_attempt: 0,
             last_reconnect_time: None,
@@ -1184,7 +1186,7 @@ impl App {
         }
     }
 
-    fn connect_to_server(&mut self, url: &str) {
+    fn connect_to_server(&mut self, url: &str, project_id: &str) {
         // Reuse existing runtime or create one
         if self.ws_runtime.is_none() {
             self.ws_runtime = Some(
@@ -1202,8 +1204,9 @@ impl App {
         let (welcome_tx, welcome_rx) = tokio::sync::oneshot::channel();
         let conn_state = mgr.connection_state.clone();
 
-        let _handle = ws_client::spawn_ws_client(
+        let _handle = surreal_client::spawn_surreal_client(
             url.to_string(),
+            project_id.to_string(),
             remote_op_tx,
             remote_op_rx,
             remote_eph_tx,
@@ -1215,8 +1218,9 @@ impl App {
 
         self.network = mgr;
         self.connect_url = Some(url.to_string());
+        self.connect_project_id = Some(project_id.to_string());
         self.pending_welcome = Some(welcome_rx);
-        log::info!("Connecting to relay server at {}", url);
+        log::info!("Connecting to SurrealDB at {}", url);
     }
 
     fn save_project_state(&mut self) {
@@ -4539,10 +4543,6 @@ fn main() {
 
     let skip_load = std::env::args().any(|a| a == "--empty");
 
-    let connect_url = std::env::args()
-        .position(|a| a == "--connect")
-        .and_then(|i| std::env::args().nth(i + 1));
-
     let db_url = std::env::args()
         .position(|a| a == "--db-url")
         .and_then(|i| std::env::args().nth(i + 1));
@@ -4558,15 +4558,9 @@ fn main() {
     app.menu_state = Some(menu_state);
 
     if let Some(url) = &db_url {
-        // Reuse existing tokio runtime or create one for remote storage
-        if app.ws_runtime.is_none() {
-            app.ws_runtime = Some(
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create tokio runtime"),
-            );
-        }
+        let pid = project_id.as_deref().unwrap_or("default");
+
+        // Remote storage connection (separate SurrealDB connection for audio)
         let rt = std::sync::Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -4574,17 +4568,15 @@ fn main() {
                 .expect("Failed to create tokio runtime for remote storage"),
         );
         if let Some(rs) = remote_storage::RemoteStorage::connect(url, rt) {
-            let pid = project_id.as_deref().unwrap_or("default");
             rs.use_project(pid);
             println!("[RemoteStorage] Connected to {url}, project '{pid}'");
             app.remote_storage = Some(Arc::new(rs));
         } else {
             eprintln!("[RemoteStorage] Failed to connect to {url}");
         }
-    }
 
-    if let Some(url) = connect_url {
-        app.connect_to_server(&url);
+        // Real-time sync via SurrealDB live queries
+        app.connect_to_server(url, pid);
     }
 
     event_loop.run_app(&mut app).unwrap();

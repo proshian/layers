@@ -389,7 +389,7 @@ fn test_network_manager_offline_noop() {
 fn test_network_manager_connected_roundtrip() {
     let (mut mgr, remote_op_tx, mut remote_op_rx, remote_eph_tx, mut remote_eph_rx) =
         crate::network::NetworkManager::new_connected();
-    // Simulate the ws_client setting Connected after Welcome
+    // Simulate the surreal_client setting Connected after Welcome
     mgr.connection_state.set(crate::network::NetworkMode::Connected);
     assert!(mgr.is_connected());
 
@@ -683,55 +683,38 @@ fn test_serde_roundtrip_batch() {
 }
 
 // ---------------------------------------------------------------------------
-// Protocol roundtrip tests
+// Op JSON serialization roundtrip tests (used by surreal_client)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_protocol_client_message_roundtrip() {
-    use crate::protocol::ClientMessage;
-
+fn test_committed_op_json_roundtrip() {
     let op = commit_op(Operation::CreateObject {
         id: new_id(),
         data: make_obj(1.0, 2.0),
     });
 
-    let msg = ClientMessage::Op(op);
-    let json = serde_json::to_string(&msg).unwrap();
-    let _: ClientMessage = serde_json::from_str(&json).unwrap();
+    // Simulate surreal_client's serialization: op → JSON string → back
+    let op_json = serde_json::to_string(&op.op).unwrap();
+    let deserialized: Operation = serde_json::from_str(&op_json).unwrap();
+    assert_eq!(deserialized.variant_name(), "CreateObject");
 
-    let eph_msg = ClientMessage::Ephemeral(crate::ephemeral::EphemeralMessage::CursorMove {
-        user_id: new_id(),
-        position: [100.0, 200.0],
+    let bpm_op = commit_op(Operation::SetBpm {
+        before: 120.0,
+        after: 140.0,
     });
-    let json = serde_json::to_string(&eph_msg).unwrap();
-    let _: ClientMessage = serde_json::from_str(&json).unwrap();
-
-    let sync_msg = ClientMessage::RequestSync;
-    let json = serde_json::to_string(&sync_msg).unwrap();
-    let _: ClientMessage = serde_json::from_str(&json).unwrap();
+    let json = serde_json::to_string(&bpm_op.op).unwrap();
+    let deserialized: Operation = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.variant_name(), "SetBpm");
 }
 
 #[test]
-fn test_protocol_server_message_roundtrip() {
-    use crate::protocol::ServerMessage;
-
-    let welcome = ServerMessage::Welcome {
-        user: crate::user::User {
-            id: new_id(),
-            name: "Alice".to_string(),
-            color: [0.5, 0.5, 0.5, 1.0],
-        },
-        room_id: "test-room".to_string(),
+fn test_ephemeral_message_json_roundtrip() {
+    let cursor_msg = crate::ephemeral::EphemeralMessage::CursorMove {
+        user_id: new_id(),
+        position: [100.0, 200.0],
     };
-    let json = serde_json::to_string(&welcome).unwrap();
-    let _: ServerMessage = serde_json::from_str(&json).unwrap();
-
-    let remote_op = ServerMessage::RemoteOp(commit_op(Operation::SetBpm {
-        before: 120.0,
-        after: 140.0,
-    }));
-    let json = serde_json::to_string(&remote_op).unwrap();
-    let _: ServerMessage = serde_json::from_str(&json).unwrap();
+    let json = serde_json::to_string(&cursor_msg).unwrap();
+    let _: crate::ephemeral::EphemeralMessage = serde_json::from_str(&json).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -955,13 +938,11 @@ fn test_two_apps_midi_clip_move_sync() {
 }
 
 // ---------------------------------------------------------------------------
-// Test relay-style JSON transformation for UpdateMidiClip
+// Test SurrealDB op JSON roundtrip for UpdateMidiClip
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_relay_json_roundtrip_update_midi_clip() {
-    use crate::protocol::{ClientMessage, ServerMessage};
-
+fn test_surreal_json_roundtrip_update_midi_clip() {
     let clip_id = new_id();
     let before = MidiClip {
         position: [100.0, 50.0],
@@ -987,44 +968,25 @@ fn test_relay_json_roundtrip_update_midi_clip() {
         after,
     });
 
-    // Step 1: Client serializes as ClientMessage::Op
-    let client_json = serde_json::to_string(&ClientMessage::Op(committed.clone())).unwrap();
+    // Simulate surreal_client: serialize op to JSON string, then back
+    let op_json = serde_json::to_string(&committed.op).unwrap();
+    let deserialized: Operation = serde_json::from_str(&op_json).unwrap();
 
-    // Step 2: Relay parses as generic JSON, extracts "Op" inner, wraps as "RemoteOp"
-    let val: serde_json::Value = serde_json::from_str(&client_json).unwrap();
-    let inner = val.get("Op").expect("should have Op key");
-    let remote_op = serde_json::json!({"RemoteOp": inner});
-    let relay_json = remote_op.to_string();
-
-    // Step 3: Client B deserializes as ServerMessage
-    let server_msg: ServerMessage = serde_json::from_str(&relay_json)
-        .expect("client B should deserialize relay JSON");
-
-    // Step 4: Verify the deserialized op matches
-    match server_msg {
-        ServerMessage::RemoteOp(deserialized) => {
-            assert_eq!(deserialized.seq, committed.seq);
-            assert_eq!(deserialized.user_id, committed.user_id);
-            match &deserialized.op {
-                Operation::UpdateMidiClip { id, after, .. } => {
-                    assert_eq!(*id, clip_id);
-                    assert_eq!(after.position, [300.0, 150.0]);
-                }
-                other => panic!("Expected UpdateMidiClip, got {:?}", other.variant_name()),
-            }
+    match &deserialized {
+        Operation::UpdateMidiClip { id, after, .. } => {
+            assert_eq!(*id, clip_id);
+            assert_eq!(after.position, [300.0, 150.0]);
         }
-        other => panic!("Expected RemoteOp, got {:?}", other),
+        other => panic!("Expected UpdateMidiClip, got {:?}", other.variant_name()),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Test relay JSON roundtrip for ALL op types used during MIDI editing
+// Test SurrealDB op JSON roundtrip for CreateMidiClip
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_relay_json_roundtrip_create_midi_clip() {
-    use crate::protocol::{ClientMessage, ServerMessage};
-
+fn test_surreal_json_roundtrip_create_midi_clip() {
     let clip_id = new_id();
     let clip = MidiClip {
         position: [100.0, 50.0],
@@ -1038,27 +1000,15 @@ fn test_relay_json_roundtrip_create_midi_clip() {
     };
 
     let committed = commit_op(Operation::CreateMidiClip { id: clip_id, data: clip });
-    let client_json = serde_json::to_string(&ClientMessage::Op(committed.clone())).unwrap();
 
-    let val: serde_json::Value = serde_json::from_str(&client_json).unwrap();
-    let inner = val.get("Op").expect("should have Op key");
-    let remote_op = serde_json::json!({"RemoteOp": inner});
-    let relay_json = remote_op.to_string();
+    let op_json = serde_json::to_string(&committed.op).unwrap();
+    let deserialized: Operation = serde_json::from_str(&op_json).unwrap();
 
-    let server_msg: ServerMessage = serde_json::from_str(&relay_json)
-        .expect("client B should deserialize relay JSON for CreateMidiClip");
-
-    match server_msg {
-        ServerMessage::RemoteOp(deserialized) => {
-            assert_eq!(deserialized.seq, committed.seq);
-            match &deserialized.op {
-                Operation::CreateMidiClip { id, data } => {
-                    assert_eq!(*id, clip_id);
-                    assert_eq!(data.position, [100.0, 50.0]);
-                }
-                other => panic!("Expected CreateMidiClip, got {:?}", other.variant_name()),
-            }
+    match &deserialized {
+        Operation::CreateMidiClip { id, data } => {
+            assert_eq!(*id, clip_id);
+            assert_eq!(data.position, [100.0, 50.0]);
         }
-        other => panic!("Expected RemoteOp, got {:?}", other),
+        other => panic!("Expected CreateMidiClip, got {:?}", other.variant_name()),
     }
 }

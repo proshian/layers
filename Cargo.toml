@@ -16,7 +16,6 @@ env_logger = "0.11"
 log = "0.4"
 surrealdb = { version = "3", features = ["kv-rocksdb", "protocol-ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 futures-util = "0.3"
 dirs = "6"
 glyphon = "0.8"
@@ -32,10 +31,6 @@ vst3-gui = { path = "vst3-gui" }
 [[bin]]
 name = "test_vst3"
 path = "src/bin/test_vst3.rs"
-
-[[bin]]
-name = "relay_server"
-path = "src/bin/relay_server.rs"
 
 [[bin]]
 name = "surreal_server"

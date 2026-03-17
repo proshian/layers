@@ -82,7 +82,7 @@ impl ApplicationHandler for App {
 
         // --- Auto-reconnect on disconnect ---
         if self.network.mode() == crate::network::NetworkMode::Disconnected {
-            if let Some(url) = self.connect_url.clone() {
+            if let (Some(url), Some(pid)) = (self.connect_url.clone(), self.connect_project_id.clone()) {
                 let now = std::time::Instant::now();
                 let delay_secs = (1u64 << self.reconnect_attempt.min(5)).min(30);
                 let should_retry = match self.last_reconnect_time {
@@ -93,7 +93,7 @@ impl ApplicationHandler for App {
                     log::info!("Reconnecting (attempt {})...", self.reconnect_attempt + 1);
                     self.last_reconnect_time = Some(now);
                     self.reconnect_attempt += 1;
-                    self.connect_to_server(&url);
+                    self.connect_to_server(&url, &pid);
                 }
             }
         }
