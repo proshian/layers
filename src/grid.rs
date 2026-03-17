@@ -7,6 +7,16 @@ pub(crate) fn pixels_per_beat(bpm: f32) -> f32 {
     PIXELS_PER_SECOND * 60.0 / bpm
 }
 
+pub(crate) fn clip_height(bpm: f32) -> f32 {
+    pixels_per_beat(bpm) * 2.0
+}
+
+/// Snap a world-Y coordinate to the nearest clip-height row boundary.
+pub(crate) fn snap_to_clip_row(world_y: f32, bpm: f32) -> f32 {
+    let h = clip_height(bpm);
+    (world_y / h).floor() * h
+}
+
 /// Musical subdivision levels in beats: 32, 16, 8, 4, 2, 1, 1/2, 1/4, 1/8, 1/16, 1/32
 pub(crate) const BEAT_SUBDIVISIONS: &[f32] = &[
     32.0, 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125,

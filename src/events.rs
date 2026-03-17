@@ -2793,17 +2793,19 @@ impl ApplicationHandler for App {
                                 let snapped_x = snap_to_grid(current[0], &self.settings, self.camera.zoom, self.bpm);
                                 #[cfg(feature = "native")]
                                 if let Some(engine) = &self.audio_engine {
-                                    let secs = snapped_x as f64 / PIXELS_PER_SECOND as f64;
-                                    engine.seek_to_seconds(secs);
+                                    if !engine.is_playing() {
+                                        let secs = snapped_x as f64 / PIXELS_PER_SECOND as f64;
+                                        engine.seek_to_seconds(secs);
+                                    }
                                 }
-                                let (_, sh, _) = self.screen_info();
-                                let world_top = self.camera.screen_to_world([0.0, 0.0])[1];
-                                let world_bottom = self.camera.screen_to_world([0.0, sh])[1];
+                                let h = self.clip_height();
+                                let line_y = grid::snap_to_clip_row(current[1], self.bpm);
                                 let line_w = 2.0 / self.camera.zoom;
                                 self.select_area = Some(SelectArea {
-                                    position: [snapped_x, world_top],
-                                    size: [line_w, world_bottom - world_top],
+                                    position: [snapped_x, line_y],
+                                    size: [line_w, h],
                                 });
+                                self.mark_dirty();
                             } else {
                                 self.selected = targets_in_rect(
                                     &self.objects,
@@ -3460,7 +3462,17 @@ impl ApplicationHandler for App {
                                 #[cfg(feature = "native")]
                                 if let Some(engine) = &self.audio_engine {
                                     if !engine.is_playing() {
-                                        if let Some(sa) = &self.select_area {
+                                        let seek_target = self.selected.first().and_then(|t| {
+                                            if let HitTarget::Waveform(id) = t {
+                                                self.waveforms.get(id).map(|wf| wf.position[0])
+                                            } else {
+                                                None
+                                            }
+                                        });
+                                        if let Some(x) = seek_target {
+                                            let secs = x as f64 / PIXELS_PER_SECOND as f64;
+                                            engine.seek_to_seconds(secs);
+                                        } else if let Some(sa) = &self.select_area {
                                             let secs = sa.position[0] as f64 / PIXELS_PER_SECOND as f64;
                                             engine.seek_to_seconds(secs);
                                         }
@@ -3754,6 +3766,7 @@ impl ApplicationHandler for App {
                     let playhead_world_x = self
                         .audio_engine
                         .as_ref()
+                        .filter(|e| e.is_playing())
                         .map(|e| (e.position_seconds() * PIXELS_PER_SECOND as f64) as f32);
                     #[cfg(not(feature = "native"))]
                     let playhead_world_x: Option<f32> = None;

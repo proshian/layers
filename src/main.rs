@@ -696,6 +696,11 @@ impl App {
         self.project_dirty = true;
     }
 
+    /// Returns the standard clip height for the current BPM.
+    pub(crate) fn clip_height(&self) -> f32 {
+        grid::clip_height(self.bpm)
+    }
+
     /// Rescale all time-based positions and widths by `scale` so that every
     /// clip/region stays locked to the same bar/beat grid after a BPM change.
     /// Call this before updating `self.bpm` so that `scale = old_bpm / new_bpm`.
@@ -2745,7 +2750,7 @@ impl App {
             }
         } else {
             let world = self.last_canvas_click_world;
-            let height = grid::pixels_per_beat(self.bpm) * 2.0;
+            let height = grid::clip_height(self.bpm);
             let color_idx = self.waveforms.len() % WAVEFORM_COLORS.len();
             let sample_rate = self.recorder.as_ref().unwrap().sample_rate();
 
@@ -4834,7 +4839,7 @@ impl App {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let height = grid::pixels_per_beat(self.bpm) * 2.0;
+        let height = grid::clip_height(self.bpm);
         // Probe header for duration so placeholder has correct width.
         let placeholder_width = audio::probe_audio_duration(&path)
             .map(|(_, w)| w)

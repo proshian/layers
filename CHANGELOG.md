@@ -1,3 +1,7 @@
+- feat: playhead indicator Y snaps to clip-height rows like DAW track lanes via `grid::snap_to_clip_row` (28.6k loc)
+- refactor: extract `grid::clip_height(bpm)` — playhead indicator uses same formula as clips, always consistent (28.6k loc)
+- fix: hide playback cursor when not playing — only show white playhead during active playback (28.6k loc)
+- feat: playhead indicator line on empty canvas click — thin blue line at waveform height, spacebar seeks to selected clip start (28.6k loc)
 - fix: camera no longer drifts (false zoom) when changing BPM via drag, text entry, or undo/redo (28.5k loc)
 - fix: BPM drag overlap snapshots now rescale with BPM so overlapping clips keep correct height (28.4k loc)
 - fix: audio clip height and Y positions now scale with BPM changes so clips always span 2 grid beats (28.4k loc)

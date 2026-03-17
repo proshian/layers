@@ -592,14 +592,24 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         let bw = 1.0 / camera.zoom;
         push_border(out, rp, rs, bw, [0.35, 0.65, 1.0, 0.5]);
     } else if let Some(sa) = ctx.select_area {
-        out.push(InstanceRaw {
-            position: sa.position,
-            size: sa.size,
-            color: [0.30, 0.55, 1.0, 0.10],
-            border_radius: 0.0,
-        });
-        let bw = 1.0 / camera.zoom;
-        push_border(out, sa.position, sa.size, bw, [0.35, 0.65, 1.0, 0.5]);
+        let thin_threshold = 4.0 / camera.zoom;
+        if sa.size[0] < thin_threshold {
+            out.push(InstanceRaw {
+                position: sa.position,
+                size: sa.size,
+                color: [0.40, 0.65, 1.0, 1.0],
+                border_radius: 0.0,
+            });
+        } else {
+            out.push(InstanceRaw {
+                position: sa.position,
+                size: sa.size,
+                color: [0.30, 0.55, 1.0, 0.10],
+                border_radius: 0.0,
+            });
+            let bw = 1.0 / camera.zoom;
+            push_border(out, sa.position, sa.size, bw, [0.35, 0.65, 1.0, 0.5]);
+        }
     }
 
     // --- MIDI note selection rectangle (inside editing clip) ---

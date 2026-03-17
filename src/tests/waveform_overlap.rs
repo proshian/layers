@@ -377,7 +377,7 @@ fn test_clip_height_adapts_to_bpm_change() {
     app.bpm = 120.0;
 
     let id = new_id();
-    let initial_height = grid::pixels_per_beat(120.0) * 2.0;
+    let initial_height = grid::clip_height(120.0);
     let initial_y = 100.0;
 
     app.waveforms.insert(id, make_waveform(50.0, initial_y, 200.0));
@@ -390,7 +390,7 @@ fn test_clip_height_adapts_to_bpm_change() {
     app.bpm = 60.0;
 
     let wf = app.waveforms.get(&id).unwrap();
-    let expected_height = grid::pixels_per_beat(60.0) * 2.0;
+    let expected_height = grid::clip_height(60.0);
     assert!(
         (wf.size[1] - expected_height).abs() < 0.01,
         "height should be {} at 60 BPM, got {}",
@@ -408,7 +408,7 @@ fn test_clip_height_adapts_to_bpm_change() {
     app.bpm = 240.0;
 
     let wf = app.waveforms.get(&id).unwrap();
-    let expected_height2 = grid::pixels_per_beat(240.0) * 2.0;
+    let expected_height2 = grid::clip_height(240.0);
     assert!(
         (wf.size[1] - expected_height2).abs() < 0.01,
         "height should be {} at 240 BPM, got {}",
