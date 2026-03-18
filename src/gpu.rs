@@ -10,6 +10,7 @@ use winit::window::Window;
 
 use crate::grid::PIXELS_PER_SECOND;
 use crate::ui::browser;
+use crate::ui::right_window;
 use crate::effects;
 use crate::midi;
 use crate::settings::Settings;
@@ -20,7 +21,7 @@ use crate::ui::context_menu::{
 };
 use crate::ui::palette::{
     CommandPalette, PaletteMode, PaletteRow, COMMANDS, PALETTE_INPUT_HEIGHT, PALETTE_ITEM_HEIGHT,
-    PALETTE_PADDING, PALETTE_SECTION_HEIGHT, PALETTE_WIDTH, gain_to_db,
+    PALETTE_PADDING, PALETTE_SECTION_HEIGHT, PALETTE_WIDTH,
 };
 use crate::ui::plugin_editor;
 use crate::ui::toast;
@@ -666,6 +667,7 @@ impl Gpu {
         mouse_world: [f32; 2],
         cmd_velocity_hover_note: Option<(crate::entity_id::EntityId, usize)>,
         has_remote_storage: bool,
+        right_window: Option<&right_window::RightWindow>,
     ) {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
@@ -709,6 +711,10 @@ impl Gpu {
 
         if let Some(br) = sample_browser {
             overlay_instances.extend(br.build_instances(w, h, self.scale_factor));
+        }
+
+        if let Some(rw) = right_window {
+            overlay_instances.extend(rw.build_instances(w, h, self.scale_factor));
         }
 
         if let Some((_, pos)) = browser_drag_ghost {
@@ -846,6 +852,64 @@ impl Gpu {
             ));
         }
 
+        // Right window text
+        if let Some(rw) = right_window {
+            let (pp, _) = right_window::RightWindow::panel_rect(w, h, scale);
+            let vc = right_window::RightWindow::vol_knob_center_pub(w, h, scale);
+            let pc = right_window::RightWindow::pan_knob_center_pub(w, h, scale);
+            let header_font = 10.0 * scale;
+            let header_line = 14.0 * scale;
+            let label_font = 11.0 * scale;
+            let label_line = 15.0 * scale;
+            let val_font = 12.0 * scale;
+            let val_line = 16.0 * scale;
+            let rw_w = right_window::RIGHT_WINDOW_WIDTH * scale;
+
+            // "INSPECTOR" header label
+            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(header_font, header_line));
+            buf.set_size(&mut self.font_system, Some(rw_w), Some(header_line));
+            buf.set_text(&mut self.font_system, "INSPECTOR", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            text_buffers.push(buf);
+            text_meta.push((pp[0] + 12.0 * scale, 11.0 * scale, TextColor::rgba(120, 140, 170, 200), full_bounds));
+
+            let knob_r = 22.0 * scale;
+
+            // VOL label
+            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
+            buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
+            buf.set_text(&mut self.font_system, "VOL", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            text_buffers.push(buf);
+            text_meta.push((vc[0] - rw_w * 0.5, vc[1] - knob_r - 18.0 * scale, TextColor::rgba(140, 140, 150, 180), full_bounds));
+
+            // VOL value
+            let vol_text = rw.vol_text();
+            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
+            buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
+            buf.set_text(&mut self.font_system, &vol_text, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            text_buffers.push(buf);
+            text_meta.push((vc[0] - rw_w * 0.5, vc[1] + knob_r + 4.0 * scale, TextColor::rgba(200, 200, 210, 220), full_bounds));
+
+            // PAN label
+            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
+            buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
+            buf.set_text(&mut self.font_system, "PAN", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            text_buffers.push(buf);
+            text_meta.push((pc[0] - rw_w * 0.5, pc[1] - knob_r - 18.0 * scale, TextColor::rgba(140, 140, 150, 180), full_bounds));
+
+            // PAN value
+            let pan_text = rw.pan_text();
+            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
+            buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
+            buf.set_text(&mut self.font_system, &pan_text, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            text_buffers.push(buf);
+            text_meta.push((pc[0] - rw_w * 0.5, pc[1] + knob_r + 4.0 * scale, TextColor::rgba(200, 200, 210, 220), full_bounds));
+        }
+
         if let Some(palette) = command_palette {
             let (ppos, _psize) = palette.palette_rect(w, h, scale);
             let margin = PALETTE_PADDING * scale;
@@ -854,9 +918,6 @@ impl Gpu {
             // Search input text (or placeholder)
             let (display_text, search_color) = match palette.mode {
                 PaletteMode::VolumeFader => ("Master Volume", TextColor::rgb(235, 235, 240)),
-                PaletteMode::SampleVolumeFader => {
-                    ("Sample Volume", TextColor::rgb(235, 235, 240))
-                }
                 PaletteMode::PluginPicker | PaletteMode::InstrumentPicker if palette.search_text.is_empty() => {
                     ("Search plugins...", TextColor::rgba(140, 140, 150, 160))
                 }
@@ -952,101 +1013,6 @@ impl Gpu {
                         ppos[0] + margin + pad,
                         rms_y + 8.0 * scale,
                         TextColor::rgba(140, 140, 150, 180),
-                        full_bounds,
-                    ));
-                }
-                PaletteMode::SampleVolumeFader => {
-                    let (tp, ts) = palette.sample_fader_track_rect(w, h, scale);
-
-                    let vol_text = if palette.fader_value < 0.00001 {
-                        "Mute".to_string()
-                    } else {
-                        let db = gain_to_db(palette.fader_value);
-                        if db >= 0.0 {
-                            format!("+{:.1} dB", db)
-                        } else {
-                            format!("{:.1} dB", db)
-                        }
-                    };
-                    let label_font = 14.0 * scale;
-                    let label_line = 18.0 * scale;
-                    let mut buf = TextBuffer::new(
-                        &mut self.font_system,
-                        Metrics::new(label_font, label_line),
-                    );
-                    buf.set_size(
-                        &mut self.font_system,
-                        Some(PALETTE_WIDTH * scale - margin * 2.0),
-                        Some(20.0 * scale),
-                    );
-                    buf.set_text(
-                        &mut self.font_system,
-                        &vol_text,
-                        Attrs::new().family(Family::SansSerif),
-                        Shaping::Advanced,
-                    );
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    let text_x = tp[0] + ts[0] + 30.0 * scale;
-                    let text_y = list_top + 14.0 * scale;
-                    text_meta.push((
-                        text_x,
-                        text_y,
-                        TextColor::rgba(200, 200, 210, 220),
-                        full_bounds,
-                    ));
-
-                    // 0 dB tick label next to the reference line
-                    let zero_db_pos = 60.0 / 66.0;
-                    let zero_db_y = tp[1] + ts[1] * (1.0 - zero_db_pos);
-                    let tick_font = 10.0 * scale;
-                    let tick_line = 14.0 * scale;
-                    let mut buf = TextBuffer::new(
-                        &mut self.font_system,
-                        Metrics::new(tick_font, tick_line),
-                    );
-                    buf.set_size(
-                        &mut self.font_system,
-                        Some(60.0 * scale),
-                        Some(16.0 * scale),
-                    );
-                    buf.set_text(
-                        &mut self.font_system,
-                        "0 dB",
-                        Attrs::new().family(Family::SansSerif),
-                        Shaping::Advanced,
-                    );
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    text_meta.push((
-                        tp[0] + ts[0] + 28.0 * scale,
-                        zero_db_y - tick_line * 0.5,
-                        TextColor::rgba(140, 140, 150, 160),
-                        full_bounds,
-                    ));
-
-                    // +6 dB label at top
-                    let mut buf = TextBuffer::new(
-                        &mut self.font_system,
-                        Metrics::new(tick_font, tick_line),
-                    );
-                    buf.set_size(
-                        &mut self.font_system,
-                        Some(60.0 * scale),
-                        Some(16.0 * scale),
-                    );
-                    buf.set_text(
-                        &mut self.font_system,
-                        "+6",
-                        Attrs::new().family(Family::SansSerif),
-                        Shaping::Advanced,
-                    );
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    text_meta.push((
-                        tp[0] + ts[0] + 28.0 * scale,
-                        tp[1] - tick_line * 0.5,
-                        TextColor::rgba(120, 120, 130, 130),
                         full_bounds,
                     ));
                 }

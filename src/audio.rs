@@ -32,6 +32,7 @@ struct PlaybackClip {
     fade_in_curve: f32,
     fade_out_curve: f32,
     volume: f32,
+    pan: f32,
     buffer_offset_secs: f64,
     volume_automation: Vec<(f32, f32)>,
     pan_automation: Vec<(f32, f32)>,
@@ -254,7 +255,7 @@ impl AudioEngine {
                                         ),
                                     );
                                     let auto_pan = crate::automation::interp_automation(
-                                        norm_t, &clip.pan_automation, 0.5,
+                                        norm_t, &clip.pan_automation, clip.pan,
                                     );
                                     let sample = clip.buffer[source_idx] * fg * clip.volume * auto_vol;
                                     // Constant-power panning
@@ -562,6 +563,7 @@ impl AudioEngine {
         fade_in_curves: &[f32],
         fade_out_curves: &[f32],
         volumes: &[f32],
+        pans: &[f32],
         sample_offsets_px: &[f32],
         volume_automations: &[Vec<(f32, f32)>],
         pan_automations: &[Vec<(f32, f32)>],
@@ -580,6 +582,7 @@ impl AudioEngine {
             let fi_curve = fade_in_curves.get(i).copied().unwrap_or(0.0);
             let fo_curve = fade_out_curves.get(i).copied().unwrap_or(0.0);
             let vol = volumes.get(i).copied().unwrap_or(1.0);
+            let pan = pans.get(i).copied().unwrap_or(0.5);
             let offset_px = sample_offsets_px.get(i).copied().unwrap_or(0.0);
             let offset_secs = offset_px as f64 / PIXELS_PER_SECOND as f64;
             let visible_duration = size[0] as f64 / PIXELS_PER_SECOND as f64;
@@ -597,6 +600,7 @@ impl AudioEngine {
                 fade_in_curve: fi_curve,
                 fade_out_curve: fo_curve,
                 volume: vol,
+                pan,
                 buffer_offset_secs: offset_secs,
                 volume_automation: vol_auto,
                 pan_automation: pan_auto,

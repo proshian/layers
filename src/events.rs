@@ -439,6 +439,47 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // Right window knob drag
+                {
+                    let (_sw, _sh, scale) = self.screen_info();
+                    let is_vol_drag = self.right_window.as_ref().map_or(false, |rw| rw.vol_dragging);
+                    let is_pan_drag = self.right_window.as_ref().map_or(false, |rw| rw.pan_dragging);
+                    if is_vol_drag || is_pan_drag {
+                        let (before, wf_id) = if let Some(rw) = &self.right_window {
+                            let wf_id = rw.waveform_id;
+                            let before = self.waveforms.get(&wf_id).cloned();
+                            (before, wf_id)
+                        } else {
+                            (None, crate::entity_id::EntityId::default())
+                        };
+                        if let (Some(before_wf), Some(rw)) = (before, self.right_window.as_mut()) {
+                            if is_vol_drag {
+                                let new_vol = ui::right_window::RightWindow::drag_vol_delta(
+                                    rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
+                                );
+                                rw.volume = new_vol;
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.volume = new_vol;
+                                }
+                            } else {
+                                let new_pan = ui::right_window::RightWindow::drag_pan_delta(
+                                    rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
+                                );
+                                rw.pan = new_pan;
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.pan = new_pan;
+                                }
+                            }
+                            let _ = before_wf;
+                        }
+                        self.mark_dirty();
+                        #[cfg(feature = "native")]
+                        self.sync_audio_clips();
+                        self.request_redraw();
+                        return;
+                    }
+                }
+
                 {
                     let is_dragging_fader = self
                         .command_palette
@@ -447,25 +488,11 @@ impl ApplicationHandler for App {
                     if is_dragging_fader {
                         let (sw, sh, scale) = self.screen_info();
                         if let Some(p) = &mut self.command_palette {
-                            match p.mode {
-                                PaletteMode::SampleVolumeFader => {
-                                    let my = self.mouse_pos[1];
-                                    p.sample_fader_drag(my, sw, sh, scale);
-                                    if let Some(idx) = p.fader_target_waveform {
-                                        if let Some(wf) = self.waveforms.get_mut(&idx) {
-                                            wf.volume = p.fader_value;
-                                            self.sync_audio_clips();
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    let mx = self.mouse_pos[0];
-                                    p.fader_drag(mx, sw, sh, scale);
-                                    #[cfg(feature = "native")]
-                                    if let Some(engine) = &self.audio_engine {
-                                        engine.set_master_volume(p.fader_value);
-                                    }
-                                }
+                            let mx = self.mouse_pos[0];
+                            p.fader_drag(mx, sw, sh, scale);
+                            #[cfg(feature = "native")]
+                            if let Some(engine) = &self.audio_engine {
+                                engine.set_master_volume(p.fader_value);
                             }
                         }
                         self.request_redraw();
@@ -891,6 +918,7 @@ impl ApplicationHandler for App {
                                     rp,
                                     rs,
                                 );
+                                self.update_right_window();
                             }
                         }
                         if let DragState::MovingMidiNote { clip_id, note_indices, offsets, start_world, .. } = &self.drag {
@@ -1437,6 +1465,42 @@ impl ApplicationHandler for App {
                             return;
                         }
 
+                        // Right window knob mouse down
+                        if let Some(rw) = &self.right_window {
+                            let (sw, sh, scale) = self.screen_info();
+                            let (pp, ps) = ui::right_window::RightWindow::panel_rect(sw, sh, scale);
+                            let in_panel = self.mouse_pos[0] >= pp[0] && self.mouse_pos[0] <= pp[0] + ps[0];
+                            if in_panel {
+                                let wf_id = rw.waveform_id;
+                                let hit_vol = rw.hit_test_vol_knob(self.mouse_pos, sw, sh, scale);
+                                let hit_pan = rw.hit_test_pan_knob(self.mouse_pos, sw, sh, scale);
+                                if hit_vol {
+                                    let start_value = ui::palette::gain_to_fader_pos(rw.volume);
+                                    if let Some(rw) = &mut self.right_window {
+                                        rw.vol_dragging = true;
+                                        rw.drag_start_y = self.mouse_pos[1];
+                                        rw.drag_start_value = start_value;
+                                    }
+                                    let _ = wf_id;
+                                    self.request_redraw();
+                                    return;
+                                } else if hit_pan {
+                                    let start_value = rw.pan;
+                                    if let Some(rw) = &mut self.right_window {
+                                        rw.pan_dragging = true;
+                                        rw.drag_start_y = self.mouse_pos[1];
+                                        rw.drag_start_value = start_value;
+                                    }
+                                    let _ = wf_id;
+                                    self.request_redraw();
+                                    return;
+                                }
+                                // Click inside panel but not on knob - don't propagate
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+
                         if self.context_menu.is_some() {
                             let (sw, sh, scale) = self.screen_info();
                             let inside = self
@@ -1470,7 +1534,7 @@ impl ApplicationHandler for App {
                             let is_fader = self
                                 .command_palette
                                 .as_ref()
-                                .map_or(false, |p| matches!(p.mode, PaletteMode::VolumeFader | PaletteMode::SampleVolumeFader));
+                                .map_or(false, |p| matches!(p.mode, PaletteMode::VolumeFader));
 
                             if is_fader {
                                 if inside {
@@ -1552,7 +1616,7 @@ impl ApplicationHandler for App {
 
                                 match click_result {
                                     Some(ClickResult::Action(action)) => {
-                                        if matches!(action, CommandAction::SetMasterVolume | CommandAction::SetSampleVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
+                                        if matches!(action, CommandAction::SetMasterVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
                                             self.execute_command(action);
                                         } else {
                                             self.command_palette = None;
@@ -2276,6 +2340,7 @@ impl ApplicationHandler for App {
                                 } else {
                                     self.selected.clear();
                                     self.selected.push(target);
+                                    self.update_right_window();
                                 }
                                 self.begin_move_selection(world, self.modifiers.alt_key());
                             }
@@ -2289,6 +2354,40 @@ impl ApplicationHandler for App {
                     }
 
                     ElementState::Released => {
+                        // Finish right window knob drag
+                        {
+                            let is_vol_drag = self.right_window.as_ref().map_or(false, |rw| rw.vol_dragging);
+                            let is_pan_drag = self.right_window.as_ref().map_or(false, |rw| rw.pan_dragging);
+                            if is_vol_drag || is_pan_drag {
+                                if let Some(rw) = &mut self.right_window {
+                                    rw.vol_dragging = false;
+                                    rw.pan_dragging = false;
+                                }
+                                let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
+                                if let Some(wf_id) = wf_id {
+                                    if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                        // We need the before state - use a snapshot approach
+                                        // The before state is approximately the drag start values reconstructed
+                                        let mut before = after.clone();
+                                        if let Some(rw) = &self.right_window {
+                                            if is_vol_drag {
+                                                before.volume = ui::palette::fader_pos_to_gain(rw.drag_start_value);
+                                            } else {
+                                                before.pan = rw.drag_start_value;
+                                            }
+                                        }
+                                        self.push_op(crate::operations::Operation::UpdateWaveform {
+                                            id: wf_id,
+                                            before,
+                                            after,
+                                        });
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+
                         // Finish plugin editor slider drag
                         if let Some(pe) = &mut self.plugin_editor {
                             if pe.dragging_slider.is_some() {
@@ -2827,6 +2926,7 @@ impl ApplicationHandler for App {
                         }
 
                         self.drag = DragState::None;
+                        self.update_right_window();
                         self.sync_audio_clips();
                         self.update_hover();
                         self.request_redraw();
@@ -3208,50 +3308,6 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        if matches!(fader_mode, Some(PaletteMode::SampleVolumeFader)) {
-                            match &event.logical_key {
-                                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Enter) => {
-                                    self.command_palette = None;
-                                    self.request_redraw();
-                                    return;
-                                }
-                                Key::Named(NamedKey::ArrowUp) => {
-                                    if let Some(p) = &mut self.command_palette {
-                                        let db = if p.fader_value < 0.00001 { -60.0 } else { gain_to_db(p.fader_value) };
-                                        let new_db = (db + 1.0).min(6.0);
-                                        p.fader_value = db_to_gain(new_db);
-                                        if let Some(idx) = p.fader_target_waveform {
-                                            if let Some(wf) = self.waveforms.get_mut(&idx) {
-                                                wf.volume = p.fader_value;
-                                                self.sync_audio_clips();
-                                            }
-                                        }
-                                    }
-                                    self.request_redraw();
-                                    return;
-                                }
-                                Key::Named(NamedKey::ArrowDown) => {
-                                    if let Some(p) = &mut self.command_palette {
-                                        let db = if p.fader_value < 0.00001 { -60.0 } else { gain_to_db(p.fader_value) };
-                                        let new_db = db - 1.0;
-                                        p.fader_value = if new_db <= -60.0 { 0.0 } else { db_to_gain(new_db) };
-                                        if let Some(idx) = p.fader_target_waveform {
-                                            if let Some(wf) = self.waveforms.get_mut(&idx) {
-                                                wf.volume = p.fader_value;
-                                                self.sync_audio_clips();
-                                            }
-                                        }
-                                    }
-                                    self.request_redraw();
-                                    return;
-                                }
-                                _ => {
-                                    self.request_redraw();
-                                    return;
-                                }
-                            }
-                        }
-
                         if matches!(fader_mode, Some(PaletteMode::PluginPicker | PaletteMode::InstrumentPicker)) {
                             match &event.logical_key {
                                 Key::Named(NamedKey::Escape) => {
@@ -3371,7 +3427,7 @@ impl ApplicationHandler for App {
                                     .as_ref()
                                     .and_then(|p| p.selected_action());
                                 if let Some(a) = action {
-                                    if matches!(a, CommandAction::SetMasterVolume | CommandAction::SetSampleVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
+                                    if matches!(a, CommandAction::SetMasterVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
                                         self.execute_command(a);
                                     } else {
                                         self.command_palette = None;
@@ -3451,6 +3507,7 @@ impl ApplicationHandler for App {
                     match &event.logical_key {
                         Key::Named(NamedKey::Escape) => {
                             self.selected.clear();
+                            self.update_right_window();
                             self.select_area = None;
                             self.request_redraw();
                         }
@@ -3929,6 +3986,7 @@ impl ApplicationHandler for App {
                             _ => self.cmd_velocity_hover_note,
                         },
                         self.remote_storage.is_some(),
+                        self.right_window.as_ref(),
                     );
                 }
                 if self.toast_manager.has_active() {

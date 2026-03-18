@@ -38,6 +38,7 @@ fn make_waveform(x: f32, y: f32) -> WaveformView {
         fade_in_curve: 0.5,
         fade_out_curve: 0.5,
         volume: 1.0,
+        pan: 0.5,
         disabled: false,
         sample_offset_px: 0.0,
         automation: AutomationData::new(),

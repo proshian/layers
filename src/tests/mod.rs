@@ -1,5 +1,6 @@
 mod automation;
 mod browser;
+mod right_window;
 mod history;
 mod hit_testing;
 mod midi_and_instruments;

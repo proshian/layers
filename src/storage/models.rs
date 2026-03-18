@@ -56,6 +56,7 @@ surreal_derive! {
         pub fade_out_curve: f32,
         pub sample_rate: u32,
         pub volume: f32,
+        pub pan: f32,
         pub disabled: bool,
         pub sample_offset_px: f32,
         pub automation_volume: Vec<[f32; 2]>,

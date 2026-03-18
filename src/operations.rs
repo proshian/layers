@@ -464,6 +464,7 @@ impl App {
             inverse.apply(self);
             self.op_redo_stack.push(committed);
             self.selected.clear();
+            self.update_right_window();
             self.mark_dirty();
             self.sync_audio_clips();
             self.sync_loop_region();
@@ -477,6 +478,7 @@ impl App {
             committed.op.apply(self);
             self.op_undo_stack.push(committed);
             self.selected.clear();
+            self.update_right_window();
             self.mark_dirty();
             self.sync_audio_clips();
             self.sync_loop_region();

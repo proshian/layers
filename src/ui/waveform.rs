@@ -109,9 +109,15 @@ pub struct WaveformView {
     pub fade_in_curve: f32,
     pub fade_out_curve: f32,
     pub volume: f32,
+    #[serde(default = "default_pan")]
+    pub pan: f32,
     pub disabled: bool,
     pub sample_offset_px: f32,
     pub automation: AutomationData,
+}
+
+fn default_pan() -> f32 {
+    0.5
 }
 
 fn default_empty_audio() -> Arc<AudioData> {

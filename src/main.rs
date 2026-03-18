@@ -65,7 +65,7 @@ use settings::GridMode;
 use ui::context_menu::{ContextMenu, MenuContext};
 use ui::palette::{
     CommandAction, CommandPalette, PaletteMode, PaletteRow, PluginPickerEntry, COMMANDS,
-    PALETTE_ITEM_HEIGHT, db_to_gain, gain_to_db,
+    PALETTE_ITEM_HEIGHT,
 };
 pub(crate) use ui::waveform::WaveformView;
 use ui::waveform::{AudioData, WaveformPeaks, WaveformVertex};
@@ -543,6 +543,7 @@ struct App {
     toast_manager: ui::toast::ToastManager,
     automation_mode: bool,
     active_automation_param: AutomationParam,
+    right_window: Option<ui::right_window::RightWindow>,
     // Background audio loading
     pending_audio_tx: mpsc::Sender<PendingAudioLoad>,
     pending_audio_rx: mpsc::Receiver<PendingAudioLoad>,
@@ -649,6 +650,7 @@ impl App {
             toast_manager: ui::toast::ToastManager::new(),
             automation_mode: false,
             active_automation_param: AutomationParam::Volume,
+            right_window: None,
             pending_audio_tx,
             pending_audio_rx,
             pending_remote_audio_tx,
@@ -896,6 +898,7 @@ impl App {
                         fade_in_curve: sw.fade_in_curve,
                         fade_out_curve: sw.fade_out_curve,
                         volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
+                        pan: sw.pan,
                         disabled: sw.disabled,
                         sample_offset_px: sw.sample_offset_px,
                         automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
@@ -1280,6 +1283,7 @@ impl App {
             toast_manager: ui::toast::ToastManager::new(),
             automation_mode: false,
             active_automation_param: AutomationParam::Volume,
+            right_window: None,
             pending_audio_tx,
             pending_audio_rx,
             pending_remote_audio_tx,
@@ -1455,6 +1459,7 @@ impl App {
                     fade_out_curve: wf.fade_out_curve,
                     sample_rate: wf.audio.sample_rate,
                     volume: wf.volume,
+                    pan: wf.pan,
                     disabled: wf.disabled,
                     sample_offset_px: wf.sample_offset_px,
                     automation_volume: wf.automation.volume_lane().points.iter().map(|p| [p.t, p.value]).collect(),
@@ -1776,6 +1781,7 @@ impl App {
                 fade_in_curve: sw.fade_in_curve,
                 fade_out_curve: sw.fade_out_curve,
                 volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
+                pan: sw.pan,
                 disabled: sw.disabled,
                 sample_offset_px: sw.sample_offset_px,
                 automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
@@ -2417,6 +2423,24 @@ impl App {
         }
     }
 
+    pub(crate) fn update_right_window(&mut self) {
+        if let Some(HitTarget::Waveform(id)) = self.selected.first().copied() {
+            if let Some(wf) = self.waveforms.get(&id) {
+                self.right_window = Some(ui::right_window::RightWindow {
+                    waveform_id: id,
+                    volume: wf.volume,
+                    pan: wf.pan,
+                    vol_dragging: false,
+                    pan_dragging: false,
+                    drag_start_y: 0.0,
+                    drag_start_value: 0.0,
+                });
+                return;
+            }
+        }
+        self.right_window = None;
+    }
+
     #[cfg(feature = "native")]
     fn sync_audio_clips(&self) {
         if let Some(engine) = &self.audio_engine {
@@ -2428,6 +2452,7 @@ impl App {
             let mut fade_in_curves: Vec<f32> = Vec::new();
             let mut fade_out_curves: Vec<f32> = Vec::new();
             let mut volumes: Vec<f32> = Vec::new();
+            let mut pans: Vec<f32> = Vec::new();
             let mut sample_offsets: Vec<f32> = Vec::new();
             let mut vol_autos: Vec<Vec<(f32, f32)>> = Vec::new();
             let mut pan_autos: Vec<Vec<(f32, f32)>> = Vec::new();
@@ -2448,6 +2473,7 @@ impl App {
                 fade_in_curves.push(wf.fade_in_curve);
                 fade_out_curves.push(wf.fade_out_curve);
                 volumes.push(wf.volume);
+                pans.push(wf.pan);
                 sample_offsets.push(wf.sample_offset_px);
                 vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
                 pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
@@ -2471,6 +2497,7 @@ impl App {
                                 fade_in_curves.push(wf.fade_in_curve);
                                 fade_out_curves.push(wf.fade_out_curve);
                                 volumes.push(wf.volume);
+                                pans.push(wf.pan);
                                 sample_offsets.push(wf.sample_offset_px);
                                 vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
                                 pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
@@ -2481,7 +2508,7 @@ impl App {
             }
 
             let owned_clips: Vec<AudioClipData> = clips.iter().map(|c| (*c).clone()).collect();
-            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &sample_offsets, &vol_autos, &pan_autos);
+            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos);
 
             let regions: Vec<audio::AudioEffectRegion> = self
                 .effect_regions
@@ -2774,6 +2801,7 @@ impl App {
                 fade_in_curve: 0.0,
                 fade_out_curve: 0.0,
                 volume: 1.0,
+                pan: 0.5,
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),
@@ -3668,27 +3696,6 @@ impl App {
                 self.request_redraw();
                 return;
             }
-            CommandAction::SetSampleVolume => {
-                let selected_wf = self.selected.iter().find_map(|t| {
-                    if let HitTarget::Waveform(i) = t {
-                        Some(*i)
-                    } else {
-                        None
-                    }
-                });
-                if let Some(wf_id) = selected_wf {
-                    if let Some(wf) = self.waveforms.get(&wf_id) {
-                        if let Some(p) = &mut self.command_palette {
-                            p.mode = PaletteMode::SampleVolumeFader;
-                            p.fader_value = wf.volume;
-                            p.fader_target_waveform = Some(wf_id);
-                            p.search_text.clear();
-                        }
-                        self.request_redraw();
-                        return;
-                    }
-                }
-            }
             CommandAction::CreateComponent => {
                 self.create_component_from_selection();
             }
@@ -4099,6 +4106,7 @@ impl App {
             fade_in_curve: orig_fade_in_curve,
             fade_out_curve: 0.0,
             volume: orig_volume,
+            pan: 0.5,
             disabled: false,
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
@@ -4129,6 +4137,7 @@ impl App {
             fade_in_curve: 0.0,
             fade_out_curve: orig_fade_out_curve,
             volume: orig_volume,
+            pan: 0.5,
             disabled: false,
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
@@ -4865,6 +4874,7 @@ impl App {
             fade_in_curve: 0.0,
             fade_out_curve: 0.0,
             volume: 1.0,
+            pan: 0.5,
             disabled: true, // disabled until loaded
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
@@ -4912,6 +4922,7 @@ impl App {
                 fade_in_curve: 0.0,
                 fade_out_curve: 0.0,
                 volume: 1.0,
+                pan: 0.5,
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),
