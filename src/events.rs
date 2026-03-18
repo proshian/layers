@@ -1783,6 +1783,21 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        // --- fade handle drag (checked before edge resize: fade handle sits at top corners) ---
+                        if let Some((wf_idx, is_fade_in)) =
+                            hit_test_fade_handle(&self.waveforms, world, &self.camera)
+                        {
+                            let before = self.waveforms[&wf_idx].clone();
+                            self.drag = DragState::DraggingFade {
+                                waveform_id: wf_idx,
+                                is_fade_in,
+                                before,
+                            };
+                            self.update_cursor();
+                            self.request_redraw();
+                            return;
+                        }
+
                         // --- waveform edge resize ---
                         match hit_test_waveform_edge(&self.waveforms, world, &self.camera) {
                             WaveformEdgeHover::LeftEdge(i) | WaveformEdgeHover::RightEdge(i) => {
@@ -1902,21 +1917,6 @@ impl ApplicationHandler for App {
                                     return;
                                 }
                             }
-                        }
-
-                        // --- fade handle drag ---
-                        if let Some((wf_idx, is_fade_in)) =
-                            hit_test_fade_handle(&self.waveforms, world, &self.camera)
-                        {
-                            let before = self.waveforms[&wf_idx].clone();
-                            self.drag = DragState::DraggingFade {
-                                waveform_id: wf_idx,
-                                is_fade_in,
-                                before,
-                            };
-                            self.update_cursor();
-                            self.request_redraw();
-                            return;
                         }
 
                         // --- fade curve shape drag ---

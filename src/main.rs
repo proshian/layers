@@ -3113,7 +3113,12 @@ impl App {
             }
         }
         let world = self.camera.screen_to_world(self.mouse_pos);
-        self.waveform_edge_hover = hit_test_waveform_edge(&self.waveforms, world, &self.camera);
+        self.fade_handle_hovered = hit_test_fade_handle(&self.waveforms, world, &self.camera);
+        self.waveform_edge_hover = if self.fade_handle_hovered.is_none() {
+            hit_test_waveform_edge(&self.waveforms, world, &self.camera)
+        } else {
+            WaveformEdgeHover::None
+        };
         self.midi_note_edge_hover = if let Some(mc_id) = self.editing_midi_clip {
             if let Some(mc) = self.midi_clips.get(&mc_id) {
                 matches!(
@@ -3159,11 +3164,6 @@ impl App {
             } else {
                 None
             }
-        } else {
-            None
-        };
-        self.fade_handle_hovered = if self.waveform_edge_hover == WaveformEdgeHover::None {
-            hit_test_fade_handle(&self.waveforms, world, &self.camera)
         } else {
             None
         };

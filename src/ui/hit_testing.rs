@@ -92,7 +92,7 @@ pub(crate) fn canonical_rect(a: [f32; 2], b: [f32; 2]) -> ([f32; 2], [f32; 2]) {
     ([x, y], [w, h])
 }
 
-pub(crate) const WAVEFORM_EDGE_HIT_PX: f32 = 5.0;
+pub(crate) const WAVEFORM_EDGE_HIT_PX: f32 = 20.0;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum WaveformEdgeHover {
@@ -107,20 +107,39 @@ pub(crate) fn hit_test_waveform_edge(
     camera: &Camera,
 ) -> WaveformEdgeHover {
     let margin = WAVEFORM_EDGE_HIT_PX / camera.zoom;
+    // Collect all candidates: (dist, cursor_inside_clip, result)
+    // Prefer candidates where cursor is inside the clip body, then by distance.
+    let mut best: Option<(f32, bool, WaveformEdgeHover)> = None;
+
     for (&id, wf) in waveforms.iter().rev() {
         if world_pos[1] < wf.position[1] || world_pos[1] > wf.position[1] + wf.size[1] {
             continue;
         }
         let left_edge = wf.position[0];
         let right_edge = wf.position[0] + wf.size[0];
-        if (world_pos[0] - left_edge).abs() < margin {
-            return WaveformEdgeHover::LeftEdge(id);
-        }
-        if (world_pos[0] - right_edge).abs() < margin {
-            return WaveformEdgeHover::RightEdge(id);
+        let cursor_inside = world_pos[0] >= left_edge && world_pos[0] <= right_edge;
+
+        let left_dist = (world_pos[0] - left_edge).abs();
+        let right_dist = (world_pos[0] - right_edge).abs();
+
+        for (dist, hover) in [
+            (left_dist, WaveformEdgeHover::LeftEdge(id)),
+            (right_dist, WaveformEdgeHover::RightEdge(id)),
+        ] {
+            if dist >= margin {
+                continue;
+            }
+            let better = match best {
+                None => true,
+                Some((bd, bi, _)) => (cursor_inside && !bi) || (cursor_inside == bi && dist < bd),
+            };
+            if better {
+                best = Some((dist, cursor_inside, hover));
+            }
         }
     }
-    WaveformEdgeHover::None
+
+    best.map(|(_, _, result)| result).unwrap_or(WaveformEdgeHover::None)
 }
 
 /// Returns (waveform_id, is_fade_in) if the cursor is over a fade handle.
@@ -129,8 +148,7 @@ pub(crate) fn hit_test_fade_handle(
     world_pos: [f32; 2],
     camera: &Camera,
 ) -> Option<(EntityId, bool)> {
-    let handle_sz = ui::waveform::FADE_HANDLE_SIZE / camera.zoom;
-    let hit_margin = handle_sz * 0.8;
+    let hit_margin = 30.0;
     for (&id, wf) in waveforms.iter().rev() {
         let fi_cx = wf.position[0] + wf.fade_in_px;
         let fi_cy = wf.position[1];
