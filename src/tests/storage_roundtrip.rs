@@ -160,6 +160,7 @@ fn test_waveform_filename_survives_serde_roundtrip() {
         fade_out_curve: 0.0,
         volume: 1.0,
         pan: 0.5,
+        pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,
         automation: AutomationData::new(),

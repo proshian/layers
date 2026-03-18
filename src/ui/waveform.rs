@@ -111,6 +111,8 @@ pub struct WaveformView {
     pub volume: f32,
     #[serde(default = "default_pan")]
     pub pan: f32,
+    #[serde(default)]
+    pub pitch_semitones: f32,
     pub disabled: bool,
     pub sample_offset_px: f32,
     pub automation: AutomationData,

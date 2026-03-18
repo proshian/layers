@@ -533,6 +533,8 @@ struct App {
     dragging_bpm: Option<(f32, f32)>,
     bpm_drag_overlap_snapshots: IndexMap<EntityId, WaveformView>,
     last_click_time: TimeInstant,
+    last_vol_text_click_time: TimeInstant,
+    last_pitch_text_click_time: TimeInstant,
     last_click_world: [f32; 2],
     last_cursor_send: TimeInstant,
     clipboard: Clipboard,
@@ -640,6 +642,8 @@ impl App {
             dragging_bpm: None,
             bpm_drag_overlap_snapshots: IndexMap::new(),
             last_click_time: TimeInstant::now(),
+            last_vol_text_click_time: TimeInstant::now(),
+            last_pitch_text_click_time: TimeInstant::now(),
             last_click_world: [0.0; 2],
             last_cursor_send: TimeInstant::now(),
             clipboard: Clipboard::new(),
@@ -899,6 +903,7 @@ impl App {
                         fade_out_curve: sw.fade_out_curve,
                         volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
                         pan: sw.pan,
+                        pitch_semitones: 0.0,
                         disabled: sw.disabled,
                         sample_offset_px: sw.sample_offset_px,
                         automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
@@ -1273,6 +1278,8 @@ impl App {
             dragging_bpm: None,
             bpm_drag_overlap_snapshots: IndexMap::new(),
             last_click_time: TimeInstant::now(),
+            last_vol_text_click_time: TimeInstant::now(),
+            last_pitch_text_click_time: TimeInstant::now(),
             last_click_world: [0.0; 2],
             last_cursor_send: TimeInstant::now(),
             clipboard: Clipboard::new(),
@@ -1782,6 +1789,7 @@ impl App {
                 fade_out_curve: sw.fade_out_curve,
                 volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
                 pan: sw.pan,
+                pitch_semitones: 0.0,
                 disabled: sw.disabled,
                 sample_offset_px: sw.sample_offset_px,
                 automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
@@ -2426,15 +2434,27 @@ impl App {
     pub(crate) fn update_right_window(&mut self) {
         if let Some(HitTarget::Waveform(id)) = self.selected.first().copied() {
             if let Some(wf) = self.waveforms.get(&id) {
+                // Preserve vol_entry when updating the same waveform so that
+                // click-to-edit isn't reset by the unconditional update_right_window
+                // call at the end of the mouse-released handler.
+                let (vol_entry, pitch_entry) = if self.right_window.as_ref().map_or(false, |rw| rw.waveform_id == id) {
+                    let rw = self.right_window.take().unwrap();
+                    (rw.vol_entry, rw.pitch_entry)
+                } else {
+                    (ui::value_entry::ValueEntry::new(), ui::value_entry::ValueEntry::new())
+                };
                 self.right_window = Some(ui::right_window::RightWindow {
                     waveform_id: id,
                     volume: wf.volume,
                     pan: wf.pan,
+                    pitch: wf.pitch_semitones,
                     vol_dragging: false,
                     pan_dragging: false,
+                    pitch_dragging: false,
                     drag_start_y: 0.0,
                     drag_start_value: 0.0,
-                    vol_entry: ui::value_entry::ValueEntry::new(),
+                    vol_entry,
+                    pitch_entry,
                 });
                 return;
             }
@@ -2457,6 +2477,7 @@ impl App {
             let mut sample_offsets: Vec<f32> = Vec::new();
             let mut vol_autos: Vec<Vec<(f32, f32)>> = Vec::new();
             let mut pan_autos: Vec<Vec<(f32, f32)>> = Vec::new();
+            let mut pitch_semitones_vec: Vec<f32> = Vec::new();
 
             for (&wf_id, wf) in self.waveforms.iter() {
                 if wf.disabled {
@@ -2478,6 +2499,7 @@ impl App {
                 sample_offsets.push(wf.sample_offset_px);
                 vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
                 pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
+                pitch_semitones_vec.push(wf.pitch_semitones);
             }
 
             // Add virtual clips for each component instance
@@ -2502,6 +2524,7 @@ impl App {
                                 sample_offsets.push(wf.sample_offset_px);
                                 vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
                                 pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
+                                pitch_semitones_vec.push(wf.pitch_semitones);
                             }
                         }
                     }
@@ -2509,7 +2532,7 @@ impl App {
             }
 
             let owned_clips: Vec<AudioClipData> = clips.iter().map(|c| (*c).clone()).collect();
-            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos);
+            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &pitch_semitones_vec);
 
             let regions: Vec<audio::AudioEffectRegion> = self
                 .effect_regions
@@ -2803,6 +2826,7 @@ impl App {
                 fade_out_curve: 0.0,
                 volume: 1.0,
                 pan: 0.5,
+                pitch_semitones: 0.0,
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),
@@ -2951,6 +2975,7 @@ impl App {
                 fade_out_curve: wf.fade_out_curve,
                 volume: wf.volume,
                 buffer_offset_secs: wf.sample_offset_px as f64 / audio::PIXELS_PER_SECOND as f64,
+                pitch_semitones: wf.pitch_semitones,
             })
             .collect();
 
@@ -4108,6 +4133,7 @@ impl App {
             fade_out_curve: 0.0,
             volume: orig_volume,
             pan: 0.5,
+            pitch_semitones: 0.0,
             disabled: false,
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
@@ -4139,6 +4165,7 @@ impl App {
             fade_out_curve: orig_fade_out_curve,
             volume: orig_volume,
             pan: 0.5,
+            pitch_semitones: 0.0,
             disabled: false,
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
@@ -4876,6 +4903,7 @@ impl App {
             fade_out_curve: 0.0,
             volume: 1.0,
             pan: 0.5,
+            pitch_semitones: 0.0,
             disabled: true, // disabled until loaded
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
@@ -4924,6 +4952,7 @@ impl App {
                 fade_out_curve: 0.0,
                 volume: 1.0,
                 pan: 0.5,
+                pitch_semitones: 0.0,
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),

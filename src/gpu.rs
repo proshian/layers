@@ -910,6 +910,26 @@ impl Gpu {
             buf.shape_until_scroll(&mut self.font_system, false);
             text_buffers.push(buf);
             text_meta.push((pc[0] - rw_w * 0.5, pc[1] + knob_r + 4.0 * scale, TextColor::rgba(200, 200, 210, 220), full_bounds));
+
+            // PITCH label
+            let pitch_c = right_window::RightWindow::pitch_knob_center_pub(w, h, scale);
+            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
+            buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
+            buf.set_text(&mut self.font_system, "PITCH", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            text_buffers.push(buf);
+            text_meta.push((pitch_c[0] - rw_w * 0.5, pitch_c[1] - knob_r - 18.0 * scale, TextColor::rgba(140, 140, 150, 180), full_bounds));
+
+            // PITCH value
+            let pitch_idle = rw.pitch_text();
+            let pitch_display = rw.pitch_entry.display(&pitch_idle);
+            let pitch_alpha: u8 = if rw.pitch_entry.is_editing() { 255 } else { 220 };
+            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
+            buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
+            buf.set_text(&mut self.font_system, &pitch_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            text_buffers.push(buf);
+            text_meta.push((pitch_c[0] - rw_w * 0.5, pitch_c[1] + knob_r + 4.0 * scale, TextColor::rgba(200, 200, 210, pitch_alpha), full_bounds));
         }
 
         if let Some(palette) = command_palette {

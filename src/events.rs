@@ -444,7 +444,8 @@ impl ApplicationHandler for App {
                     let (_sw, _sh, scale) = self.screen_info();
                     let is_vol_drag = self.right_window.as_ref().map_or(false, |rw| rw.vol_dragging);
                     let is_pan_drag = self.right_window.as_ref().map_or(false, |rw| rw.pan_dragging);
-                    if is_vol_drag || is_pan_drag {
+                    let is_pitch_drag = self.right_window.as_ref().map_or(false, |rw| rw.pitch_dragging);
+                    if is_vol_drag || is_pan_drag || is_pitch_drag {
                         let (before, wf_id) = if let Some(rw) = &self.right_window {
                             let wf_id = rw.waveform_id;
                             let before = self.waveforms.get(&wf_id).cloned();
@@ -461,13 +462,22 @@ impl ApplicationHandler for App {
                                 if let Some(wf) = self.waveforms.get_mut(&wf_id) {
                                     wf.volume = new_vol;
                                 }
-                            } else {
+                            } else if is_pan_drag {
                                 let new_pan = ui::right_window::RightWindow::drag_pan_delta(
                                     rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
                                 );
                                 rw.pan = new_pan;
                                 if let Some(wf) = self.waveforms.get_mut(&wf_id) {
                                     wf.pan = new_pan;
+                                }
+                            } else {
+                                let new_knob_val = ui::right_window::RightWindow::drag_pitch_delta(
+                                    rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
+                                );
+                                let new_pitch = ui::right_window::RightWindow::knob_value_to_pitch(new_knob_val);
+                                rw.pitch = new_pitch;
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.pitch_semitones = new_pitch;
                                 }
                             }
                             let _ = before_wf;
@@ -1490,10 +1500,29 @@ impl ApplicationHandler for App {
                                 let hit_vol_text = rw.hit_test_vol_text(self.mouse_pos, sw, sh, scale);
                                 let hit_vol = rw.hit_test_vol_knob(self.mouse_pos, sw, sh, scale);
                                 let hit_pan = rw.hit_test_pan_knob(self.mouse_pos, sw, sh, scale);
-                                if hit_vol_text {
-                                    if let Some(rw) = &mut self.right_window {
-                                        rw.vol_entry.enter();
-                                        rw.vol_dragging = false;
+                                let hit_pitch = rw.hit_test_pitch_knob(self.mouse_pos, sw, sh, scale);
+                                let hit_pitch_text = rw.hit_test_pitch_text(self.mouse_pos, sw, sh, scale);
+                                if hit_pitch_text {
+                                    let now = TimeInstant::now();
+                                    let is_dbl = now.duration_since(self.last_pitch_text_click_time).as_millis() < 400;
+                                    self.last_pitch_text_click_time = now;
+                                    if is_dbl {
+                                        if let Some(rw) = &mut self.right_window {
+                                            rw.pitch_entry.enter();
+                                            rw.pitch_dragging = false;
+                                        }
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                } else if hit_vol_text {
+                                    let now = TimeInstant::now();
+                                    let is_dbl = now.duration_since(self.last_vol_text_click_time).as_millis() < 400;
+                                    self.last_vol_text_click_time = now;
+                                    if is_dbl {
+                                        if let Some(rw) = &mut self.right_window {
+                                            rw.vol_entry.enter();
+                                            rw.vol_dragging = false;
+                                        }
                                     }
                                     let _ = wf_id;
                                     self.request_redraw();
@@ -1512,6 +1541,16 @@ impl ApplicationHandler for App {
                                     let start_value = rw.pan;
                                     if let Some(rw) = &mut self.right_window {
                                         rw.pan_dragging = true;
+                                        rw.drag_start_y = self.mouse_pos[1];
+                                        rw.drag_start_value = start_value;
+                                    }
+                                    let _ = wf_id;
+                                    self.request_redraw();
+                                    return;
+                                } else if hit_pitch {
+                                    let start_value = ui::right_window::RightWindow::pitch_to_knob_value(rw.pitch);
+                                    if let Some(rw) = &mut self.right_window {
+                                        rw.pitch_dragging = true;
                                         rw.drag_start_y = self.mouse_pos[1];
                                         rw.drag_start_value = start_value;
                                     }
@@ -2382,22 +2421,24 @@ impl ApplicationHandler for App {
                         {
                             let is_vol_drag = self.right_window.as_ref().map_or(false, |rw| rw.vol_dragging);
                             let is_pan_drag = self.right_window.as_ref().map_or(false, |rw| rw.pan_dragging);
-                            if is_vol_drag || is_pan_drag {
+                            let is_pitch_drag = self.right_window.as_ref().map_or(false, |rw| rw.pitch_dragging);
+                            if is_vol_drag || is_pan_drag || is_pitch_drag {
                                 if let Some(rw) = &mut self.right_window {
                                     rw.vol_dragging = false;
                                     rw.pan_dragging = false;
+                                    rw.pitch_dragging = false;
                                 }
                                 let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
                                 if let Some(wf_id) = wf_id {
                                     if let Some(after) = self.waveforms.get(&wf_id).cloned() {
-                                        // We need the before state - use a snapshot approach
-                                        // The before state is approximately the drag start values reconstructed
                                         let mut before = after.clone();
                                         if let Some(rw) = &self.right_window {
                                             if is_vol_drag {
                                                 before.volume = ui::palette::fader_pos_to_gain(rw.drag_start_value);
-                                            } else {
+                                            } else if is_pan_drag {
                                                 before.pan = rw.drag_start_value;
+                                            } else {
+                                                before.pitch_semitones = ui::right_window::RightWindow::knob_value_to_pitch(rw.drag_start_value);
                                             }
                                         }
                                         self.push_op(crate::operations::Operation::UpdateWaveform {
@@ -3261,6 +3302,68 @@ impl ApplicationHandler for App {
                                 if s.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
                                     if let Some(rw) = &mut self.right_window {
                                         rw.vol_entry.push_char(s);
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // --- pitch semitones editing input ---
+                    let pitch_editing = self.right_window.as_ref().map_or(false, |rw| rw.pitch_entry.is_editing());
+                    if pitch_editing {
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                if let Some(rw) = &mut self.right_window {
+                                    rw.pitch_entry.cancel();
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                let commit = self.right_window.as_mut().and_then(|rw| rw.pitch_entry.commit());
+                                if let Some(text) = commit {
+                                    if let Ok(semitones) = text.parse::<f32>() {
+                                        let new_pitch = semitones.clamp(-24.0, 24.0);
+                                        let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
+                                        if let Some(wf_id) = wf_id {
+                                            if let Some(before) = self.waveforms.get(&wf_id).cloned() {
+                                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                                    wf.pitch_semitones = new_pitch;
+                                                }
+                                                if let Some(rw) = &mut self.right_window {
+                                                    rw.pitch = new_pitch;
+                                                }
+                                                if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                                    self.push_op(crate::operations::Operation::UpdateWaveform {
+                                                        id: wf_id,
+                                                        before,
+                                                        after,
+                                                    });
+                                                }
+                                                self.sync_audio_clips();
+                                                self.mark_dirty();
+                                            }
+                                        }
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                if let Some(rw) = &mut self.right_window {
+                                    rw.pitch_entry.pop_char();
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Character(ch) if !self.modifiers.super_key() => {
+                                let s = ch.as_ref();
+                                if s.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+                                    if let Some(rw) = &mut self.right_window {
+                                        rw.pitch_entry.push_char(s);
                                     }
                                 }
                                 self.request_redraw();

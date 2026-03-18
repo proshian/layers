@@ -101,6 +101,7 @@ fn snap_to_vertical_grid_waveform_position() {
         fade_out_curve: 0.5,
         volume: 1.0,
         pan: 0.5,
+        pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,
         automation: AutomationData::new(),

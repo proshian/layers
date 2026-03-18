@@ -30,6 +30,7 @@ fn make_waveform() -> WaveformView {
         fade_out_curve: 0.0,
         volume: 1.0,
         pan: 0.5,
+        pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,
         automation: AutomationData::new(),
@@ -149,4 +150,63 @@ fn test_vol_entry_commit_updates_waveform_volume() {
     // Undo should restore original volume
     app.undo_op();
     assert!((app.waveforms[&id].volume - 1.0).abs() < 1e-4, "undo should restore volume to 1.0");
+}
+
+#[test]
+fn test_pitch_semitones_default() {
+    let wf = make_waveform();
+    assert_eq!(wf.pitch_semitones, 0.0, "default pitch should be 0 semitones");
+}
+
+#[test]
+fn test_pitch_modified_via_update_waveform_op() {
+    let mut app = App::new_headless();
+    let id = new_id();
+    let wf = make_waveform();
+    app.waveforms.insert(id, wf.clone());
+
+    let mut after = wf.clone();
+    after.pitch_semitones = 7.0;
+    app.waveforms.get_mut(&id).unwrap().pitch_semitones = 7.0;
+    app.push_op(Operation::UpdateWaveform { id, before: wf, after });
+
+    assert_eq!(app.waveforms[&id].pitch_semitones, 7.0, "pitch should be updated to 7 semitones");
+
+    app.undo_op();
+    assert_eq!(app.waveforms[&id].pitch_semitones, 0.0, "undo should restore pitch to 0");
+}
+
+#[test]
+fn test_right_window_shows_pitch() {
+    let mut app = App::new_headless();
+    let id = new_id();
+    let mut wf = make_waveform();
+    wf.pitch_semitones = -5.0;
+    app.waveforms.insert(id, wf);
+    app.audio_clips.insert(id, AudioClipData {
+        samples: Arc::new(Vec::new()),
+        sample_rate: 48000,
+        duration_secs: 1.0,
+    });
+
+    app.selected.push(HitTarget::Waveform(id));
+    app.update_right_window();
+
+    let rw = app.right_window.as_ref().unwrap();
+    assert_eq!(rw.pitch, -5.0, "right window should show pitch from waveform");
+}
+
+#[test]
+fn test_pitch_knob_value_conversion() {
+    // Center (0 semitones) should map to 0.5
+    assert!((RightWindow::pitch_to_knob_value(0.0) - 0.5).abs() < 1e-4);
+    // +24 semitones should map to 1.0
+    assert!((RightWindow::pitch_to_knob_value(24.0) - 1.0).abs() < 1e-4);
+    // -24 semitones should map to 0.0
+    assert!((RightWindow::pitch_to_knob_value(-24.0) - 0.0).abs() < 1e-4);
+    // Round-trip
+    let pitch = 7.0;
+    let v = RightWindow::pitch_to_knob_value(pitch);
+    let back = RightWindow::knob_value_to_pitch(v);
+    assert!((back - pitch).abs() < 1e-4);
 }

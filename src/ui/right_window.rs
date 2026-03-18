@@ -15,6 +15,9 @@ const FADER_TRACK_HEIGHT: f32 = 120.0;
 const FADER_THUMB_R: f32 = 9.0;
 const FADER_TOP_OFFSET: f32 = 32.0;
 
+const PAN_KNOB_Y_OFFSET: f32 = 220.0;
+const PITCH_KNOB_Y_OFFSET: f32 = 304.0;
+
 const BG_COLOR: [f32; 4] = [0.11, 0.11, 0.14, 1.0];
 const HEADER_BG: [f32; 4] = [0.13, 0.13, 0.17, 1.0];
 const BLUE: [f32; 4] = [0.25, 0.55, 1.0, 1.0];
@@ -24,11 +27,14 @@ pub struct RightWindow {
     pub waveform_id: EntityId,
     pub volume: f32,
     pub pan: f32,
+    pub pitch: f32,
     pub vol_dragging: bool,
     pub pan_dragging: bool,
+    pub pitch_dragging: bool,
     pub drag_start_y: f32,
     pub drag_start_value: f32,
     pub vol_entry: ValueEntry,
+    pub pitch_entry: ValueEntry,
 }
 
 impl RightWindow {
@@ -55,7 +61,12 @@ impl RightWindow {
 
     fn pan_knob_center(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
-        [pp[0] + ps[0] * 0.5, pp[1] + HEADER_HEIGHT * scale + 220.0 * scale]
+        [pp[0] + ps[0] * 0.5, pp[1] + HEADER_HEIGHT * scale + PAN_KNOB_Y_OFFSET * scale]
+    }
+
+    fn pitch_knob_center(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
+        let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
+        [pp[0] + ps[0] * 0.5, pp[1] + HEADER_HEIGHT * scale + PITCH_KNOB_Y_OFFSET * scale]
     }
 
     pub fn hit_test_vol_knob(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
@@ -77,6 +88,14 @@ impl RightWindow {
         dx * dx + dy * dy <= r * r
     }
 
+    pub fn hit_test_pitch_knob(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        let c = Self::pitch_knob_center(screen_w, screen_h, scale);
+        let r = (KNOB_R + 8.0) * scale;
+        let dx = pos[0] - c[0];
+        let dy = pos[1] - c[1];
+        dx * dx + dy * dy <= r * r
+    }
+
     fn vol_db_text_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let (pp, _ps) = Self::panel_rect(screen_w, screen_h, scale);
         let (fader_pos, fader_size) = Self::vol_fader_rects(screen_w, screen_h, scale);
@@ -85,10 +104,33 @@ impl RightWindow {
         ([pp[0], text_y], [rw_w, 20.0 * scale])
     }
 
+    fn pitch_text_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let c = Self::pitch_knob_center(screen_w, screen_h, scale);
+        let rw_w = RIGHT_WINDOW_WIDTH * scale;
+        let (pp, _ps) = Self::panel_rect(screen_w, screen_h, scale);
+        let knob_r = KNOB_R * scale;
+        let text_y = c[1] + knob_r + 4.0 * scale;
+        ([pp[0], text_y], [rw_w, 20.0 * scale])
+    }
+
     pub fn hit_test_vol_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
         let (rp, rs) = Self::vol_db_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
+    }
+
+    pub fn hit_test_pitch_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        let (rp, rs) = Self::pitch_text_rect(screen_w, screen_h, scale);
+        pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
+            && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
+    }
+
+    pub fn pitch_to_knob_value(semitones: f32) -> f32 {
+        ((semitones + 24.0) / 48.0).clamp(0.0, 1.0)
+    }
+
+    pub fn knob_value_to_pitch(v: f32) -> f32 {
+        (v * 48.0 - 24.0).clamp(-24.0, 24.0)
     }
 
     fn value_to_angle(v: f32) -> f32 {
@@ -213,6 +255,11 @@ impl RightWindow {
         let pc = Self::pan_knob_center(screen_w, screen_h, scale);
         Self::push_knob(&mut out, pc[0], pc[1], self.pan, scale);
 
+        // Pitch knob
+        let pitch_c = Self::pitch_knob_center(screen_w, screen_h, scale);
+        let pitch_knob_val = Self::pitch_to_knob_value(self.pitch);
+        Self::push_knob(&mut out, pitch_c[0], pitch_c[1], pitch_knob_val, scale);
+
         out
     }
 
@@ -244,12 +291,31 @@ impl RightWindow {
         }
     }
 
+    /// Format pitch value as semitones string
+    pub fn pitch_text(&self) -> String {
+        let p = self.pitch;
+        if p.abs() < 0.05 {
+            "0 st".to_string()
+        } else {
+            let rounded = p.round() as i32;
+            if rounded > 0 {
+                format!("+{} st", rounded)
+            } else {
+                format!("{} st", rounded)
+            }
+        }
+    }
+
     pub fn vol_fader_rect_pub(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         Self::vol_fader_rects(screen_w, screen_h, scale)
     }
 
     pub fn pan_knob_center_pub(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
         Self::pan_knob_center(screen_w, screen_h, scale)
+    }
+
+    pub fn pitch_knob_center_pub(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
+        Self::pitch_knob_center(screen_w, screen_h, scale)
     }
 
     /// Compute new volume from drag delta (up = increase)
@@ -261,6 +327,12 @@ impl RightWindow {
 
     /// Compute new pan from drag delta (up = increase)
     pub fn drag_pan_delta(drag_start_y: f32, mouse_y: f32, drag_start_value: f32, scale: f32) -> f32 {
+        let delta = (drag_start_y - mouse_y) / (200.0 * scale);
+        (drag_start_value + delta).clamp(0.0, 1.0)
+    }
+
+    /// Compute new pitch knob value from drag delta (up = increase)
+    pub fn drag_pitch_delta(drag_start_y: f32, mouse_y: f32, drag_start_value: f32, scale: f32) -> f32 {
         let delta = (drag_start_y - mouse_y) / (200.0 * scale);
         (drag_start_value + delta).clamp(0.0, 1.0)
     }

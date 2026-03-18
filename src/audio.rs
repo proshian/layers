@@ -23,6 +23,7 @@ pub struct LoadedAudio {
 struct PlaybackClip {
     buffer: Arc<Vec<f32>>,
     source_sample_rate: u32,
+    effective_sample_rate: f64,
     start_time_secs: f64,
     duration_secs: f64,
     position_y: f32,
@@ -234,7 +235,7 @@ impl AudioEngine {
                         for clip in clips_ref.iter() {
                             let clip_t = t - clip.start_time_secs;
                             if clip_t >= 0.0 && clip_t < clip.duration_secs {
-                                let source_idx = ((clip_t + clip.buffer_offset_secs) * clip.source_sample_rate as f64) as usize;
+                                let source_idx = ((clip_t + clip.buffer_offset_secs) * clip.effective_sample_rate) as usize;
                                 if source_idx < clip.buffer.len() {
                                     let fg = clip_fade_gain(
                                         clip_t,
@@ -567,6 +568,7 @@ impl AudioEngine {
         sample_offsets_px: &[f32],
         volume_automations: &[Vec<(f32, f32)>],
         pan_automations: &[Vec<(f32, f32)>],
+        pitch_semitones: &[f32],
     ) {
         let mut clips = self.clips.lock().unwrap();
         clips.clear();
@@ -588,9 +590,12 @@ impl AudioEngine {
             let visible_duration = size[0] as f64 / PIXELS_PER_SECOND as f64;
             let vol_auto = volume_automations.get(i).cloned().unwrap_or_default();
             let pan_auto = pan_automations.get(i).cloned().unwrap_or_default();
+            let pitch = pitch_semitones.get(i).copied().unwrap_or(0.0);
+            let effective_rate = clip_data.sample_rate as f64 * 2.0_f64.powf(pitch as f64 / 12.0);
             clips.push(PlaybackClip {
                 buffer: clip_data.samples.clone(),
                 source_sample_rate: clip_data.sample_rate,
+                effective_sample_rate: effective_rate,
                 start_time_secs: start_secs,
                 duration_secs: visible_duration,
                 position_y: pos[1],
@@ -993,6 +998,7 @@ pub struct ExportClip {
     pub fade_out_curve: f32,
     pub volume: f32,
     pub buffer_offset_secs: f64,
+    pub pitch_semitones: f32,
 }
 
 pub fn render_to_wav(
@@ -1031,7 +1037,8 @@ pub fn render_to_wav(
             }
             let clip_t = t - clip.start_time_secs;
             if clip_t >= 0.0 && clip_t < clip.duration_secs {
-                let source_idx = ((clip_t + clip.buffer_offset_secs) * clip.source_sample_rate as f64) as usize;
+                let effective_rate = clip.source_sample_rate as f64 * 2.0_f64.powf(clip.pitch_semitones as f64 / 12.0);
+                let source_idx = ((clip_t + clip.buffer_offset_secs) * effective_rate) as usize;
                 if source_idx < clip.buffer.len() {
                     let fg = clip_fade_gain(
                         clip_t,

@@ -1,3 +1,7 @@
+- 2026-03-18: feat: pitch change control in right window inspector — rotary knob with -24 to +24 semitone range, sample rate-based repitching in playback and export (29.6k loc)
+- 2026-03-18: fix: vol dB text in inspector now enters edit mode on double-click only (matches BPM behavior); added last_vol_text_click_time tracking (29.6k loc)
+- 2026-03-18: fix: add missing pitch_semitones: 0.0 field to all WaveformView initializers in tests and main.rs (29.6k loc)
+- 2026-03-18: fix: vol dB edit mode no longer cancelled immediately on mouse-up — update_right_window now preserves vol_entry for the same waveform (29.3k loc)
 - 2026-03-18: refactor: BPM text editing now uses ValueEntry (same as vol dB entry) — editing_bpm: Option<String> replaced with ValueEntry (29.3k loc)
 - 2026-03-18: feat: click-to-edit dB value in right window inspector — single-click enters text input, Enter commits with undo, Escape cancels; reusable ValueEntry struct (29.3k loc)
 - 2026-03-18: feat: volume control in inspector replaced with vertical fader (track+fill+thumb) replacing circular knob; pan knob moved down (29.1k loc)
