@@ -421,6 +421,7 @@ impl ApplicationHandler for App {
                         self.rescale_camera_for_bpm(scale);
                     }
                     self.bpm = new_bpm;
+                    self.resize_warped_clips();
                     let mut snaps = std::mem::take(&mut self.bpm_drag_overlap_snapshots);
                     self.resolve_all_waveform_overlaps_live(&mut snaps);
                     self.bpm_drag_overlap_snapshots = snaps;
@@ -444,8 +445,9 @@ impl ApplicationHandler for App {
                     let (_sw, _sh, scale) = self.screen_info();
                     let is_vol_drag = self.right_window.as_ref().map_or(false, |rw| rw.vol_dragging);
                     let is_pan_drag = self.right_window.as_ref().map_or(false, |rw| rw.pan_dragging);
+                    let is_sbpm_drag = self.right_window.as_ref().map_or(false, |rw| rw.sample_bpm_dragging);
                     let is_pitch_drag = self.right_window.as_ref().map_or(false, |rw| rw.pitch_dragging);
-                    if is_vol_drag || is_pan_drag || is_pitch_drag {
+                    if is_vol_drag || is_pan_drag || is_sbpm_drag || is_pitch_drag {
                         let (before, wf_id) = if let Some(rw) = &self.right_window {
                             let wf_id = rw.waveform_id;
                             let before = self.waveforms.get(&wf_id).cloned();
@@ -470,15 +472,29 @@ impl ApplicationHandler for App {
                                 if let Some(wf) = self.waveforms.get_mut(&wf_id) {
                                     wf.pan = new_pan;
                                 }
-                            } else {
-                                let new_knob_val = ui::right_window::RightWindow::drag_pitch_delta(
+                            } else if is_sbpm_drag {
+                                let new_bpm = ui::right_window::RightWindow::drag_sample_bpm_delta(
                                     rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
                                 );
-                                let new_pitch = ui::right_window::RightWindow::knob_value_to_pitch(new_knob_val);
-                                rw.pitch = new_pitch;
+                                rw.sample_bpm = new_bpm;
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.sample_bpm = new_bpm;
+                                    if wf.warp_mode == ui::waveform::WarpMode::RePitch {
+                                        if let Some(clip) = self.audio_clips.get(&wf_id) {
+                                            let original_duration_px = clip.duration_secs * PIXELS_PER_SECOND;
+                                            wf.size[0] = original_duration_px * (self.bpm / wf.sample_bpm);
+                                        }
+                                    }
+                                }
+                            } else {
+                                let new_pitch = ui::right_window::RightWindow::drag_pitch_delta(
+                                    rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
+                                );
+                                rw.pitch_semitones = new_pitch;
                                 if let Some(wf) = self.waveforms.get_mut(&wf_id) {
                                     wf.pitch_semitones = new_pitch;
                                 }
+                                self.resize_warped_clips();
                             }
                             let _ = before_wf;
                         }
@@ -1490,7 +1506,8 @@ impl ApplicationHandler for App {
                             return;
                         }
 
-                        // Right window knob mouse down
+                        // Right window knob mouse down (skip if context menu is open)
+                        if self.context_menu.is_none() {
                         if let Some(rw) = &self.right_window {
                             let (sw, sh, scale) = self.screen_info();
                             let (pp, ps) = ui::right_window::RightWindow::panel_rect(sw, sh, scale);
@@ -1500,9 +1517,72 @@ impl ApplicationHandler for App {
                                 let hit_vol_text = rw.hit_test_vol_text(self.mouse_pos, sw, sh, scale);
                                 let hit_vol = rw.hit_test_vol_knob(self.mouse_pos, sw, sh, scale);
                                 let hit_pan = rw.hit_test_pan_knob(self.mouse_pos, sw, sh, scale);
-                                let hit_pitch = rw.hit_test_pitch_knob(self.mouse_pos, sw, sh, scale);
+                                let hit_warp_btn = rw.hit_test_warp_mode_button(self.mouse_pos, sw, sh, scale);
+                                let hit_warp_sel = rw.hit_test_warp_mode_selector(self.mouse_pos, sw, sh, scale);
+                                let hit_sbpm_text = rw.hit_test_sample_bpm_text(self.mouse_pos, sw, sh, scale);
                                 let hit_pitch_text = rw.hit_test_pitch_text(self.mouse_pos, sw, sh, scale);
-                                if hit_pitch_text {
+                                if hit_warp_btn {
+                                    // Toggle warp on/off (default to Semitone when enabling)
+                                    let wf_id = rw.waveform_id;
+                                    let current = rw.warp_mode;
+                                    let new_mode = if current == ui::waveform::WarpMode::Off {
+                                        ui::waveform::WarpMode::Semitone
+                                    } else {
+                                        ui::waveform::WarpMode::Off
+                                    };
+                                    if let Some(before) = self.waveforms.get(&wf_id).cloned() {
+                                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                            wf.warp_mode = new_mode;
+                                            if new_mode == ui::waveform::WarpMode::RePitch {
+                                                if let Some(clip) = self.audio_clips.get(&wf_id) {
+                                                    let original_duration_px = clip.duration_secs * PIXELS_PER_SECOND;
+                                                    wf.size[0] = original_duration_px * (self.bpm / wf.sample_bpm);
+                                                }
+                                            }
+                                        }
+                                        if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                            self.push_op(crate::operations::Operation::UpdateWaveform {
+                                                id: wf_id, before, after,
+                                            });
+                                        }
+                                    }
+                                    self.update_right_window();
+                                    self.mark_dirty();
+                                    #[cfg(feature = "native")]
+                                    self.sync_audio_clips();
+                                    self.request_redraw();
+                                    return;
+                                } else if hit_warp_sel {
+                                    // Open warp mode dropdown
+                                    let current = rw.warp_mode;
+                                    let (sel_pos, sel_size) = ui::right_window::RightWindow::warp_mode_selector_rect_pub(sw, sh, scale);
+                                    self.context_menu = Some(ContextMenu::new(
+                                        [sel_pos[0], sel_pos[1] + sel_size[1]],
+                                        MenuContext::WarpModeSelect { current },
+                                        &self.settings,
+                                    ));
+                                    self.request_redraw();
+                                    return;
+                                } else if hit_sbpm_text {
+                                    let now = TimeInstant::now();
+                                    let is_dbl = now.duration_since(self.last_sample_bpm_text_click_time).as_millis() < 400;
+                                    self.last_sample_bpm_text_click_time = now;
+                                    if is_dbl {
+                                        if let Some(rw) = &mut self.right_window {
+                                            rw.sample_bpm_entry.enter();
+                                            rw.sample_bpm_dragging = false;
+                                        }
+                                    } else {
+                                        let start_value = rw.sample_bpm;
+                                        if let Some(rw) = &mut self.right_window {
+                                            rw.sample_bpm_dragging = true;
+                                            rw.drag_start_y = self.mouse_pos[1];
+                                            rw.drag_start_value = start_value;
+                                        }
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                } else if hit_pitch_text {
                                     let now = TimeInstant::now();
                                     let is_dbl = now.duration_since(self.last_pitch_text_click_time).as_millis() < 400;
                                     self.last_pitch_text_click_time = now;
@@ -1510,6 +1590,13 @@ impl ApplicationHandler for App {
                                         if let Some(rw) = &mut self.right_window {
                                             rw.pitch_entry.enter();
                                             rw.pitch_dragging = false;
+                                        }
+                                    } else {
+                                        let start_value = rw.pitch_semitones;
+                                        if let Some(rw) = &mut self.right_window {
+                                            rw.pitch_dragging = true;
+                                            rw.drag_start_y = self.mouse_pos[1];
+                                            rw.drag_start_value = start_value;
                                         }
                                     }
                                     self.request_redraw();
@@ -1547,21 +1634,12 @@ impl ApplicationHandler for App {
                                     let _ = wf_id;
                                     self.request_redraw();
                                     return;
-                                } else if hit_pitch {
-                                    let start_value = ui::right_window::RightWindow::pitch_to_knob_value(rw.pitch);
-                                    if let Some(rw) = &mut self.right_window {
-                                        rw.pitch_dragging = true;
-                                        rw.drag_start_y = self.mouse_pos[1];
-                                        rw.drag_start_value = start_value;
-                                    }
-                                    let _ = wf_id;
-                                    self.request_redraw();
-                                    return;
                                 }
                                 // Click inside panel but not on knob - don't propagate
                                 self.request_redraw();
                                 return;
                             }
+                        }
                         }
 
                         if self.context_menu.is_some() {
@@ -2421,11 +2499,13 @@ impl ApplicationHandler for App {
                         {
                             let is_vol_drag = self.right_window.as_ref().map_or(false, |rw| rw.vol_dragging);
                             let is_pan_drag = self.right_window.as_ref().map_or(false, |rw| rw.pan_dragging);
+                            let is_sbpm_drag = self.right_window.as_ref().map_or(false, |rw| rw.sample_bpm_dragging);
                             let is_pitch_drag = self.right_window.as_ref().map_or(false, |rw| rw.pitch_dragging);
-                            if is_vol_drag || is_pan_drag || is_pitch_drag {
+                            if is_vol_drag || is_pan_drag || is_sbpm_drag || is_pitch_drag {
                                 if let Some(rw) = &mut self.right_window {
                                     rw.vol_dragging = false;
                                     rw.pan_dragging = false;
+                                    rw.sample_bpm_dragging = false;
                                     rw.pitch_dragging = false;
                                 }
                                 let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
@@ -2437,8 +2517,10 @@ impl ApplicationHandler for App {
                                                 before.volume = ui::palette::vol_fader_pos_to_gain(rw.drag_start_value);
                                             } else if is_pan_drag {
                                                 before.pan = rw.drag_start_value;
+                                            } else if is_sbpm_drag {
+                                                before.sample_bpm = rw.drag_start_value;
                                             } else {
-                                                before.pitch_semitones = ui::right_window::RightWindow::knob_value_to_pitch(rw.drag_start_value);
+                                                before.pitch_semitones = rw.drag_start_value;
                                             }
                                         }
                                         self.push_op(crate::operations::Operation::UpdateWaveform {
@@ -2482,6 +2564,7 @@ impl ApplicationHandler for App {
                                 self.rescale_clip_positions(scale);
                                 self.rescale_camera_for_bpm(scale);
                             }
+                            self.resize_warped_clips();
                             // Re-resolve after rounding correction, then commit snapshots
                             let mut snaps = std::mem::take(&mut self.bpm_drag_overlap_snapshots);
                             self.resolve_all_waveform_overlaps_live(&mut snaps);
@@ -3216,6 +3299,7 @@ impl ApplicationHandler for App {
                                             self.rescale_clip_positions(scale);
                                             self.rescale_camera_for_bpm(scale);
                                             self.bpm = after;
+                                            self.resize_warped_clips();
                                             let overlap_ops = self.resolve_all_waveform_overlaps();
                                             let mut ops = vec![crate::operations::Operation::SetBpm { before, after }];
                                             ops.extend(overlap_ops);
@@ -3311,6 +3395,75 @@ impl ApplicationHandler for App {
                         }
                     }
 
+                    // --- sample BPM editing input ---
+                    let sbpm_editing = self.right_window.as_ref().map_or(false, |rw| rw.sample_bpm_entry.is_editing());
+                    if sbpm_editing {
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                if let Some(rw) = &mut self.right_window {
+                                    rw.sample_bpm_entry.cancel();
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                let commit = self.right_window.as_mut().and_then(|rw| rw.sample_bpm_entry.commit());
+                                if let Some(text) = commit {
+                                    if let Ok(val) = text.parse::<f32>() {
+                                        let new_bpm = val.clamp(20.0, 999.0);
+                                        let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
+                                        if let Some(wf_id) = wf_id {
+                                            if let Some(before) = self.waveforms.get(&wf_id).cloned() {
+                                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                                    wf.sample_bpm = new_bpm;
+                                                    // Resize clip if in RePitch mode
+                                                    if wf.warp_mode == ui::waveform::WarpMode::RePitch {
+                                                        if let Some(clip) = self.audio_clips.get(&wf_id) {
+                                                            let original_duration_px = clip.duration_secs * PIXELS_PER_SECOND;
+                                                            wf.size[0] = original_duration_px * (self.bpm / wf.sample_bpm);
+                                                        }
+                                                    }
+                                                }
+                                                if let Some(rw) = &mut self.right_window {
+                                                    rw.sample_bpm = new_bpm;
+                                                }
+                                                if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                                    self.push_op(crate::operations::Operation::UpdateWaveform {
+                                                        id: wf_id,
+                                                        before,
+                                                        after,
+                                                    });
+                                                }
+                                                self.sync_audio_clips();
+                                                self.mark_dirty();
+                                            }
+                                        }
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                if let Some(rw) = &mut self.right_window {
+                                    rw.sample_bpm_entry.pop_char();
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Character(ch) if !self.modifiers.super_key() => {
+                                let s = ch.as_ref();
+                                if s.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                                    if let Some(rw) = &mut self.right_window {
+                                        rw.sample_bpm_entry.push_char(s);
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // --- pitch semitones editing input ---
                     let pitch_editing = self.right_window.as_ref().map_or(false, |rw| rw.pitch_entry.is_editing());
                     if pitch_editing {
@@ -3334,8 +3487,9 @@ impl ApplicationHandler for App {
                                                     wf.pitch_semitones = new_pitch;
                                                 }
                                                 if let Some(rw) = &mut self.right_window {
-                                                    rw.pitch = new_pitch;
+                                                    rw.pitch_semitones = new_pitch;
                                                 }
+                                                self.resize_warped_clips();
                                                 if let Some(after) = self.waveforms.get(&wf_id).cloned() {
                                                     self.push_op(crate::operations::Operation::UpdateWaveform {
                                                         id: wf_id,

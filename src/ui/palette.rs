@@ -59,6 +59,9 @@ pub enum CommandAction {
     ToggleMidiClipTripletGrid,
     NarrowMidiClipGrid,
     WidenMidiClipGrid,
+    SetWarpOff,
+    SetWarpRePitch,
+    SetWarpSemitone,
 }
 
 #[derive(Clone, Copy, PartialEq)]

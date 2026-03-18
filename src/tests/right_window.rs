@@ -6,7 +6,7 @@ use crate::entity_id::new_id;
 use crate::operations::Operation;
 use crate::ui::palette::db_to_gain;
 use crate::ui::right_window::RightWindow;
-use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView};
+use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView};
 use crate::{App, HitTarget};
 
 fn make_waveform() -> WaveformView {
@@ -30,6 +30,8 @@ fn make_waveform() -> WaveformView {
         fade_out_curve: 0.0,
         volume: 1.0,
         pan: 0.5,
+        warp_mode: WarpMode::Off,
+        sample_bpm: 120.0,
         pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,
@@ -153,35 +155,41 @@ fn test_vol_entry_commit_updates_waveform_volume() {
 }
 
 #[test]
-fn test_pitch_semitones_default() {
+fn test_warp_mode_default() {
     let wf = make_waveform();
-    assert_eq!(wf.pitch_semitones, 0.0, "default pitch should be 0 semitones");
+    assert_eq!(wf.warp_mode, WarpMode::Off, "default warp mode should be Off");
+    assert_eq!(wf.sample_bpm, 120.0, "default sample_bpm should be 120.0");
 }
 
 #[test]
-fn test_pitch_modified_via_update_waveform_op() {
+fn test_repitch_updates_via_op() {
     let mut app = App::new_headless();
     let id = new_id();
     let wf = make_waveform();
     app.waveforms.insert(id, wf.clone());
 
     let mut after = wf.clone();
-    after.pitch_semitones = 7.0;
-    app.waveforms.get_mut(&id).unwrap().pitch_semitones = 7.0;
+    after.warp_mode = WarpMode::RePitch;
+    after.sample_bpm = 140.0;
+    app.waveforms.get_mut(&id).unwrap().warp_mode = WarpMode::RePitch;
+    app.waveforms.get_mut(&id).unwrap().sample_bpm = 140.0;
     app.push_op(Operation::UpdateWaveform { id, before: wf, after });
 
-    assert_eq!(app.waveforms[&id].pitch_semitones, 7.0, "pitch should be updated to 7 semitones");
+    assert_eq!(app.waveforms[&id].warp_mode, WarpMode::RePitch);
+    assert_eq!(app.waveforms[&id].sample_bpm, 140.0);
 
     app.undo_op();
-    assert_eq!(app.waveforms[&id].pitch_semitones, 0.0, "undo should restore pitch to 0");
+    assert_eq!(app.waveforms[&id].warp_mode, WarpMode::Off, "undo should restore warp mode to Off");
+    assert_eq!(app.waveforms[&id].sample_bpm, 120.0, "undo should restore sample_bpm");
 }
 
 #[test]
-fn test_right_window_shows_pitch() {
+fn test_right_window_shows_warp_mode() {
     let mut app = App::new_headless();
     let id = new_id();
     let mut wf = make_waveform();
-    wf.pitch_semitones = -5.0;
+    wf.warp_mode = WarpMode::RePitch;
+    wf.sample_bpm = 140.0;
     app.waveforms.insert(id, wf);
     app.audio_clips.insert(id, AudioClipData {
         samples: Arc::new(Vec::new()),
@@ -193,20 +201,67 @@ fn test_right_window_shows_pitch() {
     app.update_right_window();
 
     let rw = app.right_window.as_ref().unwrap();
-    assert_eq!(rw.pitch, -5.0, "right window should show pitch from waveform");
+    assert_eq!(rw.warp_mode, WarpMode::RePitch, "right window should show warp mode from waveform");
+    assert_eq!(rw.sample_bpm, 140.0, "right window should show sample_bpm from waveform");
 }
 
 #[test]
-fn test_pitch_knob_value_conversion() {
-    // Center (0 semitones) should map to 0.5
-    assert!((RightWindow::pitch_to_knob_value(0.0) - 0.5).abs() < 1e-4);
-    // +24 semitones should map to 1.0
-    assert!((RightWindow::pitch_to_knob_value(24.0) - 1.0).abs() < 1e-4);
-    // -24 semitones should map to 0.0
-    assert!((RightWindow::pitch_to_knob_value(-24.0) - 0.0).abs() < 1e-4);
-    // Round-trip
-    let pitch = 7.0;
-    let v = RightWindow::pitch_to_knob_value(pitch);
-    let back = RightWindow::knob_value_to_pitch(v);
-    assert!((back - pitch).abs() < 1e-4);
+fn test_semitone_mode_resizes_clip() {
+    use crate::grid::PIXELS_PER_SECOND;
+
+    let mut app = App::new_headless();
+    let id = new_id();
+    let mut wf = make_waveform();
+    wf.warp_mode = WarpMode::Semitone;
+    wf.pitch_semitones = 0.0;
+    app.waveforms.insert(id, wf);
+
+    let duration_secs = 2.0;
+    app.audio_clips.insert(id, AudioClipData {
+        samples: Arc::new(Vec::new()),
+        sample_rate: 48000,
+        duration_secs,
+    });
+
+    let original_px = duration_secs * PIXELS_PER_SECOND;
+
+    // +12 semitones (one octave up) → 2x speed → half width
+    app.waveforms.get_mut(&id).unwrap().pitch_semitones = 12.0;
+    app.resize_warped_clips();
+    let w = app.waveforms.get(&id).unwrap().size[0];
+    assert!((w - original_px / 2.0).abs() < 0.01, "octave up should halve width: got {w}");
+
+    // -12 semitones (one octave down) → 0.5x speed → double width
+    app.waveforms.get_mut(&id).unwrap().pitch_semitones = -12.0;
+    app.resize_warped_clips();
+    let w = app.waveforms.get(&id).unwrap().size[0];
+    assert!((w - original_px * 2.0).abs() < 0.01, "octave down should double width: got {w}");
+}
+
+#[test]
+fn test_repitch_mode_resizes_clip() {
+    use crate::grid::PIXELS_PER_SECOND;
+
+    let mut app = App::new_headless();
+    app.bpm = 120.0;
+    let id = new_id();
+    let mut wf = make_waveform();
+    wf.warp_mode = WarpMode::RePitch;
+    wf.sample_bpm = 120.0;
+    app.waveforms.insert(id, wf);
+
+    let duration_secs = 2.0;
+    app.audio_clips.insert(id, AudioClipData {
+        samples: Arc::new(Vec::new()),
+        sample_rate: 48000,
+        duration_secs,
+    });
+
+    let original_px = duration_secs * PIXELS_PER_SECOND;
+
+    // sample_bpm=60 with project bpm=120 → 2x stretch
+    app.waveforms.get_mut(&id).unwrap().sample_bpm = 60.0;
+    app.resize_warped_clips();
+    let w = app.waveforms.get(&id).unwrap().size[0];
+    assert!((w - original_px * 2.0).abs() < 0.01, "half-tempo sample should double width: got {w}");
 }

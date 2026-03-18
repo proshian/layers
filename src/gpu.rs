@@ -969,25 +969,74 @@ impl Gpu {
             text_buffers.push(buf);
             text_meta.push((pc[0] - rw_w * 0.5, pc[1] + knob_r + 4.0 * scale, TextColor::rgba(200, 200, 210, 220), full_bounds));
 
-            // PITCH label
-            let pitch_c = right_window::RightWindow::pitch_knob_center_pub(w, h, scale);
+            // WARP label
+            let (btn_pos, btn_size) = right_window::RightWindow::warp_mode_button_rect_pub(w, h, scale);
             let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
             buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
-            buf.set_text(&mut self.font_system, "PITCH", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.set_text(&mut self.font_system, "WARP", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
             buf.shape_until_scroll(&mut self.font_system, false);
             text_buffers.push(buf);
-            text_meta.push((pitch_c[0] - rw_w * 0.5, pitch_c[1] - knob_r - 18.0 * scale, TextColor::rgba(140, 140, 150, 180), full_bounds));
+            text_meta.push((btn_pos[0] + btn_size[0] * 0.5 - rw_w * 0.5, btn_pos[1] - 18.0 * scale, TextColor::rgba(140, 140, 150, 180), full_bounds));
 
-            // PITCH value
-            let pitch_idle = rw.pitch_text();
-            let pitch_display = rw.pitch_entry.display(&pitch_idle);
-            let pitch_alpha: u8 = if rw.pitch_entry.is_editing() { 255 } else { 220 };
+            // WARP toggle text (centered on button)
+            let warp_text = rw.warp_button_text();
             let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
-            buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
-            buf.set_text(&mut self.font_system, &pitch_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buf.set_size(&mut self.font_system, Some(btn_size[0]), Some(btn_size[1]));
+            buf.set_text(&mut self.font_system, warp_text, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
             buf.shape_until_scroll(&mut self.font_system, false);
             text_buffers.push(buf);
-            text_meta.push((pitch_c[0] - rw_w * 0.5, pitch_c[1] + knob_r + 4.0 * scale, TextColor::rgba(200, 200, 210, pitch_alpha), full_bounds));
+            text_meta.push((btn_pos[0], btn_pos[1] + (btn_size[1] - val_line) * 0.5, TextColor::rgba(220, 220, 230, 240), full_bounds));
+
+            let warp_on = rw.warp_mode != waveform::WarpMode::Off;
+            if warp_on {
+                // Mode selector text (centered on selector rect)
+                let (sel_pos, sel_size) = right_window::RightWindow::warp_mode_selector_rect_pub(w, h, scale);
+                let mode_text = rw.warp_mode_selector_text();
+                let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
+                buf.set_size(&mut self.font_system, Some(sel_size[0]), Some(sel_size[1]));
+                buf.set_text(&mut self.font_system, mode_text, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                buf.shape_until_scroll(&mut self.font_system, false);
+                text_buffers.push(buf);
+                text_meta.push((sel_pos[0], sel_pos[1] + (sel_size[1] - val_line) * 0.5, TextColor::rgba(200, 200, 210, 220), full_bounds));
+
+                // Mode-specific param label + value
+                let (param_pos, _param_size) = right_window::RightWindow::warp_param_text_rect_pub(w, h, scale);
+                if rw.warp_mode == waveform::WarpMode::RePitch {
+                    let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
+                    buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
+                    buf.set_text(&mut self.font_system, "SAMPLE BPM", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                    buf.shape_until_scroll(&mut self.font_system, false);
+                    text_buffers.push(buf);
+                    text_meta.push((param_pos[0], param_pos[1], TextColor::rgba(140, 140, 150, 180), full_bounds));
+
+                    let sbpm_idle = rw.sample_bpm_text();
+                    let sbpm_display = rw.sample_bpm_entry.display(&sbpm_idle);
+                    let sbpm_alpha: u8 = if rw.sample_bpm_entry.is_editing() { 255 } else { 220 };
+                    let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
+                    buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
+                    buf.set_text(&mut self.font_system, &sbpm_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                    buf.shape_until_scroll(&mut self.font_system, false);
+                    text_buffers.push(buf);
+                    text_meta.push((param_pos[0], param_pos[1] + label_line, TextColor::rgba(200, 200, 210, sbpm_alpha), full_bounds));
+                } else if rw.warp_mode == waveform::WarpMode::Semitone {
+                    let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
+                    buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
+                    buf.set_text(&mut self.font_system, "PITCH", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                    buf.shape_until_scroll(&mut self.font_system, false);
+                    text_buffers.push(buf);
+                    text_meta.push((param_pos[0], param_pos[1], TextColor::rgba(140, 140, 150, 180), full_bounds));
+
+                    let pitch_idle = rw.pitch_text();
+                    let pitch_display = rw.pitch_entry.display(&pitch_idle);
+                    let pitch_alpha: u8 = if rw.pitch_entry.is_editing() { 255 } else { 220 };
+                    let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
+                    buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
+                    buf.set_text(&mut self.font_system, &pitch_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                    buf.shape_until_scroll(&mut self.font_system, false);
+                    text_buffers.push(buf);
+                    text_meta.push((param_pos[0], param_pos[1] + label_line, TextColor::rgba(200, 200, 210, pitch_alpha), full_bounds));
+                }
+            }
         }
 
         if let Some(palette) = command_palette {

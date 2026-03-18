@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::audio::AudioClipData;
 use crate::automation::AutomationData;
 use crate::entity_id::new_id;
-use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView};
+use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView};
 use crate::App;
 
 fn make_waveform(x: f32, y: f32, width: f32) -> WaveformView {
@@ -27,6 +27,8 @@ fn make_waveform(x: f32, y: f32, width: f32) -> WaveformView {
         fade_out_curve: 0.5,
         volume: 1.0,
         pan: 0.5,
+        warp_mode: WarpMode::Off,
+        sample_bpm: 120.0,
         pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,

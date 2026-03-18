@@ -4,7 +4,7 @@ use crate::automation::AutomationData;
 use crate::midi;
 use crate::settings::{FixedGrid, GridMode};
 use crate::storage::{self, f32_slice_to_u8, u8_slice_to_f32};
-use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView};
+use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView};
 
 #[test]
 fn test_f32_u8_roundtrip() {
@@ -160,6 +160,8 @@ fn test_waveform_filename_survives_serde_roundtrip() {
         fade_out_curve: 0.0,
         volume: 1.0,
         pan: 0.5,
+        warp_mode: WarpMode::Off,
+        sample_bpm: 120.0,
         pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,

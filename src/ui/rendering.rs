@@ -762,6 +762,7 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
             world_right,
             is_hov,
             is_sel,
+            ctx.bpm,
         ));
         // Fade curve lines as smooth triangles (line only when cursor is near)
         let mx = ctx.mouse_world[0];

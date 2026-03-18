@@ -6,7 +6,7 @@ use crate::automation::AutomationData;
 use crate::component;
 use crate::entity_id::{EntityId, new_id};
 use crate::ui::hit_testing::{canonical_rect, hit_test, point_in_rect, rects_overlap, targets_in_rect};
-use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView};
+use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView};
 use crate::{Camera, CanvasObject, HitTarget};
 
 fn make_object(x: f32, y: f32) -> CanvasObject {
@@ -39,6 +39,8 @@ fn make_waveform(x: f32, y: f32) -> WaveformView {
         fade_out_curve: 0.5,
         volume: 1.0,
         pan: 0.5,
+        warp_mode: WarpMode::Off,
+        sample_bpm: 120.0,
         pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,

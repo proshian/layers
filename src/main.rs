@@ -534,6 +534,7 @@ struct App {
     bpm_drag_overlap_snapshots: IndexMap<EntityId, WaveformView>,
     last_click_time: TimeInstant,
     last_vol_text_click_time: TimeInstant,
+    last_sample_bpm_text_click_time: TimeInstant,
     last_pitch_text_click_time: TimeInstant,
     last_click_world: [f32; 2],
     last_cursor_send: TimeInstant,
@@ -643,6 +644,7 @@ impl App {
             bpm_drag_overlap_snapshots: IndexMap::new(),
             last_click_time: TimeInstant::now(),
             last_vol_text_click_time: TimeInstant::now(),
+            last_sample_bpm_text_click_time: TimeInstant::now(),
             last_pitch_text_click_time: TimeInstant::now(),
             last_click_world: [0.0; 2],
             last_cursor_send: TimeInstant::now(),
@@ -754,6 +756,27 @@ impl App {
             snap.position[0] *= scale;
             snap.position[1] *= scale;
             snap.size[1] *= scale;
+        }
+    }
+
+    /// Resize all warped waveforms (RePitch and Semitone) based on current project BPM / pitch.
+    pub(crate) fn resize_warped_clips(&mut self) {
+        for (&wf_id, wf) in self.waveforms.iter_mut() {
+            match wf.warp_mode {
+                ui::waveform::WarpMode::RePitch => {
+                    if let Some(clip) = self.audio_clips.get(&wf_id) {
+                        let original_duration_px = clip.duration_secs * PIXELS_PER_SECOND;
+                        wf.size[0] = original_duration_px * (self.bpm / wf.sample_bpm);
+                    }
+                }
+                ui::waveform::WarpMode::Semitone => {
+                    if let Some(clip) = self.audio_clips.get(&wf_id) {
+                        let original_duration_px = clip.duration_secs * PIXELS_PER_SECOND;
+                        wf.size[0] = original_duration_px / 2.0_f32.powf(wf.pitch_semitones / 12.0);
+                    }
+                }
+                ui::waveform::WarpMode::Off => {}
+            }
         }
     }
 
@@ -903,6 +926,8 @@ impl App {
                         fade_out_curve: sw.fade_out_curve,
                         volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
                         pan: sw.pan,
+                        warp_mode: ui::waveform::WarpMode::Off,
+                        sample_bpm: if state.bpm > 0.0 { state.bpm } else { DEFAULT_BPM },
                         pitch_semitones: 0.0,
                         disabled: sw.disabled,
                         sample_offset_px: sw.sample_offset_px,
@@ -1279,6 +1304,7 @@ impl App {
             bpm_drag_overlap_snapshots: IndexMap::new(),
             last_click_time: TimeInstant::now(),
             last_vol_text_click_time: TimeInstant::now(),
+            last_sample_bpm_text_click_time: TimeInstant::now(),
             last_pitch_text_click_time: TimeInstant::now(),
             last_click_world: [0.0; 2],
             last_cursor_send: TimeInstant::now(),
@@ -1789,6 +1815,8 @@ impl App {
                 fade_out_curve: sw.fade_out_curve,
                 volume: if sw.volume > 0.0 { sw.volume } else { 1.0 },
                 pan: sw.pan,
+                warp_mode: ui::waveform::WarpMode::Off,
+                sample_bpm: self.bpm,
                 pitch_semitones: 0.0,
                 disabled: sw.disabled,
                 sample_offset_px: sw.sample_offset_px,
@@ -2437,23 +2465,27 @@ impl App {
                 // Preserve vol_entry when updating the same waveform so that
                 // click-to-edit isn't reset by the unconditional update_right_window
                 // call at the end of the mouse-released handler.
-                let (vol_entry, pitch_entry) = if self.right_window.as_ref().map_or(false, |rw| rw.waveform_id == id) {
+                let (vol_entry, sample_bpm_entry, pitch_entry) = if self.right_window.as_ref().map_or(false, |rw| rw.waveform_id == id) {
                     let rw = self.right_window.take().unwrap();
-                    (rw.vol_entry, rw.pitch_entry)
+                    (rw.vol_entry, rw.sample_bpm_entry, rw.pitch_entry)
                 } else {
-                    (ui::value_entry::ValueEntry::new(), ui::value_entry::ValueEntry::new())
+                    (ui::value_entry::ValueEntry::new(), ui::value_entry::ValueEntry::new(), ui::value_entry::ValueEntry::new())
                 };
                 self.right_window = Some(ui::right_window::RightWindow {
                     waveform_id: id,
                     volume: wf.volume,
                     pan: wf.pan,
-                    pitch: wf.pitch_semitones,
+                    warp_mode: wf.warp_mode,
+                    sample_bpm: wf.sample_bpm,
+                    pitch_semitones: wf.pitch_semitones,
                     vol_dragging: false,
                     pan_dragging: false,
+                    sample_bpm_dragging: false,
                     pitch_dragging: false,
                     drag_start_y: 0.0,
                     drag_start_value: 0.0,
                     vol_entry,
+                    sample_bpm_entry,
                     pitch_entry,
                 });
                 return;
@@ -2477,6 +2509,8 @@ impl App {
             let mut sample_offsets: Vec<f32> = Vec::new();
             let mut vol_autos: Vec<Vec<(f32, f32)>> = Vec::new();
             let mut pan_autos: Vec<Vec<(f32, f32)>> = Vec::new();
+            let mut warp_modes: Vec<u8> = Vec::new();
+            let mut sample_bpms: Vec<f32> = Vec::new();
             let mut pitch_semitones_vec: Vec<f32> = Vec::new();
 
             for (&wf_id, wf) in self.waveforms.iter() {
@@ -2499,6 +2533,8 @@ impl App {
                 sample_offsets.push(wf.sample_offset_px);
                 vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
                 pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
+                warp_modes.push(match wf.warp_mode { ui::waveform::WarpMode::RePitch => 1, ui::waveform::WarpMode::Semitone => 2, _ => 0 });
+                sample_bpms.push(wf.sample_bpm);
                 pitch_semitones_vec.push(wf.pitch_semitones);
             }
 
@@ -2524,7 +2560,8 @@ impl App {
                                 sample_offsets.push(wf.sample_offset_px);
                                 vol_autos.push(wf.automation.volume_lane().points.iter().map(|p| (p.t, p.value)).collect());
                                 pan_autos.push(wf.automation.pan_lane().points.iter().map(|p| (p.t, p.value)).collect());
-                                pitch_semitones_vec.push(wf.pitch_semitones);
+                                warp_modes.push(match wf.warp_mode { ui::waveform::WarpMode::RePitch => 1, _ => 0 });
+                                sample_bpms.push(wf.sample_bpm);
                             }
                         }
                     }
@@ -2532,7 +2569,7 @@ impl App {
             }
 
             let owned_clips: Vec<AudioClipData> = clips.iter().map(|c| (*c).clone()).collect();
-            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &pitch_semitones_vec);
+            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &warp_modes, &sample_bpms, self.bpm, &pitch_semitones_vec);
 
             let regions: Vec<audio::AudioEffectRegion> = self
                 .effect_regions
@@ -2826,6 +2863,8 @@ impl App {
                 fade_out_curve: 0.0,
                 volume: 1.0,
                 pan: 0.5,
+                warp_mode: ui::waveform::WarpMode::Off,
+                sample_bpm: self.bpm,
                 pitch_semitones: 0.0,
                 disabled: false,
                 sample_offset_px: 0.0,
@@ -2975,6 +3014,9 @@ impl App {
                 fade_out_curve: wf.fade_out_curve,
                 volume: wf.volume,
                 buffer_offset_secs: wf.sample_offset_px as f64 / audio::PIXELS_PER_SECOND as f64,
+                warp_mode: match wf.warp_mode { ui::waveform::WarpMode::RePitch => 1, ui::waveform::WarpMode::Semitone => 2, _ => 0 },
+                sample_bpm: wf.sample_bpm,
+                project_bpm: self.bpm,
                 pitch_semitones: wf.pitch_semitones,
             })
             .collect();
@@ -4018,6 +4060,36 @@ impl App {
                     }
                 }
             }
+            CommandAction::SetWarpOff | CommandAction::SetWarpRePitch | CommandAction::SetWarpSemitone => {
+                let new_mode = match action {
+                    CommandAction::SetWarpRePitch => ui::waveform::WarpMode::RePitch,
+                    CommandAction::SetWarpSemitone => ui::waveform::WarpMode::Semitone,
+                    _ => ui::waveform::WarpMode::Off,
+                };
+                if let Some(rw) = &self.right_window {
+                    let wf_id = rw.waveform_id;
+                    if let Some(before) = self.waveforms.get(&wf_id).cloned() {
+                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                            wf.warp_mode = new_mode;
+                            if new_mode == ui::waveform::WarpMode::RePitch {
+                                if let Some(clip) = self.audio_clips.get(&wf_id) {
+                                    let original_duration_px = clip.duration_secs * PIXELS_PER_SECOND;
+                                    wf.size[0] = original_duration_px * (self.bpm / wf.sample_bpm);
+                                }
+                            }
+                        }
+                        if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                            self.push_op(crate::operations::Operation::UpdateWaveform {
+                                id: wf_id, before, after,
+                            });
+                        }
+                    }
+                }
+                self.update_right_window();
+                self.mark_dirty();
+                #[cfg(feature = "native")]
+                self.sync_audio_clips();
+            }
         }
         self.request_redraw();
     }
@@ -4133,6 +4205,8 @@ impl App {
             fade_out_curve: 0.0,
             volume: orig_volume,
             pan: 0.5,
+            warp_mode: ui::waveform::WarpMode::Off,
+            sample_bpm: self.bpm,
             pitch_semitones: 0.0,
             disabled: false,
             sample_offset_px: 0.0,
@@ -4165,6 +4239,8 @@ impl App {
             fade_out_curve: orig_fade_out_curve,
             volume: orig_volume,
             pan: 0.5,
+            warp_mode: ui::waveform::WarpMode::Off,
+            sample_bpm: self.bpm,
             pitch_semitones: 0.0,
             disabled: false,
             sample_offset_px: 0.0,
@@ -4903,6 +4979,8 @@ impl App {
             fade_out_curve: 0.0,
             volume: 1.0,
             pan: 0.5,
+            warp_mode: ui::waveform::WarpMode::Off,
+            sample_bpm: self.bpm,
             pitch_semitones: 0.0,
             disabled: true, // disabled until loaded
             sample_offset_px: 0.0,
@@ -4913,6 +4991,7 @@ impl App {
         self.mark_dirty();
 
         let auto_fade_px = if self.settings.auto_clip_fades { ui::waveform::DEFAULT_AUTO_FADE_PX } else { 0.0 };
+        let project_bpm = self.bpm;
         let path = path.to_owned();
         let tx = self.pending_audio_tx.clone();
         let rs = self.remote_storage.clone();
@@ -4952,6 +5031,8 @@ impl App {
                 fade_out_curve: 0.0,
                 volume: 1.0,
                 pan: 0.5,
+                warp_mode: ui::waveform::WarpMode::Off,
+                sample_bpm: project_bpm,
                 pitch_semitones: 0.0,
                 disabled: false,
                 sample_offset_px: 0.0,

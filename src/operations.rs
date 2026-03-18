@@ -415,6 +415,7 @@ impl Operation {
                 app.rescale_clip_positions(scale);
                 app.rescale_camera_for_bpm(scale);
                 app.bpm = *after;
+                app.resize_warped_clips();
                 app.resolve_all_waveform_overlaps();
             }
 

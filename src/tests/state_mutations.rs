@@ -4,7 +4,7 @@ use crate::audio::AudioClipData;
 use crate::automation::AutomationData;
 use crate::component;
 use crate::entity_id::new_id;
-use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView, DEFAULT_AUTO_FADE_PX};
+use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView, DEFAULT_AUTO_FADE_PX};
 use crate::{App, HitTarget};
 
 fn make_waveform(x: f32, y: f32) -> WaveformView {
@@ -28,6 +28,8 @@ fn make_waveform(x: f32, y: f32) -> WaveformView {
         fade_out_curve: 0.5,
         volume: 1.0,
         pan: 0.5,
+        warp_mode: WarpMode::Off,
+        sample_bpm: 120.0,
         pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,
@@ -57,6 +59,8 @@ fn make_waveform_with_samples(x: f32, y: f32, num_samples: usize) -> WaveformVie
         fade_out_curve: 0.5,
         volume: 1.0,
         pan: 0.5,
+        warp_mode: WarpMode::Off,
+        sample_bpm: 120.0,
         pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,

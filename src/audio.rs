@@ -568,6 +568,9 @@ impl AudioEngine {
         sample_offsets_px: &[f32],
         volume_automations: &[Vec<(f32, f32)>],
         pan_automations: &[Vec<(f32, f32)>],
+        warp_modes: &[u8],
+        sample_bpms: &[f32],
+        project_bpm: f32,
         pitch_semitones: &[f32],
     ) {
         let mut clips = self.clips.lock().unwrap();
@@ -590,8 +593,14 @@ impl AudioEngine {
             let visible_duration = size[0] as f64 / PIXELS_PER_SECOND as f64;
             let vol_auto = volume_automations.get(i).cloned().unwrap_or_default();
             let pan_auto = pan_automations.get(i).cloned().unwrap_or_default();
+            let warp = warp_modes.get(i).copied().unwrap_or(0);
+            let sample_bpm = sample_bpms.get(i).copied().unwrap_or(120.0);
             let pitch = pitch_semitones.get(i).copied().unwrap_or(0.0);
-            let effective_rate = clip_data.sample_rate as f64 * 2.0_f64.powf(pitch as f64 / 12.0);
+            let effective_rate = match warp {
+                1 => clip_data.sample_rate as f64 * (sample_bpm as f64 / project_bpm as f64),
+                2 => clip_data.sample_rate as f64 * 2.0_f64.powf(pitch as f64 / 12.0),
+                _ => clip_data.sample_rate as f64,
+            };
             clips.push(PlaybackClip {
                 buffer: clip_data.samples.clone(),
                 source_sample_rate: clip_data.sample_rate,
@@ -998,6 +1007,9 @@ pub struct ExportClip {
     pub fade_out_curve: f32,
     pub volume: f32,
     pub buffer_offset_secs: f64,
+    pub warp_mode: u8,
+    pub sample_bpm: f32,
+    pub project_bpm: f32,
     pub pitch_semitones: f32,
 }
 
@@ -1037,7 +1049,11 @@ pub fn render_to_wav(
             }
             let clip_t = t - clip.start_time_secs;
             if clip_t >= 0.0 && clip_t < clip.duration_secs {
-                let effective_rate = clip.source_sample_rate as f64 * 2.0_f64.powf(clip.pitch_semitones as f64 / 12.0);
+                let effective_rate = match clip.warp_mode {
+                    1 => clip.source_sample_rate as f64 * (clip.sample_bpm as f64 / clip.project_bpm as f64),
+                    2 => clip.source_sample_rate as f64 * 2.0_f64.powf(clip.pitch_semitones as f64 / 12.0),
+                    _ => clip.source_sample_rate as f64,
+                };
                 let source_idx = ((clip_t + clip.buffer_offset_secs) * effective_rate) as usize;
                 if source_idx < clip.buffer.len() {
                     let fg = clip_fade_gain(

@@ -3,6 +3,7 @@ use crate::InstanceRaw;
 use crate::ui::palette::{gain_to_db, gain_to_vol_fader_pos, vol_fader_pos_to_gain,
     VOL_FADER_DB_MAX, VOL_FADER_DB_BOTTOM, VOL_FADER_P_ZERO, VOL_FADER_P_BOTTOM};
 use crate::ui::value_entry::ValueEntry;
+use crate::ui::waveform::WarpMode;
 
 pub const RIGHT_WINDOW_WIDTH: f32 = 200.0;
 const HEADER_HEIGHT: f32 = 36.0;
@@ -27,13 +28,17 @@ pub struct RightWindow {
     pub waveform_id: EntityId,
     pub volume: f32,
     pub pan: f32,
-    pub pitch: f32,
+    pub warp_mode: WarpMode,
+    pub sample_bpm: f32,
+    pub pitch_semitones: f32,
     pub vol_dragging: bool,
     pub pan_dragging: bool,
+    pub sample_bpm_dragging: bool,
     pub pitch_dragging: bool,
     pub drag_start_y: f32,
     pub drag_start_value: f32,
     pub vol_entry: ValueEntry,
+    pub sample_bpm_entry: ValueEntry,
     pub pitch_entry: ValueEntry,
 }
 
@@ -64,9 +69,39 @@ impl RightWindow {
         [pp[0] + ps[0] * 0.5, pp[1] + HEADER_HEIGHT * scale + PAN_KNOB_Y_OFFSET * scale]
     }
 
-    fn pitch_knob_center(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
+    fn warp_mode_button_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
-        [pp[0] + ps[0] * 0.5, pp[1] + HEADER_HEIGHT * scale + PITCH_KNOB_Y_OFFSET * scale]
+        let cx = pp[0] + ps[0] * 0.5;
+        let y = pp[1] + HEADER_HEIGHT * scale + PITCH_KNOB_Y_OFFSET * scale;
+        let w = 80.0 * scale;
+        let h = 24.0 * scale;
+        ([cx - w * 0.5, y - h * 0.5], [w, h])
+    }
+
+    fn warp_mode_selector_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
+        let cx = pp[0] + ps[0] * 0.5;
+        let (btn_pos, btn_size) = Self::warp_mode_button_rect(screen_w, screen_h, scale);
+        let y = btn_pos[1] + btn_size[1] + 4.0 * scale;
+        let w = 90.0 * scale;
+        let h = 22.0 * scale;
+        ([cx - w * 0.5, y], [w, h])
+    }
+
+    pub fn warp_mode_selector_rect_pub(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        Self::warp_mode_selector_rect(screen_w, screen_h, scale)
+    }
+
+    fn warp_param_text_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (pp, _ps) = Self::panel_rect(screen_w, screen_h, scale);
+        let (sel_pos, sel_size) = Self::warp_mode_selector_rect(screen_w, screen_h, scale);
+        let rw_w = RIGHT_WINDOW_WIDTH * scale;
+        let text_y = sel_pos[1] + sel_size[1] + 4.0 * scale;
+        ([pp[0], text_y], [rw_w, 40.0 * scale])
+    }
+
+    pub fn warp_param_text_rect_pub(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        Self::warp_param_text_rect(screen_w, screen_h, scale)
     }
 
     pub fn hit_test_vol_knob(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
@@ -89,12 +124,31 @@ impl RightWindow {
         dx * dx + dy * dy <= r * r
     }
 
-    pub fn hit_test_pitch_knob(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        let c = Self::pitch_knob_center(screen_w, screen_h, scale);
-        let r = (KNOB_R + 8.0) * scale;
-        let dx = pos[0] - c[0];
-        let dy = pos[1] - c[1];
-        dx * dx + dy * dy <= r * r
+    pub fn hit_test_warp_mode_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        let (rp, rs) = Self::warp_mode_button_rect(screen_w, screen_h, scale);
+        pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
+            && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
+    }
+
+    pub fn hit_test_warp_mode_selector(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.warp_mode == WarpMode::Off { return false; }
+        let (rp, rs) = Self::warp_mode_selector_rect(screen_w, screen_h, scale);
+        pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
+            && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
+    }
+
+    pub fn hit_test_sample_bpm_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.warp_mode != WarpMode::RePitch { return false; }
+        let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
+        pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
+            && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
+    }
+
+    pub fn hit_test_pitch_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.warp_mode != WarpMode::Semitone { return false; }
+        let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
+        pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
+            && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     fn vol_db_text_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
@@ -105,14 +159,10 @@ impl RightWindow {
         ([pp[0], text_y], [rw_w, 20.0 * scale])
     }
 
-    fn pitch_text_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
-        let c = Self::pitch_knob_center(screen_w, screen_h, scale);
-        let rw_w = RIGHT_WINDOW_WIDTH * scale;
-        let (pp, _ps) = Self::panel_rect(screen_w, screen_h, scale);
-        let knob_r = KNOB_R * scale;
-        let text_y = c[1] + knob_r + 4.0 * scale;
-        ([pp[0], text_y], [rw_w, 20.0 * scale])
+    pub fn warp_mode_button_rect_pub(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        Self::warp_mode_button_rect(screen_w, screen_h, scale)
     }
+
 
     pub fn hit_test_vol_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
         let (rp, rs) = Self::vol_db_text_rect(screen_w, screen_h, scale);
@@ -120,19 +170,7 @@ impl RightWindow {
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
-    pub fn hit_test_pitch_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        let (rp, rs) = Self::pitch_text_rect(screen_w, screen_h, scale);
-        pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
-            && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
-    }
 
-    pub fn pitch_to_knob_value(semitones: f32) -> f32 {
-        ((semitones + 24.0) / 48.0).clamp(0.0, 1.0)
-    }
-
-    pub fn knob_value_to_pitch(v: f32) -> f32 {
-        (v * 48.0 - 24.0).clamp(-24.0, 24.0)
-    }
 
     fn value_to_angle(v: f32) -> f32 {
         // 225° (7-o'clock) to 315° (5-o'clock), 270° sweep
@@ -232,11 +270,14 @@ impl RightWindow {
             border_radius: FADER_TRACK_W * 0.5 * scale,
         });
 
-        // Fill from thumb to bottom
-        let fill_h = track_pos[1] + track_size[1] - thumb_y;
-        if fill_h > 0.0 {
+        // Fill anchored at 0 dB: extends up when volume > 0 dB, down when volume < 0 dB
+        let y_zero = Self::vol_fader_thumb_y(VOL_FADER_P_ZERO, track_pos, track_size[1]);
+        let fill_top = thumb_y.min(y_zero);
+        let fill_bot = thumb_y.max(y_zero);
+        let fill_h = fill_bot - fill_top;
+        if fill_h > 0.5 {
             out.push(InstanceRaw {
-                position: [track_pos[0], thumb_y],
+                position: [track_pos[0], fill_top],
                 size: [track_size[0], fill_h],
                 color: BLUE,
                 border_radius: FADER_TRACK_W * 0.5 * scale,
@@ -277,10 +318,27 @@ impl RightWindow {
         let pc = Self::pan_knob_center(screen_w, screen_h, scale);
         Self::push_knob(&mut out, pc[0], pc[1], self.pan, scale);
 
-        // Pitch knob
-        let pitch_c = Self::pitch_knob_center(screen_w, screen_h, scale);
-        let pitch_knob_val = Self::pitch_to_knob_value(self.pitch);
-        Self::push_knob(&mut out, pitch_c[0], pitch_c[1], pitch_knob_val, scale);
+        // Warp toggle button
+        let (btn_pos, btn_size) = Self::warp_mode_button_rect(screen_w, screen_h, scale);
+        let warp_on = self.warp_mode != WarpMode::Off;
+        let btn_color = if warp_on { BLUE } else { [0.2, 0.2, 0.25, 1.0] };
+        out.push(InstanceRaw {
+            position: btn_pos,
+            size: btn_size,
+            color: btn_color,
+            border_radius: 4.0 * scale,
+        });
+
+        // Warp mode selector (only when warp is on)
+        if warp_on {
+            let (sel_pos, sel_size) = Self::warp_mode_selector_rect(screen_w, screen_h, scale);
+            out.push(InstanceRaw {
+                position: sel_pos,
+                size: sel_size,
+                color: [0.16, 0.16, 0.20, 1.0],
+                border_radius: 4.0 * scale,
+            });
+        }
 
         out
     }
@@ -313,9 +371,22 @@ impl RightWindow {
         }
     }
 
+    /// Format warp toggle button text
+    pub fn warp_button_text(&self) -> &'static str {
+        if self.warp_mode == WarpMode::Off { "OFF" } else { "ON" }
+    }
+
+    /// Format warp mode selector text
+    pub fn warp_mode_selector_text(&self) -> &'static str {
+        match self.warp_mode {
+            WarpMode::RePitch => "REPITCH",
+            WarpMode::Semitone | WarpMode::Off => "SEMITONE",
+        }
+    }
+
     /// Format pitch value as semitones string
     pub fn pitch_text(&self) -> String {
-        let p = self.pitch;
+        let p = self.pitch_semitones;
         if p.abs() < 0.05 {
             "0 st".to_string()
         } else {
@@ -328,16 +399,17 @@ impl RightWindow {
         }
     }
 
+    /// Format sample BPM as display string
+    pub fn sample_bpm_text(&self) -> String {
+        format!("{:.1}", self.sample_bpm)
+    }
+
     pub fn vol_fader_rect_pub(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         Self::vol_fader_rects(screen_w, screen_h, scale)
     }
 
     pub fn pan_knob_center_pub(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
         Self::pan_knob_center(screen_w, screen_h, scale)
-    }
-
-    pub fn pitch_knob_center_pub(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
-        Self::pitch_knob_center(screen_w, screen_h, scale)
     }
 
     /// Compute new volume from drag delta (up = increase)
@@ -353,9 +425,15 @@ impl RightWindow {
         (drag_start_value + delta).clamp(0.0, 1.0)
     }
 
-    /// Compute new pitch knob value from drag delta (up = increase)
+    /// Compute new sample BPM from drag delta (up = increase)
+    pub fn drag_sample_bpm_delta(drag_start_y: f32, mouse_y: f32, drag_start_value: f32, scale: f32) -> f32 {
+        let delta = (drag_start_y - mouse_y) / (2.0 * scale);
+        (drag_start_value + delta).clamp(20.0, 999.0)
+    }
+
+    /// Compute new pitch semitones from drag delta (up = increase)
     pub fn drag_pitch_delta(drag_start_y: f32, mouse_y: f32, drag_start_value: f32, scale: f32) -> f32 {
-        let delta = (drag_start_y - mouse_y) / (200.0 * scale);
-        (drag_start_value + delta).clamp(0.0, 1.0)
+        let delta = (drag_start_y - mouse_y) / (8.0 * scale);
+        (drag_start_value + delta).clamp(-24.0, 24.0)
     }
 }

@@ -34,6 +34,9 @@ pub enum MenuContext {
         grid_mode: GridMode,
         triplet_grid: bool,
     },
+    WarpModeSelect {
+        current: crate::ui::waveform::WarpMode,
+    },
 }
 
 pub struct ContextMenuItem {
@@ -458,6 +461,23 @@ impl ContextMenu {
                 action: CommandAction::RevealInFinder,
                 checked: false,
             })],
+            MenuContext::WarpModeSelect { current } => {
+                use crate::ui::waveform::WarpMode;
+                vec![
+                    ContextMenuEntry::Item(ContextMenuItem {
+                        label: "Semitone",
+                        shortcut: "",
+                        action: CommandAction::SetWarpSemitone,
+                        checked: current == WarpMode::Semitone,
+                    }),
+                    ContextMenuEntry::Item(ContextMenuItem {
+                        label: "Re-Pitch",
+                        shortcut: "",
+                        action: CommandAction::SetWarpRePitch,
+                        checked: current == WarpMode::RePitch,
+                    }),
+                ]
+            }
         };
         Self {
             position: pos,

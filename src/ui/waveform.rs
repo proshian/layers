@@ -6,6 +6,23 @@ use crate::grid::PIXELS_PER_SECOND;
 use crate::automation::{AutomationData, AutomationParam};
 use crate::{push_border, Camera, InstanceRaw};
 
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum WarpMode {
+    Off,
+    RePitch,
+    Semitone,
+}
+
+impl Default for WarpMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
+fn default_sample_bpm() -> f32 {
+    120.0
+}
+
 const PEAK_BLOCK_SIZE: usize = 256;
 
 // AudioClipData — shared type for audio clip metadata
@@ -111,6 +128,10 @@ pub struct WaveformView {
     pub volume: f32,
     #[serde(default = "default_pan")]
     pub pan: f32,
+    #[serde(default)]
+    pub warp_mode: WarpMode,
+    #[serde(default = "default_sample_bpm")]
+    pub sample_bpm: f32,
     #[serde(default)]
     pub pitch_semitones: f32,
     pub disabled: bool,
@@ -455,13 +476,14 @@ fn channel_triangles(
     volume: f32,
     sample_offset_px: f32,
     volume_automation: &crate::automation::AutomationLane,
+    stretch_ratio: f32,
 ) -> Vec<WaveformVertex> {
     let mut verts = Vec::new();
     if samples.is_empty() || wf_size[0] <= 0.0 {
         return verts;
     }
 
-    let world_per_sample = 1.0 / (sample_rate as f32 / PIXELS_PER_SECOND);
+    let world_per_sample = stretch_ratio / (sample_rate as f32 / PIXELS_PER_SECOND);
     let full_width_px = samples.len() as f32 * world_per_sample;
     let samples_per_px = sample_rate as f32 / (PIXELS_PER_SECOND * camera.zoom);
     let desired_screen_px = 2.0;
@@ -733,10 +755,17 @@ pub fn build_waveform_triangles(
     world_right: f32,
     is_hovered: bool,
     is_selected: bool,
+    bpm: f32,
 ) -> Vec<WaveformVertex> {
     if wf.audio.left_samples.is_empty() && wf.audio.right_samples.is_empty() {
         return Vec::new();
     }
+
+    let stretch_ratio = match wf.warp_mode {
+        WarpMode::RePitch => if wf.sample_bpm > 0.0 { bpm / wf.sample_bpm } else { 1.0 },
+        WarpMode::Semitone => 1.0 / 2.0_f32.powf(wf.pitch_semitones / 12.0),
+        WarpMode::Off => 1.0,
+    };
 
     let mut peak_color = wf.color;
     if is_hovered || is_selected {
@@ -776,6 +805,7 @@ pub fn build_waveform_triangles(
         wf.volume,
         wf.sample_offset_px,
         vol_lane,
+        stretch_ratio,
     ));
 
     all_verts.extend(channel_triangles(
@@ -798,6 +828,7 @@ pub fn build_waveform_triangles(
         wf.volume,
         wf.sample_offset_px,
         vol_lane,
+        stretch_ratio,
     ));
 
     all_verts

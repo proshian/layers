@@ -6,7 +6,7 @@ use crate::entity_id::new_id;
 use crate::history::MAX_UNDO_HISTORY;
 use crate::operations::Operation;
 use crate::regions::LoopRegion;
-use crate::ui::waveform::{AudioData, WaveformPeaks};
+use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks};
 use crate::{App, CanvasObject, HitTarget, WaveformView};
 
 fn make_object(x: f32, y: f32) -> CanvasObject {
@@ -39,6 +39,8 @@ fn make_waveform(x: f32, y: f32) -> WaveformView {
         fade_out_curve: 0.5,
         volume: 1.0,
         pan: 0.5,
+        warp_mode: WarpMode::Off,
+        sample_bpm: 120.0,
         pitch_semitones: 0.0,
         disabled: false,
         sample_offset_px: 0.0,
