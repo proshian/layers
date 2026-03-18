@@ -149,6 +149,7 @@ fn default_grid_enabled() -> bool { true }
 fn default_snap_to_grid() -> bool { true }
 fn default_grid_mode() -> GridMode { GridMode::default() }
 fn default_triplet_grid() -> bool { false }
+fn default_auto_clip_fades() -> bool { true }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub grid_line_intensity: f32,
@@ -172,6 +173,8 @@ pub struct Settings {
     pub snap_to_vertical_grid: bool,
     #[serde(default)]
     pub dev_mode: bool,
+    #[serde(default = "default_auto_clip_fades")]
+    pub auto_clip_fades: bool,
     #[serde(default)]
     pub sample_library_folders: Vec<String>,
 }
@@ -231,6 +234,7 @@ impl Default for Settings {
             triplet_grid: false,
             snap_to_vertical_grid: false,
             dev_mode: false,
+            auto_clip_fades: true,
             sample_library_folders: Vec::new(),
         }
     }

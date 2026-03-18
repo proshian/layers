@@ -2769,8 +2769,8 @@ impl App {
                 size: [0.0, height],
                 color: WAVEFORM_COLORS[color_idx],
                 border_radius: 8.0,
-                fade_in_px: 0.0,
-                fade_out_px: 0.0,
+                fade_in_px: if self.settings.auto_clip_fades { ui::waveform::DEFAULT_AUTO_FADE_PX } else { 0.0 },
+                fade_out_px: if self.settings.auto_clip_fades { ui::waveform::DEFAULT_AUTO_FADE_PX } else { 0.0 },
                 fade_in_curve: 0.0,
                 fade_out_curve: 0.0,
                 volume: 1.0,
@@ -4873,6 +4873,7 @@ impl App {
         self.pending_audio_loads_count += 1;
         self.mark_dirty();
 
+        let auto_fade_px = if self.settings.auto_clip_fades { ui::waveform::DEFAULT_AUTO_FADE_PX } else { 0.0 };
         let path = path.to_owned();
         let tx = self.pending_audio_tx.clone();
         let rs = self.remote_storage.clone();
@@ -4906,8 +4907,8 @@ impl App {
                 size: [loaded.width, height],
                 color,
                 border_radius: 8.0,
-                fade_in_px: 0.0,
-                fade_out_px: 0.0,
+                fade_in_px: auto_fade_px,
+                fade_out_px: auto_fade_px,
                 fade_in_curve: 0.0,
                 fade_out_curve: 0.0,
                 volume: 1.0,

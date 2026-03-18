@@ -356,6 +356,43 @@ impl SettingsWindow {
             return false;
         }
 
+        // Row 3 (Auto Clip Fades) — check popup and button before generic hit tests
+        if self.open_dropdown == Some(3) {
+            let (dp, ds) = self.dropdown_rect(3, screen_w, screen_h, scale);
+            let options = Self::auto_clip_fades_options();
+            let item_h = DROPDOWN_ITEM_HEIGHT * scale;
+            let popup_y = dp[1] + ds[1] + 2.0 * scale;
+            let popup_h = options.len() as f32 * item_h;
+            if mouse[0] >= dp[0]
+                && mouse[0] <= dp[0] + ds[0]
+                && mouse[1] >= popup_y
+                && mouse[1] <= popup_y + popup_h
+            {
+                let rel = mouse[1] - popup_y;
+                let idx = (rel / item_h) as usize;
+                if idx < options.len() {
+                    settings.auto_clip_fades = idx == 0;
+                    self.open_dropdown = None;
+                    return true;
+                }
+            }
+        }
+        {
+            let (dp, ds) = self.dropdown_rect(3, screen_w, screen_h, scale);
+            if mouse[0] >= dp[0]
+                && mouse[0] <= dp[0] + ds[0]
+                && mouse[1] >= dp[1]
+                && mouse[1] <= dp[1] + ds[1]
+            {
+                if self.open_dropdown == Some(3) {
+                    self.open_dropdown = None;
+                } else {
+                    self.open_dropdown = Some(3);
+                }
+                return true;
+            }
+        }
+
         // First check if click is on an open dropdown item
         if self.open_dropdown.is_some() {
             if let Some(item_idx) = self.dropdown_item_hit_test(mouse, screen_w, screen_h, scale) {
@@ -619,6 +656,48 @@ impl SettingsWindow {
             }
         }
 
+        // Row 3: Auto Clip Fades dropdown
+        {
+            let (dp, ds) = self.dropdown_rect(3, screen_w, screen_h, scale);
+
+            // Separator above row 3
+            let row_top =
+                wp[1] + SECTION_HEADER_HEIGHT * scale + 3.0 * ROW_HEIGHT * scale;
+            out.push(InstanceRaw {
+                position: [content_x + 16.0 * scale, row_top - 0.5 * scale],
+                size: [content_w - 32.0 * scale, 1.0 * scale],
+                color: [1.0, 1.0, 1.0, 0.04],
+                border_radius: 0.0,
+            });
+
+            // Dropdown border
+            out.push(InstanceRaw {
+                position: [dp[0] - 1.0, dp[1] - 1.0],
+                size: [ds[0] + 2.0, ds[1] + 2.0],
+                color: [0.30, 0.30, 0.34, 1.0],
+                border_radius: dd_br + 1.0,
+            });
+
+            // Dropdown background
+            out.push(InstanceRaw {
+                position: dp,
+                size: ds,
+                color: [0.20, 0.20, 0.24, 1.0],
+                border_radius: dd_br,
+            });
+
+            // Arrow indicator
+            let arrow_size = 6.0 * scale;
+            let arrow_x = dp[0] + ds[0] - 14.0 * scale;
+            let arrow_y = dp[1] + (ds[1] - arrow_size) * 0.5;
+            out.push(InstanceRaw {
+                position: [arrow_x, arrow_y],
+                size: [arrow_size, arrow_size],
+                color: [1.0, 1.0, 1.0, 0.3],
+                border_radius: arrow_size * 0.5,
+            });
+        }
+
         // Open dropdown popup
         if let Some(dd_idx) = self.open_dropdown {
             let options = self.dropdown_options(dd_idx);
@@ -660,6 +739,46 @@ impl SettingsWindow {
                         out.push(InstanceRaw {
                             position: [dp[0] + 4.0 * scale, iy + 2.0 * scale],
                             size: [ds[0] - 8.0 * scale, item_h - 4.0 * scale],
+                            color: [0.30, 0.50, 0.80, 0.5],
+                            border_radius: 4.0 * scale,
+                        });
+                    }
+                }
+            } else if dd_idx == 3 {
+                // Auto Clip Fades popup
+                let (dp3, ds3) = self.dropdown_rect(3, screen_w, screen_h, scale);
+                let options = Self::auto_clip_fades_options();
+                let item_h = DROPDOWN_ITEM_HEIGHT * scale;
+                let popup_h = options.len() as f32 * item_h;
+                let popup_y = dp3[1] + ds3[1] + 2.0 * scale;
+                let popup_br = 6.0 * scale;
+
+                out.push(InstanceRaw {
+                    position: [dp3[0] + 4.0 * scale, popup_y + 4.0 * scale],
+                    size: [ds3[0], popup_h],
+                    color: [0.0, 0.0, 0.0, 0.5],
+                    border_radius: popup_br,
+                });
+                out.push(InstanceRaw {
+                    position: [dp3[0] - 1.0, popup_y - 1.0],
+                    size: [ds3[0] + 2.0, popup_h + 2.0],
+                    color: [0.30, 0.30, 0.34, 1.0],
+                    border_radius: popup_br + 1.0,
+                });
+                out.push(InstanceRaw {
+                    position: [dp3[0], popup_y],
+                    size: [ds3[0], popup_h],
+                    color: [0.18, 0.18, 0.22, 1.0],
+                    border_radius: popup_br,
+                });
+
+                let current_idx: usize = if settings.auto_clip_fades { 0 } else { 1 };
+                for (j, _opt) in options.iter().enumerate() {
+                    let iy = popup_y + j as f32 * item_h;
+                    if j == current_idx {
+                        out.push(InstanceRaw {
+                            position: [dp3[0] + 4.0 * scale, iy + 2.0 * scale],
+                            size: [ds3[0] - 8.0 * scale, item_h - 4.0 * scale],
                             color: [0.30, 0.50, 0.80, 0.5],
                             border_radius: 4.0 * scale,
                         });
@@ -760,6 +879,10 @@ impl SettingsWindow {
 
     fn dev_mode_options() -> &'static [&'static str] {
         &["Production", "Development"]
+    }
+
+    fn auto_clip_fades_options() -> &'static [&'static str] {
+        &["On", "Off"]
     }
 
     pub fn handle_developer_click(
@@ -981,6 +1104,34 @@ impl SettingsWindow {
                     });
                 }
 
+                // Row 3: Auto Clip Fades
+                {
+                    let row_y = wp[1]
+                        + SECTION_HEADER_HEIGHT * scale
+                        + 3.0 * ROW_HEIGHT * scale;
+                    out.push(SettingsTextEntry {
+                        text: "Auto Clip Fades".to_string(),
+                        x: content_x + ROW_LABEL_X * scale,
+                        y: row_y + (ROW_HEIGHT * scale - label_line) * 0.5,
+                        font_size: label_font,
+                        line_height: label_line,
+                        color: [210, 210, 218, 255],
+                        weight: 400,
+                    });
+
+                    let current_text = if settings.auto_clip_fades { "On" } else { "Off" };
+                    let (dp3, ds3) = self.dropdown_rect(3, screen_w, screen_h, scale);
+                    out.push(SettingsTextEntry {
+                        text: current_text.to_string(),
+                        x: dp3[0] + 10.0 * scale,
+                        y: dp3[1] + (ds3[1] - dd_line) * 0.5,
+                        font_size: dd_font,
+                        line_height: dd_line,
+                        color: [210, 210, 218, 255],
+                        weight: 400,
+                    });
+                }
+
                 // Popup item text
                 if let Some(dd_idx) = self.open_dropdown {
                     let options = self.dropdown_options(dd_idx);
@@ -995,6 +1146,31 @@ impl SettingsWindow {
                             let is_selected = opt == current;
                             out.push(SettingsTextEntry {
                                 text: opt.clone(),
+                                x: dp[0] + 12.0 * scale,
+                                y: iy + (item_h - dd_line) * 0.5,
+                                font_size: dd_font,
+                                line_height: dd_line,
+                                color: if is_selected {
+                                    [240, 240, 255, 255]
+                                } else {
+                                    [200, 200, 210, 255]
+                                },
+                                weight: if is_selected { 600 } else { 400 },
+                            });
+                        }
+                    } else if dd_idx == 3 {
+                        // Auto Clip Fades popup text
+                        let options = Self::auto_clip_fades_options();
+                        let (dp, ds) = self.dropdown_rect(3, screen_w, screen_h, scale);
+                        let item_h = DROPDOWN_ITEM_HEIGHT * scale;
+                        let popup_y = dp[1] + ds[1] + 2.0 * scale;
+                        let current_idx: usize = if settings.auto_clip_fades { 0 } else { 1 };
+
+                        for (j, opt) in options.iter().enumerate() {
+                            let iy = popup_y + j as f32 * item_h;
+                            let is_selected = j == current_idx;
+                            out.push(SettingsTextEntry {
+                                text: opt.to_string(),
                                 x: dp[0] + 12.0 * scale,
                                 y: iy + (item_h - dd_line) * 0.5,
                                 font_size: dd_font,

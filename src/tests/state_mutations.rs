@@ -4,7 +4,7 @@ use crate::audio::AudioClipData;
 use crate::automation::AutomationData;
 use crate::component;
 use crate::entity_id::new_id;
-use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView};
+use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView, DEFAULT_AUTO_FADE_PX};
 use crate::{App, HitTarget};
 
 fn make_waveform(x: f32, y: f32) -> WaveformView {
@@ -348,4 +348,29 @@ fn rescale_camera_for_bpm_keeps_screen_center_stable() {
         world_center_after[1],
         expected[1]
     );
+}
+
+#[test]
+fn test_auto_clip_fades_default_on() {
+    let app = App::new_headless();
+    assert!(
+        app.settings.auto_clip_fades,
+        "auto_clip_fades should default to true"
+    );
+    assert!(
+        DEFAULT_AUTO_FADE_PX > 0.0,
+        "DEFAULT_AUTO_FADE_PX should be positive"
+    );
+
+    // Logic: when enabled, fade = DEFAULT_AUTO_FADE_PX
+    let fade_on =
+        if app.settings.auto_clip_fades { DEFAULT_AUTO_FADE_PX } else { 0.0 };
+    assert_eq!(fade_on, DEFAULT_AUTO_FADE_PX);
+
+    // Logic: when disabled, fade = 0.0
+    let mut app2 = App::new_headless();
+    app2.settings.auto_clip_fades = false;
+    let fade_off =
+        if app2.settings.auto_clip_fades { DEFAULT_AUTO_FADE_PX } else { 0.0 };
+    assert_eq!(fade_off, 0.0);
 }

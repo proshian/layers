@@ -136,6 +136,7 @@ pub struct WaveformVertex {
 
 const FADE_CURVE_SEGMENTS: usize = 24;
 pub const FADE_HANDLE_SIZE: f32 = 8.0;
+pub const DEFAULT_AUTO_FADE_PX: f32 = 10.0; // ~83ms at 120px/s
 
 const SAMPLES_PER_PX_THRESHOLD: f32 = 4.0;
 

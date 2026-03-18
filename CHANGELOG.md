@@ -1,3 +1,4 @@
+- 2026-03-18: feat: auto clip fades — new clips get 10px fades on creation by default; toggle in Settings → Audio → Auto Clip Fades (28.8k loc)
 - 2026-03-18: fix: fade handles now take priority over edge resize at clip corners, so top-left/right creates fades instead of resizing (28.6k loc)
 - 2026-03-18: fix: fade handle hit area extended from ~6px to 16px for easier grabbing (28.6k loc)
 - 2026-03-18: fix: adjacent clip edge hit-testing now prefers the clip the cursor is inside, fixing resize of first clip when second clip starts immediately after (28.6k loc)
