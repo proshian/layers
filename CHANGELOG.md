@@ -1,3 +1,7 @@
+- 2026-03-19: fix: arrow-key nudge now resolves waveform overlaps live, same as mouse drag (31.3k loc)
+- 2026-03-19: fix: undo/redo of batch update ops (arrow nudge) now preserves selection so user can keep moving (31.3k loc)
+- 2026-03-19: fix: arrow-key vertical nudge now uses grid subdivision (same as horizontal), shift moves by clip height (31.3k loc)
+- 2026-03-19: feat: arrow-key nudge for selected entities — left/right by grid subdivision, up/down by grid step, shift for bar/clip-height, undo coalescing (31.3k loc)
 - 2026-03-19: feat: grid lines inherit theme accent color — hue, intensity, and brightness all affect line tint while grid_line_intensity slider controls opacity (30.6k loc)
 - 2026-03-19: feat: settings window now uses RuntimeTheme colors — window bg, sidebar, sliders, dropdowns all respond to hue/intensity/brightness (30.6k loc)
 - 2026-03-19: feat: Color Intensity + Brightness sliders — both now apply globally to RuntimeTheme, canvas objects, and waveform peaks; 0% intensity = near-grayscale, 200% brightness = near-white (30.6k loc)

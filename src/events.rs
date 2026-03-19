@@ -132,6 +132,13 @@ impl ApplicationHandler for App {
         #[cfg(not(feature = "native"))]
         let is_playing = false;
 
+        // Flush coalesced arrow-nudge after 500ms idle
+        if let Some(last) = self.arrow_nudge_last {
+            if last.elapsed().as_millis() >= 500 {
+                self.commit_arrow_nudge();
+            }
+        }
+
         if self.sample_browser.visible && self.sample_browser.tick_scroll() {
             self.request_redraw();
         }
@@ -3330,6 +3337,53 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
+                    }
+
+                    // Arrow-key nudge for selected canvas entities
+                    if matches!(event.logical_key,
+                        Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) |
+                        Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown))
+                        && self.editing_midi_clip.is_none()
+                        && !self.selected.is_empty()
+                    {
+                        let shift = self.modifiers.shift_key();
+                        let (dx, dy) = match event.logical_key {
+                            Key::Named(NamedKey::ArrowLeft) => {
+                                let step = if shift {
+                                    grid::pixels_per_beat(self.bpm) * 4.0
+                                } else {
+                                    grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm)
+                                };
+                                (-step, 0.0)
+                            }
+                            Key::Named(NamedKey::ArrowRight) => {
+                                let step = if shift {
+                                    grid::pixels_per_beat(self.bpm) * 4.0
+                                } else {
+                                    grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm)
+                                };
+                                (step, 0.0)
+                            }
+                            Key::Named(NamedKey::ArrowUp) => {
+                                let step = if shift {
+                                    grid::clip_height(self.bpm)
+                                } else {
+                                    grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm)
+                                };
+                                (0.0, -step)
+                            }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                let step = if shift {
+                                    grid::clip_height(self.bpm)
+                                } else {
+                                    grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm)
+                                };
+                                (0.0, step)
+                            }
+                            _ => (0.0, 0.0),
+                        };
+                        self.nudge_selection(dx, dy);
+                        return;
                     }
 
                     // --- BPM editing input ---

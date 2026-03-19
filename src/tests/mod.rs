@@ -1,3 +1,4 @@
+mod arrow_nudge;
 mod automation;
 mod browser;
 mod right_window;

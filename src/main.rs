@@ -298,7 +298,7 @@ enum DragState {
 
 /// Captures before-state of an entity for drag operations.
 #[derive(Clone)]
-enum EntityBeforeState {
+pub(crate) enum EntityBeforeState {
     Object(CanvasObject),
     Waveform(WaveformView),
     EffectRegion(effects::EffectRegion),
@@ -487,6 +487,9 @@ struct App {
     project_dirty: bool,
     op_undo_stack: Vec<operations::CommittedOp>,
     op_redo_stack: Vec<operations::CommittedOp>,
+    arrow_nudge_before: Option<Vec<(HitTarget, EntityBeforeState)>>,
+    arrow_nudge_last: Option<TimeInstant>,
+    arrow_nudge_overlap_snapshots: IndexMap<EntityId, WaveformView>,
     current_project_name: String,
     effect_regions: IndexMap<EntityId, effects::EffectRegion>,
     plugin_blocks: IndexMap<EntityId, effects::PluginBlock>,
@@ -599,6 +602,9 @@ impl App {
             project_dirty: false,
             op_undo_stack: Vec::new(),
             op_redo_stack: Vec::new(),
+            arrow_nudge_before: None,
+            arrow_nudge_last: None,
+            arrow_nudge_overlap_snapshots: IndexMap::new(),
             current_project_name: project_name.into(),
             effect_regions: IndexMap::new(),
             plugin_blocks: IndexMap::new(),
@@ -1261,6 +1267,9 @@ impl App {
             project_dirty: false,
             op_undo_stack: Vec::new(),
             op_redo_stack: Vec::new(),
+            arrow_nudge_before: None,
+            arrow_nudge_last: None,
+            arrow_nudge_overlap_snapshots: IndexMap::new(),
             current_project_name: project_name,
             effect_regions: restored_effect_regions,
             plugin_blocks: restored_plugin_blocks,
@@ -3672,6 +3681,157 @@ impl App {
             })
             .collect();
         self.drag = DragState::MovingSelection { offsets, before_states, overlap_snapshots: IndexMap::new() };
+    }
+
+    /// Flush any pending coalesced arrow-nudge into the undo stack.
+    pub(crate) fn commit_arrow_nudge(&mut self) {
+        if let Some(before_states) = self.arrow_nudge_before.take() {
+            let mut ops = Vec::new();
+            for (target, bs) in before_states {
+                match (target, bs) {
+                    (HitTarget::Object(id), EntityBeforeState::Object(before)) => {
+                        if let Some(after) = self.objects.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateObject { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::Waveform(id), EntityBeforeState::Waveform(before)) => {
+                        if let Some(after) = self.waveforms.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateWaveform { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::EffectRegion(id), EntityBeforeState::EffectRegion(before)) => {
+                        if let Some(after) = self.effect_regions.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateEffectRegion { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::PluginBlock(id), EntityBeforeState::PluginBlock(before)) => {
+                        if let Some(after) = self.plugin_blocks.get(&id) {
+                            ops.push(crate::operations::Operation::DeletePluginBlock { id, data: before });
+                            ops.push(crate::operations::Operation::CreatePluginBlock { id, data: after.snapshot() });
+                        }
+                    }
+                    (HitTarget::LoopRegion(id), EntityBeforeState::LoopRegion(before)) => {
+                        if let Some(after) = self.loop_regions.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateLoopRegion { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::ExportRegion(id), EntityBeforeState::ExportRegion(before)) => {
+                        if let Some(after) = self.export_regions.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateExportRegion { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::ComponentDef(id), EntityBeforeState::ComponentDef(before)) => {
+                        if let Some(after) = self.components.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateComponent { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::ComponentInstance(id), EntityBeforeState::ComponentInstance(before)) => {
+                        if let Some(after) = self.component_instances.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateComponentInstance { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::MidiClip(id), EntityBeforeState::MidiClip(before)) => {
+                        if let Some(after) = self.midi_clips.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateMidiClip { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::InstrumentRegion(id), EntityBeforeState::InstrumentRegion(before)) => {
+                        if let Some(ir) = self.instrument_regions.get(&id) {
+                            let after = crate::instruments::InstrumentRegionSnapshot {
+                                position: ir.position, size: ir.size,
+                                name: ir.name.clone(), plugin_id: ir.plugin_id.clone(),
+                                plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone(),
+                            };
+                            ops.push(crate::operations::Operation::UpdateInstrumentRegion { id, before, after });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Commit overlap changes from live resolution
+            let overlap_snaps = std::mem::take(&mut self.arrow_nudge_overlap_snapshots);
+            for (id, original) in overlap_snaps {
+                if let Some(wf) = self.waveforms.get(&id) {
+                    if wf.disabled {
+                        self.waveforms.shift_remove(&id);
+                        let ac = self.audio_clips.shift_remove(&id);
+                        ops.push(crate::operations::Operation::DeleteWaveform {
+                            id, data: original, audio_clip: ac.map(|c| (id, c)),
+                        });
+                    } else {
+                        ops.push(crate::operations::Operation::UpdateWaveform {
+                            id, before: original, after: wf.clone(),
+                        });
+                    }
+                }
+            }
+            if !ops.is_empty() {
+                self.push_op(crate::operations::Operation::Batch(ops));
+            }
+            self.sync_audio_clips();
+            self.arrow_nudge_last = None;
+        }
+    }
+
+    /// Move all selected entities by (dx, dy) pixels. Rapid calls within 500ms coalesce into one undo step.
+    pub(crate) fn nudge_selection(&mut self, dx: f32, dy: f32) {
+        if self.selected.is_empty() {
+            return;
+        }
+
+        let should_coalesce = self.arrow_nudge_before.is_some()
+            && self.arrow_nudge_last.map_or(false, |t| t.elapsed().as_millis() < 500);
+
+        if !should_coalesce {
+            // Flush any stale pending nudge
+            self.commit_arrow_nudge();
+            // Capture fresh before-states
+            let before_states: Vec<(HitTarget, EntityBeforeState)> = self.selected.iter().filter_map(|t| {
+                match t {
+                    HitTarget::Object(id) => self.objects.get(id).map(|o| (*t, EntityBeforeState::Object(o.clone()))),
+                    HitTarget::Waveform(id) => self.waveforms.get(id).map(|w| (*t, EntityBeforeState::Waveform(w.clone()))),
+                    HitTarget::EffectRegion(id) => self.effect_regions.get(id).map(|e| (*t, EntityBeforeState::EffectRegion(e.clone()))),
+                    HitTarget::PluginBlock(id) => self.plugin_blocks.get(id).map(|p| (*t, EntityBeforeState::PluginBlock(p.snapshot()))),
+                    HitTarget::LoopRegion(id) => self.loop_regions.get(id).map(|l| (*t, EntityBeforeState::LoopRegion(l.clone()))),
+                    HitTarget::ExportRegion(id) => self.export_regions.get(id).map(|x| (*t, EntityBeforeState::ExportRegion(x.clone()))),
+                    HitTarget::ComponentDef(id) => self.components.get(id).map(|c| (*t, EntityBeforeState::ComponentDef(c.clone()))),
+                    HitTarget::ComponentInstance(id) => self.component_instances.get(id).map(|c| (*t, EntityBeforeState::ComponentInstance(c.clone()))),
+                    HitTarget::MidiClip(id) => self.midi_clips.get(id).map(|m| (*t, EntityBeforeState::MidiClip(m.clone()))),
+                    HitTarget::InstrumentRegion(id) => self.instrument_regions.get(id).map(|r| {
+                        let snap = instruments::InstrumentRegionSnapshot {
+                            position: r.position, size: r.size,
+                            name: r.name.clone(), plugin_id: r.plugin_id.clone(),
+                            plugin_name: r.plugin_name.clone(), plugin_path: r.plugin_path.clone(),
+                        };
+                        (*t, EntityBeforeState::InstrumentRegion(snap))
+                    }),
+                }
+            }).collect();
+            self.arrow_nudge_before = Some(before_states);
+        }
+
+        // Move each selected entity
+        let targets: Vec<HitTarget> = self.selected.clone();
+        for t in &targets {
+            let pos = self.get_target_pos(t);
+            self.set_target_pos(t, [pos[0] + dx, pos[1] + dy]);
+        }
+
+        // Live waveform overlap resolution (same as mouse drag)
+        let moved_wf_ids: Vec<EntityId> = targets.iter()
+            .filter_map(|t| if let HitTarget::Waveform(id) = t { Some(*id) } else { None })
+            .collect();
+        if !moved_wf_ids.is_empty() {
+            let mut snaps = std::mem::take(&mut self.arrow_nudge_overlap_snapshots);
+            self.resolve_waveform_overlaps_live(&moved_wf_ids, &mut snaps);
+            self.arrow_nudge_overlap_snapshots = snaps;
+        }
+
+        self.sync_audio_clips();
+        self.sync_loop_region();
+        self.arrow_nudge_last = Some(TimeInstant::now());
+        self.mark_dirty();
+        self.request_redraw();
     }
 
     fn execute_command(&mut self, action: CommandAction) {

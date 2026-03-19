@@ -225,7 +225,7 @@ pub fn commit_op_as(op: Operation, user_id: UserId) -> CommittedOp {
 // Apply: mutate App state according to an Operation
 // ---------------------------------------------------------------------------
 
-use crate::App;
+use crate::{App, EntityBeforeState, HitTarget};
 
 impl Operation {
     /// Apply this operation to the app state (forward direction).
@@ -437,6 +437,107 @@ impl App {
     /// Push an operation onto the op-based undo stack. The operation should already
     /// have been applied to the app state before calling this.
     pub(crate) fn push_op(&mut self, op: Operation) {
+        // Flush any pending arrow-nudge coalescing before pushing a new op
+        if self.arrow_nudge_before.is_some() {
+            // Take the before-states to avoid re-entrant call
+            let before_states = self.arrow_nudge_before.take();
+            self.arrow_nudge_last = None;
+            if let Some(states) = before_states {
+                let mut nudge_ops = Vec::new();
+                for (target, bs) in states {
+                    match (target, bs) {
+                        (HitTarget::Object(id), EntityBeforeState::Object(before)) => {
+                            if let Some(after) = self.objects.get(&id) {
+                                nudge_ops.push(Operation::UpdateObject { id, before, after: after.clone() });
+                            }
+                        }
+                        (HitTarget::Waveform(id), EntityBeforeState::Waveform(before)) => {
+                            if let Some(after) = self.waveforms.get(&id) {
+                                nudge_ops.push(Operation::UpdateWaveform { id, before, after: after.clone() });
+                            }
+                        }
+                        (HitTarget::EffectRegion(id), EntityBeforeState::EffectRegion(before)) => {
+                            if let Some(after) = self.effect_regions.get(&id) {
+                                nudge_ops.push(Operation::UpdateEffectRegion { id, before, after: after.clone() });
+                            }
+                        }
+                        (HitTarget::PluginBlock(id), EntityBeforeState::PluginBlock(before)) => {
+                            if let Some(after) = self.plugin_blocks.get(&id) {
+                                nudge_ops.push(Operation::DeletePluginBlock { id, data: before });
+                                nudge_ops.push(Operation::CreatePluginBlock { id, data: after.snapshot() });
+                            }
+                        }
+                        (HitTarget::LoopRegion(id), EntityBeforeState::LoopRegion(before)) => {
+                            if let Some(after) = self.loop_regions.get(&id) {
+                                nudge_ops.push(Operation::UpdateLoopRegion { id, before, after: after.clone() });
+                            }
+                        }
+                        (HitTarget::ExportRegion(id), EntityBeforeState::ExportRegion(before)) => {
+                            if let Some(after) = self.export_regions.get(&id) {
+                                nudge_ops.push(Operation::UpdateExportRegion { id, before, after: after.clone() });
+                            }
+                        }
+                        (HitTarget::ComponentDef(id), EntityBeforeState::ComponentDef(before)) => {
+                            if let Some(after) = self.components.get(&id) {
+                                nudge_ops.push(Operation::UpdateComponent { id, before, after: after.clone() });
+                            }
+                        }
+                        (HitTarget::ComponentInstance(id), EntityBeforeState::ComponentInstance(before)) => {
+                            if let Some(after) = self.component_instances.get(&id) {
+                                nudge_ops.push(Operation::UpdateComponentInstance { id, before, after: after.clone() });
+                            }
+                        }
+                        (HitTarget::MidiClip(id), EntityBeforeState::MidiClip(before)) => {
+                            if let Some(after) = self.midi_clips.get(&id) {
+                                nudge_ops.push(Operation::UpdateMidiClip { id, before, after: after.clone() });
+                            }
+                        }
+                        (HitTarget::InstrumentRegion(id), EntityBeforeState::InstrumentRegion(before)) => {
+                            if let Some(ir) = self.instrument_regions.get(&id) {
+                                let after = crate::instruments::InstrumentRegionSnapshot {
+                                    position: ir.position, size: ir.size,
+                                    name: ir.name.clone(), plugin_id: ir.plugin_id.clone(),
+                                    plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone(),
+                                };
+                                nudge_ops.push(Operation::UpdateInstrumentRegion { id, before, after });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Commit overlap changes from live resolution
+                let overlap_snaps = std::mem::take(&mut self.arrow_nudge_overlap_snapshots);
+                for (id, original) in overlap_snaps {
+                    if let Some(wf) = self.waveforms.get(&id) {
+                        if wf.disabled {
+                            self.waveforms.shift_remove(&id);
+                            let ac = self.audio_clips.shift_remove(&id);
+                            nudge_ops.push(Operation::DeleteWaveform {
+                                id, data: original, audio_clip: ac.map(|c| (id, c)),
+                            });
+                        } else {
+                            nudge_ops.push(Operation::UpdateWaveform {
+                                id, before: original, after: wf.clone(),
+                            });
+                        }
+                    }
+                }
+                if !nudge_ops.is_empty() {
+                    let nudge_batch = Operation::Batch(nudge_ops);
+                    // Push the nudge batch directly (inline to avoid recursion)
+                    if self.can_mutate() {
+                        let committed = commit_op_as(nudge_batch, self.local_user.id);
+                        log::info!("[SYNC] push_op: {} (seq={}, user={})", committed.op.variant_name(), committed.seq, committed.user_id);
+                        self.network.send_op(committed.clone());
+                        self.op_undo_stack.push(committed);
+                        if self.op_undo_stack.len() > crate::history::MAX_UNDO_HISTORY {
+                            self.op_undo_stack.remove(0);
+                        }
+                        // Don't clear redo here — the subsequent push_op will do it
+                    }
+                }
+            }
+        }
         // Block mutations when disconnected from server
         if !self.can_mutate() {
             op.invert().apply(self);
@@ -461,10 +562,16 @@ impl App {
     /// Undo the most recent operation (op-based).
     pub(crate) fn undo_op(&mut self) {
         if let Some(committed) = self.op_undo_stack.pop() {
+            // Check if this is a position-only batch (arrow nudge) before applying
+            let restore_targets = Self::batch_update_targets(&committed.op);
             let inverse = committed.op.invert();
             inverse.apply(self);
             self.op_redo_stack.push(committed);
-            self.selected.clear();
+            if let Some(targets) = restore_targets {
+                self.selected = targets;
+            } else {
+                self.selected.clear();
+            }
             self.update_right_window();
             self.mark_dirty();
             self.sync_audio_clips();
@@ -476,15 +583,51 @@ impl App {
     /// Redo the most recently undone operation (op-based).
     pub(crate) fn redo_op(&mut self) {
         if let Some(committed) = self.op_redo_stack.pop() {
+            let restore_targets = Self::batch_update_targets(&committed.op);
             committed.op.apply(self);
             self.op_undo_stack.push(committed);
-            self.selected.clear();
+            if let Some(targets) = restore_targets {
+                self.selected = targets;
+            } else {
+                self.selected.clear();
+            }
             self.update_right_window();
             self.mark_dirty();
             self.sync_audio_clips();
             self.sync_loop_region();
             self.request_redraw();
         }
+    }
+
+    /// If the operation is a Batch containing only Update* variants, return
+    /// the HitTargets so the selection can be preserved across undo/redo.
+    fn batch_update_targets(op: &Operation) -> Option<Vec<HitTarget>> {
+        if let Operation::Batch(ops) = op {
+            let mut targets = Vec::new();
+            for sub in ops {
+                match sub {
+                    Operation::UpdateObject { id, .. } => targets.push(HitTarget::Object(*id)),
+                    Operation::UpdateWaveform { id, .. } => targets.push(HitTarget::Waveform(*id)),
+                    Operation::UpdateEffectRegion { id, .. } => targets.push(HitTarget::EffectRegion(*id)),
+                    Operation::UpdateLoopRegion { id, .. } => targets.push(HitTarget::LoopRegion(*id)),
+                    Operation::UpdateExportRegion { id, .. } => targets.push(HitTarget::ExportRegion(*id)),
+                    Operation::UpdateComponent { id, .. } => targets.push(HitTarget::ComponentDef(*id)),
+                    Operation::UpdateComponentInstance { id, .. } => targets.push(HitTarget::ComponentInstance(*id)),
+                    Operation::UpdateMidiClip { id, .. } => targets.push(HitTarget::MidiClip(*id)),
+                    Operation::UpdateInstrumentRegion { id, .. } => targets.push(HitTarget::InstrumentRegion(*id)),
+                    // PluginBlock uses Delete+Create pair for updates
+                    Operation::DeletePluginBlock { id, .. } => targets.push(HitTarget::PluginBlock(*id)),
+                    Operation::CreatePluginBlock { .. } => { /* paired with Delete above */ }
+                    _ => return None, // non-update op → don't preserve selection
+                }
+            }
+            if !targets.is_empty() {
+                // Deduplicate (PluginBlock has two ops per entity)
+                targets.dedup();
+                return Some(targets);
+            }
+        }
+        None
     }
 
     /// Apply a remote operation (from network) without pushing to local undo.
