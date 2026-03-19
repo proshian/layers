@@ -12,7 +12,6 @@ use crate::{push_border, Camera, InstanceRaw};
 pub const INSTRUMENT_REGION_DEFAULT_WIDTH: f32 = 600.0;
 pub const INSTRUMENT_REGION_DEFAULT_HEIGHT: f32 = 250.0;
 pub const INSTRUMENT_REGION_PADDING: f32 = 40.0;
-use crate::theme::{INSTRUMENT_BORDER_COLOR, INSTRUMENT_ACTIVE_BORDER};
 
 #[derive(Clone)]
 pub struct InstrumentRegion {
@@ -148,13 +147,14 @@ pub fn build_instrument_region_instances(
     is_hovered: bool,
     is_selected: bool,
     is_active: bool,
+    theme: &crate::theme::RuntimeTheme,
 ) -> Vec<InstanceRaw> {
     let mut out = Vec::new();
 
     let border_color = if is_active {
-        INSTRUMENT_ACTIVE_BORDER
+        theme.instrument_active_border
     } else {
-        INSTRUMENT_BORDER_COLOR
+        theme.instrument_border_color
     };
 
     let bw = if is_selected { 2.5 } else { 1.5 } / camera.zoom;

@@ -1,6 +1,5 @@
 use crate::entity_id::EntityId;
 use crate::InstanceRaw;
-use crate::theme::ACCENT_MUTED;
 
 const WIN_W: f32 = 360.0;
 const HEADER_H: f32 = 36.0;
@@ -132,7 +131,7 @@ impl PluginEditorWindow {
         norm
     }
 
-    pub fn build_instances(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
+    pub fn build_instances(&self, settings: &crate::settings::Settings, screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
         let mut out = Vec::new();
         let (wp, ws) = self.win_rect(screen_w, screen_h, scale);
         let br = BORDER_RADIUS * scale;
@@ -158,7 +157,7 @@ impl PluginEditorWindow {
         out.push(InstanceRaw {
             position: wp,
             size: ws,
-            color: [0.12, 0.14, 0.18, 0.98],
+            color: settings.theme.bg_window,
             border_radius: br,
         });
 
@@ -166,7 +165,7 @@ impl PluginEditorWindow {
         out.push(InstanceRaw {
             position: wp,
             size: [ws[0], HEADER_H * scale],
-            color: [0.14, 0.17, 0.24, 1.0],
+            color: settings.theme.bg_window_header,
             border_radius: br,
         });
         // Fill bottom corners of header
@@ -220,7 +219,7 @@ impl PluginEditorWindow {
             out.push(InstanceRaw {
                 position: tp,
                 size: [ts[0] * val, ts[1]],
-                color: ACCENT_MUTED,
+                color: settings.theme.accent_muted,
                 border_radius: ts[1] * 0.5,
             });
 
@@ -231,7 +230,7 @@ impl PluginEditorWindow {
             out.push(InstanceRaw {
                 position: [thumb_x, thumb_y],
                 size: [thumb_r * 2.0, thumb_r * 2.0],
-                color: [0.70, 0.50, 1.00, 0.95],
+                color: crate::theme::with_alpha(settings.theme.accent, 0.95),
                 border_radius: thumb_r,
             });
         }

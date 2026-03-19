@@ -4,10 +4,6 @@ use indexmap::IndexMap;
 
 pub type ComponentId = EntityId;
 
-use crate::theme::{
-    COMPONENT_BORDER_COLOR, COMPONENT_FILL_COLOR, COMPONENT_BADGE_COLOR,
-    INSTANCE_FILL_COLOR, INSTANCE_BORDER_COLOR, LOCK_ICON_COLOR,
-};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ComponentDef {
@@ -35,10 +31,11 @@ pub fn build_component_def_instances(
     camera: &Camera,
     is_hovered: bool,
     is_selected: bool,
+    theme: &crate::theme::RuntimeTheme,
 ) -> Vec<InstanceRaw> {
     let mut out = Vec::new();
 
-    let mut fill = COMPONENT_FILL_COLOR;
+    let mut fill = theme.component_fill_color;
     if is_hovered || is_selected {
         fill[3] = (fill[3] + 0.04).min(1.0);
     }
@@ -51,7 +48,7 @@ pub fn build_component_def_instances(
     });
 
     let bw = if is_selected { 2.5 } else { 1.5 } / camera.zoom;
-    let mut bc = COMPONENT_BORDER_COLOR;
+    let mut bc = theme.component_border_color;
     if is_hovered && !is_selected {
         bc[3] = (bc[3] + 0.15).min(1.0);
     }
@@ -68,7 +65,7 @@ pub fn build_component_def_instances(
         out.push(InstanceRaw {
             position: [x, y],
             size: [w, dash_h],
-            color: [0.85, 0.55, 0.20, 0.40],
+            color: crate::theme::with_alpha(theme.component_border_color, 0.40),
             border_radius: 1.0 / camera.zoom,
         });
         x += dash_w + gap;
@@ -83,7 +80,7 @@ pub fn build_component_def_instances(
             def.position[1] + 4.0 / camera.zoom,
         ],
         size: [badge_w, badge_h],
-        color: COMPONENT_BADGE_COLOR,
+        color: theme.component_badge_color,
         border_radius: 3.0 / camera.zoom,
     });
 
@@ -101,7 +98,7 @@ pub fn build_component_def_instances(
     // Resize handles at corners
     if is_selected {
         let handle_sz = 8.0 / camera.zoom;
-        let handle_color = COMPONENT_BORDER_COLOR;
+        let handle_color = theme.component_border_color;
         for &hx in &[
             def.position[0] - handle_sz * 0.5,
             def.position[0] + def.size[0] - handle_sz * 0.5,
@@ -132,6 +129,7 @@ pub fn build_component_instance_instances(
     world_right: f32,
     is_hovered: bool,
     is_selected: bool,
+    theme: &crate::theme::RuntimeTheme,
 ) -> Vec<InstanceRaw> {
     let mut out = Vec::new();
     let size = ComponentInstance::size_from_def(def);
@@ -141,7 +139,7 @@ pub fn build_component_instance_instances(
     ];
 
     // Instance fill
-    let mut fill = INSTANCE_FILL_COLOR;
+    let mut fill = theme.instance_fill_color;
     if is_hovered || is_selected {
         fill[3] = (fill[3] + 0.04).min(1.0);
     }
@@ -155,11 +153,11 @@ pub fn build_component_instance_instances(
     // Instance border (dashed style via segments)
     let bw = if is_selected { 2.0 } else { 1.0 } / camera.zoom;
     let bc = if is_selected {
-        let mut c = COMPONENT_BORDER_COLOR;
+        let mut c = theme.component_border_color;
         c[3] = (c[3] + 0.2).min(1.0);
         c
     } else {
-        INSTANCE_BORDER_COLOR
+        theme.instance_border_color
     };
     push_border(&mut out, inst.position, size, bw, bc);
 
@@ -246,7 +244,7 @@ pub fn build_component_instance_instances(
     out.push(InstanceRaw {
         position: [lock_x, body_y],
         size: [body_w, body_h],
-        color: LOCK_ICON_COLOR,
+        color: theme.lock_icon_color,
         border_radius: 2.0 / camera.zoom,
     });
 
@@ -257,7 +255,7 @@ pub fn build_component_instance_instances(
     out.push(InstanceRaw {
         position: [shackle_x, lock_y],
         size: [shackle_w, shackle_h],
-        color: LOCK_ICON_COLOR,
+        color: theme.lock_icon_color,
         border_radius: shackle_w * 0.5,
     });
     // Hollow center of shackle
@@ -268,7 +266,7 @@ pub fn build_component_instance_instances(
     out.push(InstanceRaw {
         position: [inner_x, inner_y],
         size: [inner_w, inner_h],
-        color: INSTANCE_FILL_COLOR,
+        color: theme.instance_fill_color,
         border_radius: inner_w * 0.5,
     });
 

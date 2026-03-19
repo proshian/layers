@@ -30,6 +30,7 @@ impl TransportPanel {
     }
 
     pub(crate) fn build_instances(
+        settings: &crate::settings::Settings,
         screen_w: f32,
         screen_h: f32,
         scale: f32,
@@ -43,7 +44,7 @@ impl TransportPanel {
         out.push(InstanceRaw {
             position: pos,
             size,
-            color: [0.12, 0.12, 0.16, 0.85],
+            color: settings.theme.bg_panel,
             border_radius: size[1] * 0.5,
         });
 

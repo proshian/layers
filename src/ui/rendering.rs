@@ -10,16 +10,14 @@ use crate::ui::hit_testing::canonical_rect;
 use crate::instruments;
 use crate::midi;
 use crate::regions::{
-    ExportRegion, LoopRegion, SelectArea, EXPORT_BORDER_COLOR, EXPORT_FILL_COLOR,
-    EXPORT_RENDER_PILL_COLOR, EXPORT_RENDER_PILL_H, EXPORT_RENDER_PILL_W, LOOP_BADGE_COLOR,
-    LOOP_BADGE_H, LOOP_BADGE_W, LOOP_BORDER_COLOR, LOOP_FILL_COLOR,
+    ExportRegion, LoopRegion, SelectArea, EXPORT_RENDER_PILL_H, EXPORT_RENDER_PILL_W,
+    LOOP_BADGE_H, LOOP_BADGE_W,
 };
 use crate::settings::Settings;
 use crate::ui;
 use crate::ui::waveform::WaveformVertex;
 use crate::{push_border, Camera, CanvasObject, HitTarget, InstanceRaw, WaveformView};
 
-pub(crate) use crate::theme::SELECTION as SEL_COLOR;
 
 pub(crate) struct RenderContext<'a> {
     pub(crate) camera: &'a Camera,
@@ -153,7 +151,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             px >= er.position[0] && px <= er.position[0] + er.size[0]
         });
         out.extend(effects::build_effect_region_instances(
-            er, camera, is_hov, is_sel, is_active,
+            er, camera, is_hov, is_sel, is_active, &ctx.settings.theme,
         ));
     }
 
@@ -171,7 +169,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         let is_sel = ctx.selected.contains(&HitTarget::PluginBlock(id));
         let is_hov = ctx.hovered == Some(HitTarget::PluginBlock(id));
         out.extend(effects::build_plugin_block_instances(
-            pb, camera, is_hov, is_sel,
+            pb, camera, is_hov, is_sel, &ctx.settings.theme,
         ));
     }
 
@@ -192,7 +190,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             px >= ir.position[0] && px <= ir.position[0] + ir.size[0]
         });
         out.extend(instruments::build_instrument_region_instances(
-            ir, camera, is_hov, is_sel, is_active,
+            ir, camera, is_hov, is_sel, is_active, &ctx.settings.theme,
         ));
     }
 
@@ -244,7 +242,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         out.push(InstanceRaw {
             position: p,
             size: s,
-            color: EXPORT_FILL_COLOR,
+            color: ctx.settings.theme.export_fill_color,
             border_radius: 6.0 / camera.zoom,
         });
 
@@ -255,7 +253,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         } else {
             1.5
         } / camera.zoom;
-        push_border(out, p, s, bw, EXPORT_BORDER_COLOR);
+        push_border(out, p, s, bw, ctx.settings.theme.export_border_color);
 
         let dash_h = 3.0 / camera.zoom;
         let dash_w = 20.0 / camera.zoom;
@@ -267,7 +265,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             out.push(InstanceRaw {
                 position: [dx, dy],
                 size: [w, dash_h],
-                color: EXPORT_BORDER_COLOR,
+                color: ctx.settings.theme.export_border_color,
                 border_radius: 1.0 / camera.zoom,
             });
             dx += dash_w + gap;
@@ -280,7 +278,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         out.push(InstanceRaw {
             position: [pill_x, pill_y],
             size: [pill_w, pill_h],
-            color: EXPORT_RENDER_PILL_COLOR,
+            color: ctx.settings.theme.export_render_pill_color,
             border_radius: pill_h * 0.5,
         });
 
@@ -317,22 +315,22 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         let alpha_mul = if lr.enabled { 1.0 } else { 0.25 };
 
         let fill = [
-            LOOP_FILL_COLOR[0],
-            LOOP_FILL_COLOR[1],
-            LOOP_FILL_COLOR[2],
-            LOOP_FILL_COLOR[3] * alpha_mul,
+            ctx.settings.theme.loop_fill_color[0],
+            ctx.settings.theme.loop_fill_color[1],
+            ctx.settings.theme.loop_fill_color[2],
+            ctx.settings.theme.loop_fill_color[3] * alpha_mul,
         ];
         let border = [
-            LOOP_BORDER_COLOR[0],
-            LOOP_BORDER_COLOR[1],
-            LOOP_BORDER_COLOR[2],
-            LOOP_BORDER_COLOR[3] * alpha_mul,
+            ctx.settings.theme.loop_border_color[0],
+            ctx.settings.theme.loop_border_color[1],
+            ctx.settings.theme.loop_border_color[2],
+            ctx.settings.theme.loop_border_color[3] * alpha_mul,
         ];
         let badge = [
-            LOOP_BADGE_COLOR[0],
-            LOOP_BADGE_COLOR[1],
-            LOOP_BADGE_COLOR[2],
-            LOOP_BADGE_COLOR[3] * alpha_mul,
+            ctx.settings.theme.loop_badge_color[0],
+            ctx.settings.theme.loop_badge_color[1],
+            ctx.settings.theme.loop_badge_color[2],
+            ctx.settings.theme.loop_badge_color[3] * alpha_mul,
         ];
 
         out.push(InstanceRaw {
@@ -479,6 +477,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             camera,
             is_hov,
             is_sel || is_editing,
+            &ctx.settings.theme,
         ));
     }
 
@@ -505,6 +504,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
                 world_right,
                 is_hov,
                 is_sel,
+                &ctx.settings.theme,
             ));
         }
     }
@@ -566,7 +566,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         ) else {
             continue;
         };
-        push_border(out, pos, size, sel_bw, SEL_COLOR);
+        push_border(out, pos, size, sel_bw, ctx.settings.theme.selection);
 
         for &hx in &[pos[0] - handle_sz * 0.5, pos[0] + size[0] - handle_sz * 0.5] {
             for &hy in &[pos[1] - handle_sz * 0.5, pos[1] + size[1] - handle_sz * 0.5] {

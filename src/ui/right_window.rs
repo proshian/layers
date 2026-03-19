@@ -19,8 +19,6 @@ const FADER_TOP_OFFSET: f32 = 32.0;
 const PAN_KNOB_Y_OFFSET: f32 = 264.0;
 const PITCH_KNOB_Y_OFFSET: f32 = 348.0;
 
-use crate::theme::{BG_BASE as BG_COLOR, BG_SURFACE as HEADER_BG, ACCENT as BLUE};
-const DOT_INACTIVE: [f32; 4] = [0.25, 0.25, 0.30, 1.0];
 
 pub struct RightWindow {
     pub waveform_id: EntityId,
@@ -176,7 +174,7 @@ impl RightWindow {
         deg.to_radians()
     }
 
-    fn push_knob(out: &mut Vec<InstanceRaw>, cx: f32, cy: f32, value: f32, scale: f32) {
+    fn push_knob(out: &mut Vec<InstanceRaw>, cx: f32, cy: f32, value: f32, scale: f32, theme: &crate::theme::RuntimeTheme) {
         let kr = KNOB_R * scale;
         let dot_r = KNOB_DOT_R * scale;
         let ind_r = KNOB_INDICATOR_R * scale;
@@ -199,9 +197,9 @@ impl RightWindow {
             let color = if (t - 0.5) * (value - 0.5) > 0.0
                 && (t - 0.5).abs() <= (value - 0.5).abs()
             {
-                BLUE
+                theme.accent
             } else {
-                DOT_INACTIVE
+                theme.knob_inactive
             };
             out.push(InstanceRaw {
                 position: [cx + dx - dot_r, cy + dy - dot_r],
@@ -224,7 +222,7 @@ impl RightWindow {
         });
     }
 
-    pub fn build_instances(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
+    pub fn build_instances(&self, settings: &crate::settings::Settings, screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
         let mut out = Vec::new();
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
 
@@ -240,7 +238,7 @@ impl RightWindow {
         out.push(InstanceRaw {
             position: [pp[0] + 1.0 * scale, pp[1]],
             size: [ps[0] - 1.0 * scale, ps[1]],
-            color: BG_COLOR,
+            color: settings.theme.bg_base,
             border_radius: 0.0,
         });
 
@@ -248,7 +246,7 @@ impl RightWindow {
         out.push(InstanceRaw {
             position: [pp[0] + 1.0 * scale, pp[1]],
             size: [ps[0] - 1.0 * scale, HEADER_HEIGHT * scale],
-            color: HEADER_BG,
+            color: settings.theme.bg_surface,
             border_radius: 0.0,
         });
 
@@ -283,7 +281,7 @@ impl RightWindow {
             out.push(InstanceRaw {
                 position: [track_pos[0], fill_top],
                 size: [track_size[0], fill_h],
-                color: BLUE,
+                color: settings.theme.accent,
                 border_radius: FADER_TRACK_W * 0.5 * scale,
             });
         }
@@ -320,12 +318,12 @@ impl RightWindow {
 
         // Pan knob
         let pc = Self::pan_knob_center(screen_w, screen_h, scale);
-        Self::push_knob(&mut out, pc[0], pc[1], self.pan, scale);
+        Self::push_knob(&mut out, pc[0], pc[1], self.pan, scale, &settings.theme);
 
         // Warp toggle button
         let (btn_pos, btn_size) = Self::warp_mode_button_rect(screen_w, screen_h, scale);
         let warp_on = self.warp_mode != WarpMode::Off;
-        let btn_color = if warp_on { BLUE } else { [0.2, 0.2, 0.25, 1.0] };
+        let btn_color = if warp_on { settings.theme.accent } else { [0.2, 0.2, 0.25, 1.0] };
         out.push(InstanceRaw {
             position: btn_pos,
             size: btn_size,

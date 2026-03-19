@@ -14,11 +14,9 @@ const SCROLLBAR_WIDTH: f32 = 6.0;
 const ADD_BUTTON_SIZE: f32 = 20.0;
 
 use crate::theme::{
-    BG_BASE as BG_COLOR, BG_SURFACE as HEADER_BG, HOVER as HOVER_COLOR,
+    HOVER as HOVER_COLOR,
     SCROLLBAR_BG, SCROLLBAR_THUMB,
     CHEVRON as CHEVRON_COLOR, ADD_BTN_NORMAL as ADD_BTN_COLOR, ADD_BTN_HOVER,
-    BG_PLUGIN as PLUGIN_SECTION_BG, BG_PLUGIN_HEADER as PLUGIN_SECTION_HEADER_BG,
-    ACCENT_MUTED as PLUGIN_FX_BADGE,
 };
 
 #[derive(Clone)]
@@ -313,7 +311,7 @@ impl SampleBrowser {
         };
     }
 
-    pub fn build_instances(&self, _screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
+    pub fn build_instances(&self, settings: &crate::settings::Settings, _screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
         let mut out = Vec::new();
         let w = self.panel_width(scale);
         let header_h = HEADER_HEIGHT * scale;
@@ -322,14 +320,14 @@ impl SampleBrowser {
         out.push(InstanceRaw {
             position: [0.0, 0.0],
             size: [w, screen_h],
-            color: BG_COLOR,
+            color: settings.theme.bg_base,
             border_radius: 0.0,
         });
 
         out.push(InstanceRaw {
             position: [0.0, 0.0],
             size: [w, header_h],
-            color: HEADER_BG,
+            color: settings.theme.bg_surface,
             border_radius: 0.0,
         });
 
@@ -400,7 +398,7 @@ impl SampleBrowser {
                     out.push(InstanceRaw {
                         position: [0.0, y],
                         size: [w, item_h],
-                        color: PLUGIN_SECTION_HEADER_BG,
+                        color: settings.theme.bg_plugin_header,
                         border_radius: 0.0,
                     });
 
@@ -412,7 +410,7 @@ impl SampleBrowser {
                     out.push(InstanceRaw {
                         position: [badge_x, badge_y],
                         size: [badge_w, badge_h],
-                        color: PLUGIN_FX_BADGE,
+                        color: settings.theme.accent_muted,
                         border_radius: 2.0 * scale,
                     });
 
@@ -431,7 +429,7 @@ impl SampleBrowser {
                     out.push(InstanceRaw {
                         position: [0.0, y],
                         size: [w, item_h],
-                        color: PLUGIN_SECTION_BG,
+                        color: settings.theme.bg_plugin,
                         border_radius: 0.0,
                     });
 
@@ -445,14 +443,14 @@ impl SampleBrowser {
                         });
                     }
 
-                    // Blue dot
+                    // Category dot
                     let dot_sz = 5.0 * scale;
                     let dot_x = 12.0 * scale;
                     let dot_y = y + (item_h - dot_sz) * 0.5;
                     out.push(InstanceRaw {
                         position: [dot_x, dot_y],
                         size: [dot_sz, dot_sz],
-                        color: [0.30, 0.55, 0.95, 0.70],
+                        color: settings.theme.category_dot,
                         border_radius: dot_sz * 0.5,
                     });
                 }

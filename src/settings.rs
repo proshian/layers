@@ -150,6 +150,7 @@ fn default_snap_to_grid() -> bool { true }
 fn default_grid_mode() -> GridMode { GridMode::default() }
 fn default_triplet_grid() -> bool { false }
 fn default_auto_clip_fades() -> bool { true }
+fn default_primary_hue() -> f32 { 216.0 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub grid_line_intensity: f32,
@@ -177,6 +178,10 @@ pub struct Settings {
     pub auto_clip_fades: bool,
     #[serde(default)]
     pub sample_library_folders: Vec<String>,
+    #[serde(default = "default_primary_hue")]
+    pub primary_hue: f32,
+    #[serde(skip)]
+    pub theme: crate::theme::RuntimeTheme,
 }
 
 #[cfg(feature = "native")]
@@ -236,6 +241,8 @@ impl Default for Settings {
             dev_mode: false,
             auto_clip_fades: true,
             sample_library_folders: Vec::new(),
+            primary_hue: 216.0,
+            theme: crate::theme::RuntimeTheme::default(),
         }
     }
 }
@@ -254,7 +261,11 @@ impl Settings {
         {
             let path = settings_path();
             match std::fs::read_to_string(&path) {
-                Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+                Ok(json) => {
+                    let mut s: Settings = serde_json::from_str(&json).unwrap_or_default();
+                    s.theme = crate::theme::RuntimeTheme::from_hue(s.primary_hue);
+                    s
+                }
                 Err(_) => Self::default(),
             }
         }

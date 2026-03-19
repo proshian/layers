@@ -1,7 +1,7 @@
 use crate::settings::{AdaptiveGridSize, FixedGrid, GridMode, Settings};
 use crate::ui::palette::CommandAction;
 use crate::InstanceRaw;
-use crate::theme::{WAVEFORM_COLORS, BG_MENU, SCROLLBAR_BG};
+use crate::theme::{WAVEFORM_COLORS, SCROLLBAR_BG};
 
 pub const CTX_MENU_WIDTH: f32 = 210.0;
 pub const CTX_MENU_ITEM_HEIGHT: f32 = 26.0;
@@ -609,7 +609,7 @@ impl ContextMenu {
         self.hovered_index = self.item_at(pos, screen_w, screen_h, scale);
     }
 
-    pub fn build_instances(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
+    pub fn build_instances(&self, settings: &crate::settings::Settings, screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
         let mut out = Vec::new();
         let (pos, size) = self.menu_rect(screen_w, screen_h, scale);
         let pad = CTX_MENU_PADDING * scale;
@@ -625,7 +625,7 @@ impl ContextMenu {
         out.push(InstanceRaw {
             position: pos,
             size,
-            color: BG_MENU,
+            color: settings.theme.bg_menu,
             border_radius: CTX_MENU_BORDER_RADIUS * scale,
         });
 

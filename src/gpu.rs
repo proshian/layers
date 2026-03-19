@@ -710,11 +710,11 @@ impl Gpu {
         let mut overlay_instances: Vec<InstanceRaw> = Vec::new();
 
         if let Some(br) = sample_browser {
-            overlay_instances.extend(br.build_instances(w, h, self.scale_factor));
+            overlay_instances.extend(br.build_instances(settings, w, h, self.scale_factor));
         }
 
         if let Some(rw) = right_window {
-            overlay_instances.extend(rw.build_instances(w, h, self.scale_factor));
+            overlay_instances.extend(rw.build_instances(settings, w, h, self.scale_factor));
         }
 
         if let Some((_, pos)) = browser_drag_ghost {
@@ -727,11 +727,11 @@ impl Gpu {
         }
 
         if let Some(p) = command_palette {
-            overlay_instances.extend(p.build_instances(w, h, self.scale_factor));
+            overlay_instances.extend(p.build_instances(settings, w, h, self.scale_factor));
         }
 
         if let Some(cm) = context_menu {
-            overlay_instances.extend(cm.build_instances(w, h, self.scale_factor));
+            overlay_instances.extend(cm.build_instances(settings, w, h, self.scale_factor));
         }
 
         if let Some(sw) = settings_window {
@@ -739,10 +739,11 @@ impl Gpu {
         }
 
         if let Some(pe) = plugin_editor {
-            overlay_instances.extend(pe.build_instances(w, h, self.scale_factor));
+            overlay_instances.extend(pe.build_instances(settings, w, h, self.scale_factor));
         }
 
         overlay_instances.extend(TransportPanel::build_instances(
+            settings,
             w,
             h,
             self.scale_factor,
@@ -2605,9 +2606,9 @@ impl Gpu {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.09 * settings.brightness as f64,
-                            g: 0.09 * settings.brightness as f64,
-                            b: 0.12 * settings.brightness as f64,
+                            r: (settings.theme.bg_base[0] * settings.brightness) as f64,
+                            g: (settings.theme.bg_base[1] * settings.brightness) as f64,
+                            b: (settings.theme.bg_base[2] * settings.brightness) as f64,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,

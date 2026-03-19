@@ -1,5 +1,5 @@
 use crate::InstanceRaw;
-use crate::theme::{BG_OVERLAY, SCROLLBAR_BG, SCROLLBAR_THUMB, RMS_LOW, RMS_MID, RMS_HIGH};
+use crate::theme::{SCROLLBAR_BG, SCROLLBAR_THUMB, RMS_LOW, RMS_MID, RMS_HIGH};
 
 pub const PALETTE_WIDTH: f32 = 520.0;
 pub const PALETTE_INPUT_HEIGHT: f32 = 52.0;
@@ -862,7 +862,7 @@ impl CommandPalette {
         self.fader_value = ((mouse_x - tp[0]) / ts[0]).clamp(0.0, 1.0);
     }
 
-    pub fn build_instances(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
+    pub fn build_instances(&self, settings: &crate::settings::Settings, screen_w: f32, screen_h: f32, scale: f32) -> Vec<InstanceRaw> {
         let mut out = Vec::new();
         let (pos, size) = self.palette_rect(screen_w, screen_h, scale);
         let margin = PALETTE_PADDING * scale;
@@ -888,7 +888,7 @@ impl CommandPalette {
         out.push(InstanceRaw {
             position: pos,
             size,
-            color: BG_OVERLAY,
+            color: settings.theme.bg_overlay,
             border_radius: PALETTE_BORDER_RADIUS * scale,
         });
 

@@ -79,6 +79,13 @@ const SLIDERS: &[SliderDef] = &[
         unit: "%",
         display_scale: 100.0,
     },
+    SliderDef {
+        label: "Primary Color",
+        min: 0.0,
+        max: 360.0,
+        unit: "°",
+        display_scale: 1.0,
+    },
 ];
 
 pub struct SettingsWindow {
@@ -131,6 +138,7 @@ impl SettingsWindow {
             0 => settings.grid_line_intensity,
             1 => settings.brightness,
             2 => settings.color_intensity,
+            3 => settings.primary_hue,
             _ => 0.0,
         }
     }
@@ -142,6 +150,10 @@ impl SettingsWindow {
             0 => settings.grid_line_intensity = clamped,
             1 => settings.brightness = clamped,
             2 => settings.color_intensity = clamped,
+            3 => {
+                settings.primary_hue = clamped;
+                settings.theme = crate::theme::RuntimeTheme::from_hue(clamped);
+            }
             _ => {}
         }
     }
@@ -558,6 +570,19 @@ impl SettingsWindow {
             let norm = (val - def.min) / (def.max - def.min);
 
             let (tp, ts) = self.slider_track_rect(i, screen_w, screen_h, scale);
+
+            // For the Primary Color slider (idx 3), draw a color swatch before the track
+            if i == 3 {
+                let swatch_sz = 14.0 * scale;
+                let swatch_x = tp[0] - swatch_sz - 8.0 * scale;
+                let swatch_y = tp[1] + ts[1] * 0.5 - swatch_sz * 0.5;
+                out.push(InstanceRaw {
+                    position: [swatch_x, swatch_y],
+                    size: [swatch_sz, swatch_sz],
+                    color: settings.theme.accent,
+                    border_radius: swatch_sz * 0.5,
+                });
+            }
 
             out.push(InstanceRaw {
                 position: tp,

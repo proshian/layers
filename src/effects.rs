@@ -121,7 +121,6 @@ fn save_cache(plugins: &[PluginInfo]) {
 
 pub const EFFECT_REGION_DEFAULT_WIDTH: f32 = 600.0;
 pub const EFFECT_REGION_DEFAULT_HEIGHT: f32 = 250.0;
-use crate::theme::{EFFECT_BORDER_COLOR, EFFECT_ACTIVE_BORDER};
 
 // ---------------------------------------------------------------------------
 // EffectRegion — spatial zone that controls when plugins sound
@@ -281,6 +280,7 @@ pub fn build_plugin_block_instances(
     camera: &Camera,
     is_hovered: bool,
     is_selected: bool,
+    theme: &crate::theme::RuntimeTheme,
 ) -> Vec<InstanceRaw> {
     let mut out = Vec::new();
 
@@ -319,13 +319,14 @@ pub fn build_effect_region_instances(
     is_hovered: bool,
     is_selected: bool,
     is_active: bool,
+    theme: &crate::theme::RuntimeTheme,
 ) -> Vec<InstanceRaw> {
     let mut out = Vec::new();
 
     let border_color = if is_active {
-        EFFECT_ACTIVE_BORDER
+        theme.effect_active_border
     } else {
-        EFFECT_BORDER_COLOR
+        theme.effect_border_color
     };
 
     let bw = if is_selected { 2.5 } else { 1.5 } / camera.zoom;

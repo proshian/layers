@@ -1,3 +1,4 @@
+- 2026-03-19: feat: runtime primary hue slider — RuntimeTheme struct parameterized by hue, Settings.theme field, Primary Color slider in settings UI, all theme colors now resolved at runtime (30.6k loc)
 - 2026-03-18: refactor: centralize all color constants into src/theme.rs; 13+ files now import from one place (30.4k loc)
 - 2026-03-18: fix: pan label renamed to "Pan" (casing), moved above knob like Gain label, value below knob (30.3k loc)
 - 2026-03-18: feat: pan knob rotated 90° CCW — center points up, fill arc extends from 12 o'clock outward toward indicator (30.3k loc)

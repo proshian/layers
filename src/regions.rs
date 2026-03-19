@@ -62,7 +62,6 @@ pub(crate) enum ExportHover {
 
 pub(crate) const EXPORT_REGION_DEFAULT_WIDTH: f32 = 800.0;
 pub(crate) const EXPORT_REGION_DEFAULT_HEIGHT: f32 = 300.0;
-pub(crate) use crate::theme::{EXPORT_FILL_COLOR, EXPORT_BORDER_COLOR, EXPORT_RENDER_PILL_COLOR};
 pub(crate) const EXPORT_RENDER_PILL_W: f32 = 110.0;
 pub(crate) const EXPORT_RENDER_PILL_H: f32 = 22.0;
 
@@ -126,6 +125,5 @@ pub(crate) enum LoopHover {
 
 pub(crate) const LOOP_REGION_DEFAULT_WIDTH: f32 = 800.0;
 pub(crate) const LOOP_REGION_DEFAULT_HEIGHT: f32 = 250.0;
-pub(crate) use crate::theme::{LOOP_FILL_COLOR, LOOP_BORDER_COLOR, LOOP_BADGE_COLOR};
 pub(crate) const LOOP_BADGE_W: f32 = 70.0;
 pub(crate) const LOOP_BADGE_H: f32 = 22.0;
