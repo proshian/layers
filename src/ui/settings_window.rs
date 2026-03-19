@@ -148,11 +148,17 @@ impl SettingsWindow {
         let clamped = val.clamp(def.min, def.max);
         match idx {
             0 => settings.grid_line_intensity = clamped,
-            1 => settings.brightness = clamped,
-            2 => settings.color_intensity = clamped,
+            1 => {
+                settings.brightness = clamped;
+                settings.theme = crate::theme::RuntimeTheme::from_hue_with_settings(settings.primary_hue, settings.color_intensity, clamped);
+            }
+            2 => {
+                settings.color_intensity = clamped;
+                settings.theme = crate::theme::RuntimeTheme::from_hue_with_settings(settings.primary_hue, clamped, settings.brightness);
+            }
             3 => {
                 settings.primary_hue = clamped;
-                settings.theme = crate::theme::RuntimeTheme::from_hue(clamped);
+                settings.theme = crate::theme::RuntimeTheme::from_hue_with_settings(clamped, settings.color_intensity, settings.brightness);
             }
             _ => {}
         }
@@ -447,6 +453,8 @@ impl SettingsWindow {
         let (wp, ws) = self.win_rect(screen_w, screen_h, scale);
         let br = BORDER_RADIUS * scale;
 
+        let t = &settings.theme;
+
         // Full-screen backdrop
         out.push(InstanceRaw {
             position: [0.0, 0.0],
@@ -468,7 +476,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: wp,
             size: ws,
-            color: [0.15, 0.15, 0.18, 0.98],
+            color: t.bg_window,
             border_radius: br,
         });
 
@@ -476,14 +484,14 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: wp,
             size: [SIDEBAR_WIDTH * scale, ws[1]],
-            color: [0.12, 0.12, 0.15, 1.0],
+            color: t.bg_sidebar,
             border_radius: br,
         });
         // Fill right side of sidebar (cover rounded corner at top-right of sidebar)
         out.push(InstanceRaw {
             position: [wp[0] + SIDEBAR_WIDTH * scale - br, wp[1]],
             size: [br, ws[1]],
-            color: [0.12, 0.12, 0.15, 1.0],
+            color: t.bg_sidebar,
             border_radius: 0.0,
         });
 
@@ -506,14 +514,14 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [wp[0] + 6.0 * scale, y],
                     size: [SIDEBAR_WIDTH * scale - 12.0 * scale, item_h],
-                    color: [0.22, 0.22, 0.28, 1.0],
+                    color: t.bg_elevated,
                     border_radius: 6.0 * scale,
                 });
             } else if is_hovered {
                 out.push(InstanceRaw {
                     position: [wp[0] + 6.0 * scale, y],
                     size: [SIDEBAR_WIDTH * scale - 12.0 * scale, item_h],
-                    color: [0.18, 0.18, 0.22, 0.8],
+                    color: t.item_hover,
                     border_radius: 6.0 * scale,
                 });
             }
@@ -535,17 +543,17 @@ impl SettingsWindow {
         match self.active_category {
             SettingsCategory::ThemeAndColors => {
                 self.build_slider_instances(
-                    &mut out, settings, screen_w, screen_h, scale, content_x, content_w, wp,
+                    &mut out, settings, screen_w, screen_h, scale, content_x, content_w, wp, t,
                 );
             }
             SettingsCategory::Audio => {
                 self.build_audio_instances(
-                    &mut out, settings, screen_w, screen_h, scale, content_x, content_w, wp,
+                    &mut out, settings, screen_w, screen_h, scale, content_x, content_w, wp, t,
                 );
             }
             SettingsCategory::Developer => {
                 self.build_developer_instances(
-                    &mut out, settings, screen_w, screen_h, scale, content_x, content_w, wp,
+                    &mut out, settings, screen_w, screen_h, scale, content_x, content_w, wp, t,
                 );
             }
         }
@@ -563,6 +571,7 @@ impl SettingsWindow {
         content_x: f32,
         content_w: f32,
         wp: [f32; 2],
+        t: &crate::theme::RuntimeTheme,
     ) {
         for i in 0..SLIDERS.len() {
             let def = &SLIDERS[i];
@@ -579,7 +588,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [swatch_x, swatch_y],
                     size: [swatch_sz, swatch_sz],
-                    color: settings.theme.accent,
+                    color: t.accent,
                     border_radius: swatch_sz * 0.5,
                 });
             }
@@ -587,7 +596,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: tp,
                 size: ts,
-                color: [0.25, 0.25, 0.30, 1.0],
+                color: t.knob_inactive,
                 border_radius: ts[1] * 0.5,
             });
 
@@ -596,7 +605,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: tp,
                     size: [fill_w, ts[1]],
-                    color: [0.45, 0.72, 0.95, 1.0],
+                    color: t.slider_fill,
                     border_radius: ts[1] * 0.5,
                 });
             }
@@ -635,6 +644,7 @@ impl SettingsWindow {
         content_x: f32,
         content_w: f32,
         wp: [f32; 2],
+        t: &crate::theme::RuntimeTheme,
     ) {
         let dd_br = 4.0 * scale;
 
@@ -645,7 +655,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [dp[0] - 1.0, dp[1] - 1.0],
                 size: [ds[0] + 2.0, ds[1] + 2.0],
-                color: [0.30, 0.30, 0.34, 1.0],
+                color: t.bg_window_header,
                 border_radius: dd_br + 1.0,
             });
 
@@ -653,7 +663,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: dp,
                 size: ds,
-                color: [0.20, 0.20, 0.24, 1.0],
+                color: t.bg_input,
                 border_radius: dd_br,
             });
 
@@ -699,7 +709,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [dp[0] - 1.0, dp[1] - 1.0],
                 size: [ds[0] + 2.0, ds[1] + 2.0],
-                color: [0.30, 0.30, 0.34, 1.0],
+                color: t.bg_window_header,
                 border_radius: dd_br + 1.0,
             });
 
@@ -707,7 +717,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: dp,
                 size: ds,
-                color: [0.20, 0.20, 0.24, 1.0],
+                color: t.bg_input,
                 border_radius: dd_br,
             });
 
@@ -745,7 +755,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [dp[0] - 1.0, popup_y - 1.0],
                     size: [ds[0] + 2.0, popup_h + 2.0],
-                    color: [0.30, 0.30, 0.34, 1.0],
+                    color: t.bg_window_header,
                     border_radius: popup_br + 1.0,
                 });
 
@@ -753,7 +763,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [dp[0], popup_y],
                     size: [ds[0], popup_h],
-                    color: [0.18, 0.18, 0.22, 1.0],
+                    color: t.bg_menu,
                     border_radius: popup_br,
                 });
 
@@ -764,7 +774,7 @@ impl SettingsWindow {
                         out.push(InstanceRaw {
                             position: [dp[0] + 4.0 * scale, iy + 2.0 * scale],
                             size: [ds[0] - 8.0 * scale, item_h - 4.0 * scale],
-                            color: [0.30, 0.50, 0.80, 0.5],
+                            color: t.option_highlight,
                             border_radius: 4.0 * scale,
                         });
                     }
@@ -787,13 +797,13 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [dp3[0] - 1.0, popup_y - 1.0],
                     size: [ds3[0] + 2.0, popup_h + 2.0],
-                    color: [0.30, 0.30, 0.34, 1.0],
+                    color: t.bg_window_header,
                     border_radius: popup_br + 1.0,
                 });
                 out.push(InstanceRaw {
                     position: [dp3[0], popup_y],
                     size: [ds3[0], popup_h],
-                    color: [0.18, 0.18, 0.22, 1.0],
+                    color: t.bg_menu,
                     border_radius: popup_br,
                 });
 
@@ -804,7 +814,7 @@ impl SettingsWindow {
                         out.push(InstanceRaw {
                             position: [dp3[0] + 4.0 * scale, iy + 2.0 * scale],
                             size: [ds3[0] - 8.0 * scale, item_h - 4.0 * scale],
-                            color: [0.30, 0.50, 0.80, 0.5],
+                            color: t.option_highlight,
                             border_radius: 4.0 * scale,
                         });
                     }
@@ -824,6 +834,7 @@ impl SettingsWindow {
         _content_x: f32,
         _content_w: f32,
         _wp: [f32; 2],
+        t: &crate::theme::RuntimeTheme,
     ) {
         let dd_br = 4.0 * scale;
         let (dp, ds) = self.dropdown_rect(0, screen_w, screen_h, scale);
@@ -832,7 +843,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: [dp[0] - 1.0, dp[1] - 1.0],
             size: [ds[0] + 2.0, ds[1] + 2.0],
-            color: [0.30, 0.30, 0.34, 1.0],
+            color: t.bg_window_header,
             border_radius: dd_br + 1.0,
         });
 
@@ -840,7 +851,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: dp,
             size: ds,
-            color: [0.20, 0.20, 0.24, 1.0],
+            color: t.bg_input,
             border_radius: dd_br,
         });
 
@@ -875,7 +886,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [dp[0] - 1.0, popup_y - 1.0],
                 size: [ds[0] + 2.0, popup_h + 2.0],
-                color: [0.30, 0.30, 0.34, 1.0],
+                color: t.bg_window_header,
                 border_radius: popup_br + 1.0,
             });
 
@@ -883,7 +894,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [dp[0], popup_y],
                 size: [ds[0], popup_h],
-                color: [0.18, 0.18, 0.22, 1.0],
+                color: t.bg_menu,
                 border_radius: popup_br,
             });
 
@@ -894,7 +905,7 @@ impl SettingsWindow {
                     out.push(InstanceRaw {
                         position: [dp[0] + 4.0 * scale, iy + 2.0 * scale],
                         size: [ds[0] - 8.0 * scale, item_h - 4.0 * scale],
-                        color: [0.30, 0.50, 0.80, 0.5],
+                        color: t.option_highlight,
                         border_radius: 4.0 * scale,
                     });
                 }

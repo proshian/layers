@@ -190,64 +190,73 @@ pub struct RuntimeTheme {
 }
 
 impl RuntimeTheme {
-    pub fn from_hue(h: f32) -> Self {
-        let lo = LIGHTNESS_OFFSET;
-        let accent = hsl(h, 1.0, 0.625, 1.0);
+    pub fn from_hue_with_settings(h: f32, color_intensity: f32, brightness: f32) -> Self {
+        let s_mult = 0.05 + color_intensity * 0.95;
+        let lo = (brightness - 1.0) * 0.15;
+        // Helper: apply saturation multiplier and lightness offset, preserving alpha
+        let c = |hue: f32, s: f32, l: f32, a: f32| -> [f32; 4] {
+            hsl(hue, s * s_mult, (l + lo).clamp(0.05, 0.95), a)
+        };
+        let accent = c(h, 1.0, 0.625, 1.0);
         let ch = wrap_hue(h + OFFSET_COMPONENT);
         Self {
-            bg_base:          hsl(h, 0.12, 0.125 + lo, 1.0),
-            bg_surface:       hsl(h, 0.12, 0.145 + lo, 1.0),
-            bg_menu:          hsl(h, 0.10, 0.165 + lo, 1.0),
-            bg_overlay:       hsl(h, 0.10, 0.155 + lo, 0.98),
-            bg_elevated:      hsl(h, 0.14, 0.175 + lo, 1.0),
-            bg_input:         hsl(h, 0.14, 0.165 + lo, 1.0),
-            bg_dropdown:      hsl(h, 0.12, 0.170 + lo, 1.0),
-            bg_panel:         hsl(h, 0.10, 0.145 + lo, 0.85),
-            bg_window:        hsl(h, 0.13, 0.155 + lo, 0.98),
-            bg_sidebar:       hsl(h, 0.12, 0.135 + lo, 1.0),
-            bg_window_header: hsl(h, 0.16, 0.185 + lo, 1.0),
-            bg_plugin:        hsl(h, 0.20, 0.120 + lo, 1.0),
-            bg_plugin_header: hsl(h, 0.22, 0.140 + lo, 1.0),
+            bg_base:          c(h, 0.12, 0.125, 1.0),
+            bg_surface:       c(h, 0.12, 0.145, 1.0),
+            bg_menu:          c(h, 0.10, 0.165, 1.0),
+            bg_overlay:       c(h, 0.10, 0.155, 0.98),
+            bg_elevated:      c(h, 0.14, 0.175, 1.0),
+            bg_input:         c(h, 0.14, 0.165, 1.0),
+            bg_dropdown:      c(h, 0.12, 0.170, 1.0),
+            bg_panel:         c(h, 0.10, 0.145, 0.85),
+            bg_window:        c(h, 0.13, 0.155, 0.98),
+            bg_sidebar:       c(h, 0.12, 0.135, 1.0),
+            bg_window_header: c(h, 0.16, 0.185, 1.0),
+            bg_plugin:        c(h, 0.20, 0.120, 1.0),
+            bg_plugin_header: c(h, 0.22, 0.140, 1.0),
             accent,
-            accent_muted:     hsl(h, 0.70, 0.560, 0.60),
-            accent_faint:     hsl(h, 1.00, 0.625, 0.08),
-            selection:        hsl(h, 0.65, 0.600, 0.80),
-            border_subtle:    hsl(h, 0.15, 0.300, 0.12),
+            accent_muted:     c(h, 0.70, 0.560, 0.60),
+            accent_faint:     c(h, 1.00, 0.625, 0.08),
+            selection:        c(h, 0.65, 0.600, 0.80),
+            border_subtle:    c(h, 0.15, 0.300, 0.12),
             item_hover:       [1.0, 1.0, 1.0, 0.06],
-            item_active:      hsl(h, 0.50, 0.300, 0.25),
-            option_highlight: hsl(h, 0.50, 0.250, 0.30),
-            pill_active:      hsl(h, 0.65, 0.500, 0.85),
-            pill_inactive:    hsl(h, 0.15, 0.350, 0.40),
-            slider_fill:      hsl(h, 0.65, 0.550, 0.80),
-            knob_inactive:    hsl(h, 0.20, 0.350, 0.60),
-            drop_zone_fill:   hsl(h, 0.65, 0.580, 0.10),
-            drop_zone_border: hsl(h, 0.65, 0.620, 0.60),
-            select_rect_fill: hsl(h, 0.65, 0.580, 0.08),
-            select_rect_border: hsl(h, 0.60, 0.600, 0.50),
-            select_outline:   hsl(h, 0.65, 0.600, 0.70),
-            loop_fill_color:  hsl(h, 0.80, 0.580, 0.08),
-            loop_border_color: hsl(h, 0.75, 0.620, 0.50),
-            loop_badge_color: hsl(h, 0.75, 0.570, 0.85),
-            export_fill_color:       hsl(wrap_hue(h + 150.0), 0.70, 0.550, 0.10),
-            export_border_color:     hsl(wrap_hue(h + 150.0), 0.75, 0.600, 0.50),
-            export_render_pill_color: hsl(wrap_hue(h + 150.0), 0.65, 0.500, 0.85),
-            component_border_color:  hsl(ch, 0.75, 0.525, 0.50),
-            component_fill_color:    hsl(ch, 0.75, 0.525, 0.06),
-            component_badge_color:   hsl(ch, 0.75, 0.525, 0.70),
-            instance_fill_color:     hsl(ch, 0.75, 0.525, 0.04),
-            instance_border_color:   hsl(ch, 0.75, 0.525, 0.30),
-            lock_icon_color:         hsl(ch, 0.75, 0.525, 0.60),
-            effect_border_color:     hsl(h, 0.65, 0.560, 0.50),
-            effect_active_border:    hsl(h, 0.70, 0.600, 0.70),
-            plugin_block_default_color: hsl(h, 0.65, 0.560, 0.70),
-            instrument_border_color: hsl(wrap_hue(h + 60.0), 0.65, 0.580, 0.50),
-            instrument_active_border: hsl(wrap_hue(h + 60.0), 0.70, 0.620, 0.70),
-            midi_clip_default_color: hsl(wrap_hue(h + 60.0), 0.65, 0.580, 0.70),
-            playhead:          hsl(wrap_hue(h + 160.0), 0.70, 0.580, 0.90),
-            category_dot:      hsl(h, 0.65, 0.580, 0.70),
-            pill_instrument:   hsl(wrap_hue(h + 60.0), 0.65, 0.520, 0.85),
-            pill_effect:       hsl(h, 0.65, 0.520, 0.85),
+            item_active:      c(h, 0.50, 0.300, 0.25),
+            option_highlight: c(h, 0.50, 0.250, 0.30),
+            pill_active:      c(h, 0.65, 0.500, 0.85),
+            pill_inactive:    c(h, 0.15, 0.350, 0.40),
+            slider_fill:      c(h, 0.65, 0.550, 0.80),
+            knob_inactive:    c(h, 0.20, 0.350, 0.60),
+            drop_zone_fill:   c(h, 0.65, 0.580, 0.10),
+            drop_zone_border: c(h, 0.65, 0.620, 0.60),
+            select_rect_fill: c(h, 0.65, 0.580, 0.08),
+            select_rect_border: c(h, 0.60, 0.600, 0.50),
+            select_outline:   c(h, 0.65, 0.600, 0.70),
+            loop_fill_color:  c(h, 0.80, 0.580, 0.08),
+            loop_border_color: c(h, 0.75, 0.620, 0.50),
+            loop_badge_color: c(h, 0.75, 0.570, 0.85),
+            export_fill_color:       c(wrap_hue(h + 150.0), 0.70, 0.550, 0.10),
+            export_border_color:     c(wrap_hue(h + 150.0), 0.75, 0.600, 0.50),
+            export_render_pill_color: c(wrap_hue(h + 150.0), 0.65, 0.500, 0.85),
+            component_border_color:  c(ch, 0.75, 0.525, 0.50),
+            component_fill_color:    c(ch, 0.75, 0.525, 0.06),
+            component_badge_color:   c(ch, 0.75, 0.525, 0.70),
+            instance_fill_color:     c(ch, 0.75, 0.525, 0.04),
+            instance_border_color:   c(ch, 0.75, 0.525, 0.30),
+            lock_icon_color:         c(ch, 0.75, 0.525, 0.60),
+            effect_border_color:     c(h, 0.65, 0.560, 0.50),
+            effect_active_border:    c(h, 0.70, 0.600, 0.70),
+            plugin_block_default_color: c(h, 0.65, 0.560, 0.70),
+            instrument_border_color: c(wrap_hue(h + 60.0), 0.65, 0.580, 0.50),
+            instrument_active_border: c(wrap_hue(h + 60.0), 0.70, 0.620, 0.70),
+            midi_clip_default_color: c(wrap_hue(h + 60.0), 0.65, 0.580, 0.70),
+            playhead:          c(wrap_hue(h + 160.0), 0.70, 0.580, 0.90),
+            category_dot:      c(h, 0.65, 0.580, 0.70),
+            pill_instrument:   c(wrap_hue(h + 60.0), 0.65, 0.520, 0.85),
+            pill_effect:       c(h, 0.65, 0.520, 0.85),
         }
+    }
+
+    pub fn from_hue(h: f32) -> Self {
+        Self::from_hue_with_settings(h, 1.0, 1.0)
     }
 }
 

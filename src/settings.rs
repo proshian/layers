@@ -229,7 +229,7 @@ impl Default for Settings {
         Self {
             grid_line_intensity: 0.26,
             brightness: 1.0,
-            color_intensity: 0.0,
+            color_intensity: 1.0,
             audio_driver_type: default_driver_type(),
             audio_input_device: default_input_device(),
             audio_output_device: default_output_device(),
@@ -263,7 +263,7 @@ impl Settings {
             match std::fs::read_to_string(&path) {
                 Ok(json) => {
                     let mut s: Settings = serde_json::from_str(&json).unwrap_or_default();
-                    s.theme = crate::theme::RuntimeTheme::from_hue(s.primary_hue);
+                    s.theme = crate::theme::RuntimeTheme::from_hue_with_settings(s.primary_hue, s.color_intensity, s.brightness);
                     s
                 }
                 Err(_) => Self::default(),

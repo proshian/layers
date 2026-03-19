@@ -393,6 +393,16 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
 
     // --- canvas objects ---
     let ci = ctx.settings.color_intensity;
+    let apply_intensity = |c: [f32; 4]| -> [f32; 4] {
+        let s_mult = 0.05 + ci * 0.95;
+        let lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        [
+            (lum + (c[0] - lum) * s_mult).clamp(0.0, 1.0),
+            (lum + (c[1] - lum) * s_mult).clamp(0.0, 1.0),
+            (lum + (c[2] - lum) * s_mult).clamp(0.0, 1.0),
+            c[3],
+        ]
+    };
     for (&id, obj) in ctx.objects.iter() {
         let obj_right = obj.position[0] + obj.size[0];
         let obj_bottom = obj.position[1] + obj.size[1];
@@ -405,14 +415,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         }
         let is_sel = ctx.selected.contains(&HitTarget::Object(id));
         let is_hov = ctx.hovered == Some(HitTarget::Object(id));
-        let mut color = obj.color;
-        if ci > 0.001 {
-            let lum = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2];
-            let boost = 1.0 + ci * 2.0;
-            color[0] = (lum + (color[0] - lum) * boost).clamp(0.0, 1.0);
-            color[1] = (lum + (color[1] - lum) * boost).clamp(0.0, 1.0);
-            color[2] = (lum + (color[2] - lum) * boost).clamp(0.0, 1.0);
-        }
+        let mut color = apply_intensity(obj.color);
         if is_sel || is_hov {
             color[0] = (color[0] + 0.10).min(1.0);
             color[1] = (color[1] + 0.10).min(1.0);
@@ -439,6 +442,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         }
         let is_sel = ctx.selected.contains(&HitTarget::Waveform(id));
         let is_hov = ctx.hovered == Some(HitTarget::Waveform(id));
+        let wf_color = apply_intensity(wf.color);
         out.extend(ui::waveform::build_waveform_instances(
             wf,
             camera,
@@ -446,6 +450,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             world_right,
             is_hov,
             is_sel,
+            wf_color,
         ));
 
         // Automation breakpoint dots (only in automation mode for active param)
@@ -755,6 +760,15 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
         }
         let is_sel = ctx.selected.contains(&HitTarget::Waveform(id));
         let is_hov = ctx.hovered == Some(HitTarget::Waveform(id));
+        let ci = ctx.settings.color_intensity;
+        let s_mult = 0.05 + ci * 0.95;
+        let lum = 0.299 * wf.color[0] + 0.587 * wf.color[1] + 0.114 * wf.color[2];
+        let wf_color = [
+            (lum + (wf.color[0] - lum) * s_mult).clamp(0.0, 1.0),
+            (lum + (wf.color[1] - lum) * s_mult).clamp(0.0, 1.0),
+            (lum + (wf.color[2] - lum) * s_mult).clamp(0.0, 1.0),
+            wf.color[3],
+        ];
         verts.extend(ui::waveform::build_waveform_triangles(
             wf,
             camera,
@@ -763,6 +777,7 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
             is_hov,
             is_sel,
             ctx.bpm,
+            wf_color,
         ));
         // Fade curve lines as smooth triangles (line only when cursor is near)
         let mx = ctx.mouse_world[0];

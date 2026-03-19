@@ -196,14 +196,15 @@ pub fn build_waveform_instances(
     _world_right: f32,
     is_hovered: bool,
     is_selected: bool,
+    color: [f32; 4],
 ) -> Vec<InstanceRaw> {
     let mut out = Vec::new();
     let alpha_mul = if wf.disabled { 0.25 } else { 1.0 };
 
     let bg_color = [
-        wf.color[0] * 0.15,
-        wf.color[1] * 0.15,
-        wf.color[2] * 0.15,
+        color[0] * 0.15,
+        color[1] * 0.15,
+        color[2] * 0.15,
         0.92 * alpha_mul,
     ];
     let br = (wf.border_radius).min(6.0 / camera.zoom);
@@ -216,7 +217,7 @@ pub fn build_waveform_instances(
 
     if is_hovered && !is_selected {
         let bw = 2.0 / camera.zoom;
-        let bc = [wf.color[0], wf.color[1], wf.color[2], 0.6 * alpha_mul];
+        let bc = [color[0], color[1], color[2], 0.6 * alpha_mul];
         push_border(&mut out, wf.position, wf.size, bw, bc);
     }
 
@@ -756,6 +757,7 @@ pub fn build_waveform_triangles(
     is_hovered: bool,
     is_selected: bool,
     bpm: f32,
+    color: [f32; 4],
 ) -> Vec<WaveformVertex> {
     if wf.audio.left_samples.is_empty() && wf.audio.right_samples.is_empty() {
         return Vec::new();
@@ -767,7 +769,7 @@ pub fn build_waveform_triangles(
         WarpMode::Off => 1.0,
     };
 
-    let mut peak_color = wf.color;
+    let mut peak_color = color;
     if is_hovered || is_selected {
         peak_color[0] = (peak_color[0] + 0.1).min(1.0);
         peak_color[1] = (peak_color[1] + 0.1).min(1.0);

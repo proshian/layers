@@ -1,3 +1,5 @@
+- 2026-03-19: feat: settings window now uses RuntimeTheme colors — window bg, sidebar, sliders, dropdowns all respond to hue/intensity/brightness (30.6k loc)
+- 2026-03-19: feat: Color Intensity + Brightness sliders — both now apply globally to RuntimeTheme, canvas objects, and waveform peaks; 0% intensity = near-grayscale, 200% brightness = near-white (30.6k loc)
 - 2026-03-19: feat: runtime primary hue slider — RuntimeTheme struct parameterized by hue, Settings.theme field, Primary Color slider in settings UI, all theme colors now resolved at runtime (30.6k loc)
 - 2026-03-18: refactor: centralize all color constants into src/theme.rs; 13+ files now import from one place (30.4k loc)
 - 2026-03-18: fix: pan label renamed to "Pan" (casing), moved above knob like Gain label, value below knob (30.3k loc)
