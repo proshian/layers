@@ -54,6 +54,26 @@ pub struct PanKnobLayout {
     pub bracket_y1: f32,
 }
 
+pub struct PitchTextLayout {
+    pub label_pos: [f32; 2],
+    pub value_pos: [f32; 2],
+    pub text_rect: ([f32; 2], [f32; 2]),
+    pub bracket_x0: f32,
+    pub bracket_x1: f32,
+    pub bracket_y0: f32,
+    pub bracket_y1: f32,
+}
+
+pub struct SampleBpmTextLayout {
+    pub label_pos: [f32; 2],
+    pub value_pos: [f32; 2],
+    pub text_rect: ([f32; 2], [f32; 2]),
+    pub bracket_x0: f32,
+    pub bracket_x1: f32,
+    pub bracket_y0: f32,
+    pub bracket_y1: f32,
+}
+
 pub struct RightWindow {
     pub waveform_id: EntityId,
     pub volume: f32,
@@ -72,6 +92,8 @@ pub struct RightWindow {
     pub pitch_entry: ValueEntry,
     pub vol_fader_focused: bool,
     pub pan_knob_focused: bool,
+    pub pitch_focused: bool,
+    pub sample_bpm_focused: bool,
 }
 
 impl RightWindow {
@@ -227,6 +249,43 @@ impl RightWindow {
             bracket_x1: center[0] + 30.0 * scale,
             bracket_y0: label_y - 4.0 * scale,
             bracket_y1: value_y + 18.0 * scale,
+        }
+    }
+
+    pub fn pitch_text_layout(screen_w: f32, screen_h: f32, scale: f32) -> PitchTextLayout {
+        let (pp, _ps) = Self::panel_rect(screen_w, screen_h, scale);
+        let (text_pos, text_size) = Self::warp_param_text_rect(screen_w, screen_h, scale);
+        let rw_w = RIGHT_WINDOW_WIDTH * scale;
+        let cx = pp[0] + rw_w * 0.5;
+        // label_line=15, val_line=16 in gpu.rs; total visible text ~31px
+        let content_h = 31.0 * scale;
+        // Text is left-aligned at text_pos[0] (panel left edge); center brackets on text area
+        let text_cx = text_pos[0] + rw_w * 0.5;
+        PitchTextLayout {
+            label_pos: [cx, text_pos[1]],
+            value_pos: [cx, text_pos[1] + 15.0 * scale],
+            text_rect: (text_pos, text_size),
+            bracket_x0: text_pos[0] + 4.0 * scale,
+            bracket_x1: text_pos[0] + rw_w - 4.0 * scale,
+            bracket_y0: text_pos[1] - 2.0 * scale,
+            bracket_y1: text_pos[1] + content_h + 4.0 * scale,
+        }
+    }
+
+    pub fn sample_bpm_text_layout(screen_w: f32, screen_h: f32, scale: f32) -> SampleBpmTextLayout {
+        let (pp, _ps) = Self::panel_rect(screen_w, screen_h, scale);
+        let (text_pos, text_size) = Self::warp_param_text_rect(screen_w, screen_h, scale);
+        let rw_w = RIGHT_WINDOW_WIDTH * scale;
+        let cx = pp[0] + rw_w * 0.5;
+        let content_h = 31.0 * scale;
+        SampleBpmTextLayout {
+            label_pos: [cx, text_pos[1]],
+            value_pos: [cx, text_pos[1] + 15.0 * scale],
+            text_rect: (text_pos, text_size),
+            bracket_x0: text_pos[0] + 4.0 * scale,
+            bracket_x1: text_pos[0] + rw_w - 4.0 * scale,
+            bracket_y0: text_pos[1] - 2.0 * scale,
+            bracket_y1: text_pos[1] + content_h + 4.0 * scale,
         }
     }
 
@@ -463,6 +522,54 @@ impl RightWindow {
                 color: [0.16, 0.16, 0.20, 1.0],
                 border_radius: 4.0 * scale,
             });
+        }
+
+        // Sample BPM text focus brackets
+        if self.sample_bpm_focused && self.warp_mode == WarpMode::RePitch {
+            let sl = Self::sample_bpm_text_layout(screen_w, screen_h, scale);
+            let bracket_len = 10.0 * scale;
+            let thick = 1.0 * scale;
+            let color = [settings.theme.accent[0], settings.theme.accent[1], settings.theme.accent[2], 0.7];
+            let x0 = sl.bracket_x0;
+            let x1 = sl.bracket_x1;
+            let y0 = sl.bracket_y0;
+            let y1 = sl.bracket_y1;
+            // Top-left
+            out.push(InstanceRaw { position: [x0, y0], size: [bracket_len, thick], color, border_radius: 0.0 });
+            out.push(InstanceRaw { position: [x0, y0], size: [thick, bracket_len], color, border_radius: 0.0 });
+            // Top-right
+            out.push(InstanceRaw { position: [x1 - bracket_len, y0], size: [bracket_len, thick], color, border_radius: 0.0 });
+            out.push(InstanceRaw { position: [x1 - thick, y0], size: [thick, bracket_len], color, border_radius: 0.0 });
+            // Bottom-left
+            out.push(InstanceRaw { position: [x0, y1 - thick], size: [bracket_len, thick], color, border_radius: 0.0 });
+            out.push(InstanceRaw { position: [x0, y1 - bracket_len], size: [thick, bracket_len], color, border_radius: 0.0 });
+            // Bottom-right
+            out.push(InstanceRaw { position: [x1 - bracket_len, y1 - thick], size: [bracket_len, thick], color, border_radius: 0.0 });
+            out.push(InstanceRaw { position: [x1 - thick, y1 - bracket_len], size: [thick, bracket_len], color, border_radius: 0.0 });
+        }
+
+        // Pitch text focus brackets
+        if self.pitch_focused && self.warp_mode == WarpMode::Semitone {
+            let pl = Self::pitch_text_layout(screen_w, screen_h, scale);
+            let bracket_len = 10.0 * scale;
+            let thick = 1.0 * scale;
+            let color = [settings.theme.accent[0], settings.theme.accent[1], settings.theme.accent[2], 0.7];
+            let x0 = pl.bracket_x0;
+            let x1 = pl.bracket_x1;
+            let y0 = pl.bracket_y0;
+            let y1 = pl.bracket_y1;
+            // Top-left
+            out.push(InstanceRaw { position: [x0, y0], size: [bracket_len, thick], color, border_radius: 0.0 });
+            out.push(InstanceRaw { position: [x0, y0], size: [thick, bracket_len], color, border_radius: 0.0 });
+            // Top-right
+            out.push(InstanceRaw { position: [x1 - bracket_len, y0], size: [bracket_len, thick], color, border_radius: 0.0 });
+            out.push(InstanceRaw { position: [x1 - thick, y0], size: [thick, bracket_len], color, border_radius: 0.0 });
+            // Bottom-left
+            out.push(InstanceRaw { position: [x0, y1 - thick], size: [bracket_len, thick], color, border_radius: 0.0 });
+            out.push(InstanceRaw { position: [x0, y1 - bracket_len], size: [thick, bracket_len], color, border_radius: 0.0 });
+            // Bottom-right
+            out.push(InstanceRaw { position: [x1 - bracket_len, y1 - thick], size: [bracket_len, thick], color, border_radius: 0.0 });
+            out.push(InstanceRaw { position: [x1 - thick, y1 - bracket_len], size: [thick, bracket_len], color, border_radius: 0.0 });
         }
 
         out

@@ -478,3 +478,179 @@ fn test_undo_pan_preserves_selection() {
     assert!(!app.selected.is_empty(), "selection should be preserved after redo");
     assert!(app.right_window.is_some(), "right_window should stay open after redo");
 }
+
+#[test]
+fn test_pitch_keyboard_adjust() {
+    let mut app = App::new_headless();
+    let id = new_id();
+    let mut wf = make_waveform();
+    wf.warp_mode = WarpMode::Semitone;
+    wf.pitch_semitones = 0.0;
+    app.waveforms.insert(id, wf);
+    app.audio_clips.insert(id, AudioClipData {
+        samples: Arc::new(Vec::new()),
+        sample_rate: 48000,
+        duration_secs: 1.0,
+    });
+
+    app.selected.push(HitTarget::Waveform(id));
+    app.update_right_window();
+
+    // Focus the pitch control
+    app.right_window.as_mut().unwrap().pitch_focused = true;
+
+    // Simulate Up arrow: +1 semitone
+    let rw = app.right_window.as_ref().unwrap();
+    let new_pitch = (rw.pitch_semitones + 1.0).clamp(-24.0, 24.0);
+    let wf_id = rw.waveform_id;
+
+    let before = app.waveforms[&wf_id].clone();
+    app.waveforms.get_mut(&wf_id).unwrap().pitch_semitones = new_pitch;
+    app.right_window.as_mut().unwrap().pitch_semitones = new_pitch;
+    let after = app.waveforms[&wf_id].clone();
+    app.push_op(Operation::UpdateWaveform { id: wf_id, before, after });
+    app.resize_warped_clips();
+
+    assert!((app.waveforms[&wf_id].pitch_semitones - 1.0).abs() < 1e-4, "pitch should be +1 st after Up");
+
+    // Simulate Down arrow: -1 semitone (back to 0)
+    let new_pitch2 = (app.right_window.as_ref().unwrap().pitch_semitones - 1.0).clamp(-24.0, 24.0);
+    let before2 = app.waveforms[&wf_id].clone();
+    app.waveforms.get_mut(&wf_id).unwrap().pitch_semitones = new_pitch2;
+    app.right_window.as_mut().unwrap().pitch_semitones = new_pitch2;
+    let after2 = app.waveforms[&wf_id].clone();
+    app.push_op(Operation::UpdateWaveform { id: wf_id, before: before2, after: after2 });
+    app.resize_warped_clips();
+
+    assert!((app.waveforms[&wf_id].pitch_semitones - 0.0).abs() < 1e-4, "pitch should be 0 st after Down");
+
+    // Undo should restore to +1
+    app.undo_op();
+    assert!((app.waveforms[&wf_id].pitch_semitones - 1.0).abs() < 1e-4, "undo should restore pitch to +1 st");
+
+    // Undo again should restore to 0
+    app.undo_op();
+    assert!((app.waveforms[&wf_id].pitch_semitones - 0.0).abs() < 1e-4, "undo should restore pitch to 0 st");
+}
+
+#[test]
+fn test_undo_pitch_preserves_selection() {
+    let mut app = App::new_headless();
+    let id = new_id();
+    let mut wf = make_waveform();
+    wf.warp_mode = WarpMode::Semitone;
+    wf.pitch_semitones = 0.0;
+    app.waveforms.insert(id, wf);
+    app.audio_clips.insert(id, AudioClipData {
+        samples: Arc::new(Vec::new()),
+        sample_rate: 48000,
+        duration_secs: 1.0,
+    });
+
+    app.selected.push(HitTarget::Waveform(id));
+    app.update_right_window();
+    assert!(app.right_window.is_some());
+
+    // Apply pitch change (+3 semitones)
+    let new_pitch = 3.0;
+    let before = app.waveforms[&id].clone();
+    app.waveforms.get_mut(&id).unwrap().pitch_semitones = new_pitch;
+    app.right_window.as_mut().unwrap().pitch_semitones = new_pitch;
+    let after = app.waveforms[&id].clone();
+    app.push_op(Operation::UpdateWaveform { id, before, after });
+
+    // Undo — selection and right window should be preserved
+    app.undo_op();
+    assert!((app.waveforms[&id].pitch_semitones - 0.0).abs() < 1e-4, "pitch should be restored");
+    assert!(!app.selected.is_empty(), "selection should be preserved after undo");
+    assert!(app.right_window.is_some(), "right_window should stay open after undo");
+}
+
+#[test]
+fn test_sample_bpm_keyboard_adjust() {
+    let mut app = App::new_headless();
+    app.bpm = 120.0;
+    let id = new_id();
+    let mut wf = make_waveform();
+    wf.warp_mode = WarpMode::RePitch;
+    wf.sample_bpm = 120.0;
+    app.waveforms.insert(id, wf);
+    app.audio_clips.insert(id, AudioClipData {
+        samples: Arc::new(Vec::new()),
+        sample_rate: 48000,
+        duration_secs: 1.0,
+    });
+
+    app.selected.push(HitTarget::Waveform(id));
+    app.update_right_window();
+
+    // Focus the sample BPM control
+    app.right_window.as_mut().unwrap().sample_bpm_focused = true;
+
+    // Simulate Up arrow: +1 BPM
+    let rw = app.right_window.as_ref().unwrap();
+    let new_bpm = (rw.sample_bpm + 1.0).clamp(20.0, 999.0);
+    let wf_id = rw.waveform_id;
+
+    let before = app.waveforms[&wf_id].clone();
+    app.waveforms.get_mut(&wf_id).unwrap().sample_bpm = new_bpm;
+    app.right_window.as_mut().unwrap().sample_bpm = new_bpm;
+    let after = app.waveforms[&wf_id].clone();
+    app.push_op(Operation::UpdateWaveform { id: wf_id, before, after });
+    app.resize_warped_clips();
+
+    assert!((app.waveforms[&wf_id].sample_bpm - 121.0).abs() < 1e-4, "sample_bpm should be 121 after Up");
+
+    // Simulate Down arrow: -1 BPM (back to 120)
+    let new_bpm2 = (app.right_window.as_ref().unwrap().sample_bpm - 1.0).clamp(20.0, 999.0);
+    let before2 = app.waveforms[&wf_id].clone();
+    app.waveforms.get_mut(&wf_id).unwrap().sample_bpm = new_bpm2;
+    app.right_window.as_mut().unwrap().sample_bpm = new_bpm2;
+    let after2 = app.waveforms[&wf_id].clone();
+    app.push_op(Operation::UpdateWaveform { id: wf_id, before: before2, after: after2 });
+    app.resize_warped_clips();
+
+    assert!((app.waveforms[&wf_id].sample_bpm - 120.0).abs() < 1e-4, "sample_bpm should be 120 after Down");
+
+    // Undo should restore to 121
+    app.undo_op();
+    assert!((app.waveforms[&wf_id].sample_bpm - 121.0).abs() < 1e-4, "undo should restore sample_bpm to 121");
+
+    // Undo again should restore to 120
+    app.undo_op();
+    assert!((app.waveforms[&wf_id].sample_bpm - 120.0).abs() < 1e-4, "undo should restore sample_bpm to 120");
+}
+
+#[test]
+fn test_undo_sample_bpm_preserves_selection() {
+    let mut app = App::new_headless();
+    app.bpm = 120.0;
+    let id = new_id();
+    let mut wf = make_waveform();
+    wf.warp_mode = WarpMode::RePitch;
+    wf.sample_bpm = 120.0;
+    app.waveforms.insert(id, wf);
+    app.audio_clips.insert(id, AudioClipData {
+        samples: Arc::new(Vec::new()),
+        sample_rate: 48000,
+        duration_secs: 1.0,
+    });
+
+    app.selected.push(HitTarget::Waveform(id));
+    app.update_right_window();
+    assert!(app.right_window.is_some());
+
+    // Apply sample_bpm change
+    let new_bpm = 130.0;
+    let before = app.waveforms[&id].clone();
+    app.waveforms.get_mut(&id).unwrap().sample_bpm = new_bpm;
+    app.right_window.as_mut().unwrap().sample_bpm = new_bpm;
+    let after = app.waveforms[&id].clone();
+    app.push_op(Operation::UpdateWaveform { id, before, after });
+
+    // Undo — selection and right window should be preserved
+    app.undo_op();
+    assert!((app.waveforms[&id].sample_bpm - 120.0).abs() < 1e-4, "sample_bpm should be restored");
+    assert!(!app.selected.is_empty(), "selection should be preserved after undo");
+    assert!(app.right_window.is_some(), "right_window should stay open after undo");
+}

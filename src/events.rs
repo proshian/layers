@@ -1530,10 +1530,12 @@ impl ApplicationHandler for App {
                             return;
                         }
 
-                        // Clear vol fader / pan knob focus on any click (re-set below if clicking them)
+                        // Clear vol fader / pan knob / pitch / sample_bpm focus on any click (re-set below if clicking them)
                         if let Some(rw) = &mut self.right_window {
                             rw.vol_fader_focused = false;
                             rw.pan_knob_focused = false;
+                            rw.pitch_focused = false;
+                            rw.sample_bpm_focused = false;
                         }
 
                         // Right window knob mouse down (skip if context menu is open)
@@ -1602,6 +1604,10 @@ impl ApplicationHandler for App {
                                         if let Some(rw) = &mut self.right_window {
                                             rw.sample_bpm_entry.enter();
                                             rw.sample_bpm_dragging = false;
+                                            rw.sample_bpm_focused = true;
+                                            rw.vol_fader_focused = false;
+                                            rw.pan_knob_focused = false;
+                                            rw.pitch_focused = false;
                                         }
                                     } else {
                                         let start_value = rw.sample_bpm;
@@ -1609,6 +1615,10 @@ impl ApplicationHandler for App {
                                             rw.sample_bpm_dragging = true;
                                             rw.drag_start_y = self.mouse_pos[1];
                                             rw.drag_start_value = start_value;
+                                            rw.sample_bpm_focused = true;
+                                            rw.vol_fader_focused = false;
+                                            rw.pan_knob_focused = false;
+                                            rw.pitch_focused = false;
                                         }
                                     }
                                     self.request_redraw();
@@ -1621,6 +1631,10 @@ impl ApplicationHandler for App {
                                         if let Some(rw) = &mut self.right_window {
                                             rw.pitch_entry.enter();
                                             rw.pitch_dragging = false;
+                                            rw.pitch_focused = true;
+                                            rw.vol_fader_focused = false;
+                                            rw.pan_knob_focused = false;
+                                            rw.sample_bpm_focused = false;
                                         }
                                     } else {
                                         let start_value = rw.pitch_semitones;
@@ -1628,6 +1642,10 @@ impl ApplicationHandler for App {
                                             rw.pitch_dragging = true;
                                             rw.drag_start_y = self.mouse_pos[1];
                                             rw.drag_start_value = start_value;
+                                            rw.pitch_focused = true;
+                                            rw.vol_fader_focused = false;
+                                            rw.pan_knob_focused = false;
+                                            rw.sample_bpm_focused = false;
                                         }
                                     }
                                     self.request_redraw();
@@ -1657,6 +1675,9 @@ impl ApplicationHandler for App {
                                             rw.volume = 1.0;
                                             rw.vol_dragging = false;
                                             rw.vol_fader_focused = true;
+                                            rw.pan_knob_focused = false;
+                                            rw.pitch_focused = false;
+                                            rw.sample_bpm_focused = false;
                                         }
                                         let after = self.waveforms[&wf_id].clone();
                                         self.push_op(crate::operations::Operation::UpdateWaveform { id: wf_id, before, after });
@@ -1670,6 +1691,9 @@ impl ApplicationHandler for App {
                                         rw.drag_start_y = self.mouse_pos[1];
                                         rw.drag_start_value = start_value;
                                         rw.vol_fader_focused = true;
+                                        rw.pan_knob_focused = false;
+                                        rw.pitch_focused = false;
+                                        rw.sample_bpm_focused = false;
                                     }
                                     let _ = wf_id;
                                     self.request_redraw();
@@ -1677,6 +1701,9 @@ impl ApplicationHandler for App {
                                 } else if hit_vol_track {
                                     if let Some(rw) = &mut self.right_window {
                                         rw.vol_fader_focused = true;
+                                        rw.pan_knob_focused = false;
+                                        rw.pitch_focused = false;
+                                        rw.sample_bpm_focused = false;
                                     }
                                     self.request_redraw();
                                     return;
@@ -1692,6 +1719,9 @@ impl ApplicationHandler for App {
                                             rw.pan = 0.5;
                                             rw.pan_dragging = false;
                                             rw.pan_knob_focused = true;
+                                            rw.vol_fader_focused = false;
+                                            rw.pitch_focused = false;
+                                            rw.sample_bpm_focused = false;
                                         }
                                         let after = self.waveforms[&wf_id].clone();
                                         self.push_op(crate::operations::Operation::UpdateWaveform { id: wf_id, before, after });
@@ -1705,6 +1735,9 @@ impl ApplicationHandler for App {
                                         rw.drag_start_y = self.mouse_pos[1];
                                         rw.drag_start_value = start_value;
                                         rw.pan_knob_focused = true;
+                                        rw.vol_fader_focused = false;
+                                        rw.pitch_focused = false;
+                                        rw.sample_bpm_focused = false;
                                     }
                                     let _ = wf_id;
                                     self.request_redraw();
@@ -1737,6 +1770,12 @@ impl ApplicationHandler for App {
                             self.request_redraw();
                             if inside {
                                 return;
+                            }
+                            if let Some(_rw) = &self.right_window {
+                                let (pp, ps) = ui::right_window::RightWindow::panel_rect(sw, sh, scale);
+                                if self.mouse_pos[0] >= pp[0] && self.mouse_pos[0] <= pp[0] + ps[0] {
+                                    return;
+                                }
                             }
                         }
 
@@ -3356,12 +3395,14 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    // Escape clears vol fader / pan knob focus
+                    // Escape clears vol fader / pan knob / pitch / sample_bpm focus
                     if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
                         if let Some(rw) = &mut self.right_window {
-                            if rw.vol_fader_focused || rw.pan_knob_focused {
+                            if rw.vol_fader_focused || rw.pan_knob_focused || rw.pitch_focused || rw.sample_bpm_focused {
                                 rw.vol_fader_focused = false;
                                 rw.pan_knob_focused = false;
+                                rw.pitch_focused = false;
+                                rw.sample_bpm_focused = false;
                                 self.request_redraw();
                                 return;
                             }
@@ -3430,6 +3471,76 @@ impl ApplicationHandler for App {
                                         after,
                                     });
                                 }
+                                self.sync_audio_clips();
+                                self.mark_dirty();
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+
+                    // Up/Down arrow sample BPM adjustment when sample_bpm is focused
+                    if let Some(rw) = &self.right_window {
+                        if rw.sample_bpm_focused && rw.warp_mode == ui::waveform::WarpMode::RePitch && matches!(event.logical_key,
+                            Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown))
+                        {
+                            let shift = self.modifiers.shift_key();
+                            let delta = match event.logical_key {
+                                Key::Named(NamedKey::ArrowUp) => if shift { 0.1 } else { 1.0 },
+                                _ => if shift { -0.1 } else { -1.0 },
+                            };
+                            let wf_id = rw.waveform_id;
+                            let new_bpm = (rw.sample_bpm + delta).clamp(20.0, 999.0);
+                            if let Some(before) = self.waveforms.get(&wf_id).cloned() {
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.sample_bpm = new_bpm;
+                                }
+                                if let Some(rw) = &mut self.right_window {
+                                    rw.sample_bpm = new_bpm;
+                                }
+                                if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                    self.push_op(crate::operations::Operation::UpdateWaveform {
+                                        id: wf_id,
+                                        before,
+                                        after,
+                                    });
+                                }
+                                self.resize_warped_clips();
+                                self.sync_audio_clips();
+                                self.mark_dirty();
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+
+                    // Up/Down arrow pitch adjustment when pitch is focused
+                    if let Some(rw) = &self.right_window {
+                        if rw.pitch_focused && rw.warp_mode == ui::waveform::WarpMode::Semitone && matches!(event.logical_key,
+                            Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown))
+                        {
+                            let shift = self.modifiers.shift_key();
+                            let delta = match event.logical_key {
+                                Key::Named(NamedKey::ArrowUp) => if shift { 0.1 } else { 1.0 },
+                                _ => if shift { -0.1 } else { -1.0 },
+                            };
+                            let wf_id = rw.waveform_id;
+                            let new_pitch = (rw.pitch_semitones + delta).clamp(-24.0, 24.0);
+                            if let Some(before) = self.waveforms.get(&wf_id).cloned() {
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.pitch_semitones = new_pitch;
+                                }
+                                if let Some(rw) = &mut self.right_window {
+                                    rw.pitch_semitones = new_pitch;
+                                }
+                                if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                    self.push_op(crate::operations::Operation::UpdateWaveform {
+                                        id: wf_id,
+                                        before,
+                                        after,
+                                    });
+                                }
+                                self.resize_warped_clips();
                                 self.sync_audio_clips();
                                 self.mark_dirty();
                             }

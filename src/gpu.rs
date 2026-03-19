@@ -1013,6 +1013,9 @@ impl Gpu {
                     let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
                     buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
                     buf.set_text(&mut self.font_system, "SAMPLE BPM", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                    for line in buf.lines.iter_mut() {
+                        line.set_align(Some(glyphon::cosmic_text::Align::Center));
+                    }
                     buf.shape_until_scroll(&mut self.font_system, false);
                     text_buffers.push(buf);
                     text_meta.push((param_pos[0], param_pos[1], TextColor::rgba(140, 140, 150, 180), full_bounds));
@@ -1023,6 +1026,9 @@ impl Gpu {
                     let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
                     buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
                     buf.set_text(&mut self.font_system, &sbpm_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                    for line in buf.lines.iter_mut() {
+                        line.set_align(Some(glyphon::cosmic_text::Align::Center));
+                    }
                     buf.shape_until_scroll(&mut self.font_system, false);
                     text_buffers.push(buf);
                     text_meta.push((param_pos[0], param_pos[1] + label_line, TextColor::rgba(200, 200, 210, sbpm_alpha), full_bounds));
@@ -1030,6 +1036,9 @@ impl Gpu {
                     let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
                     buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
                     buf.set_text(&mut self.font_system, "PITCH", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                    for line in buf.lines.iter_mut() {
+                        line.set_align(Some(glyphon::cosmic_text::Align::Center));
+                    }
                     buf.shape_until_scroll(&mut self.font_system, false);
                     text_buffers.push(buf);
                     text_meta.push((param_pos[0], param_pos[1], TextColor::rgba(140, 140, 150, 180), full_bounds));
@@ -1040,6 +1049,9 @@ impl Gpu {
                     let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
                     buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
                     buf.set_text(&mut self.font_system, &pitch_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+                    for line in buf.lines.iter_mut() {
+                        line.set_align(Some(glyphon::cosmic_text::Align::Center));
+                    }
                     buf.shape_until_scroll(&mut self.font_system, false);
                     text_buffers.push(buf);
                     text_meta.push((param_pos[0], param_pos[1] + label_line, TextColor::rgba(200, 200, 210, pitch_alpha), full_bounds));

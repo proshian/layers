@@ -1,3 +1,6 @@
+- 2026-03-19: fix: right window no longer closes when dismissing warp mode dropdown by clicking empty space in the panel (32.3k loc)
+- 2026-03-19: feat: sample BPM keyboard control — click to focus, Up/Down ±1 BPM (Shift ±0.1), focus brackets, center-aligned text, Escape to unfocus (32.3k loc)
+- 2026-03-19: feat: pitch keyboard control — click pitch text to focus, Up/Down ±1st (Shift ±0.1st), focus brackets, Escape to unfocus (32.1k loc)
 - 2026-03-19: fix: undo/redo of standalone update ops (volume/pan keyboard) now preserves selection and right window (31.9k loc)
 - 2026-03-19: feat: pan knob — PanKnobLayout struct, focus brackets, keyboard Up/Down ±1% (Shift ±0.1%) (31.8k loc)
 - 2026-03-19: refactor: centralize volume fader geometry into VolFaderLayout struct (31.6k loc)
