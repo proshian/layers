@@ -1,0 +1,192 @@
+use super::*;
+
+impl App {
+    pub(crate) fn handle_redraw(&mut self) {
+        self.toast_manager.tick();
+        self.update_recording_waveform();
+        self.poll_pending_audio_loads();
+        if let Some(gpu) = &mut self.gpu {
+            let w = gpu.config.width as f32;
+            let h = gpu.config.height as f32;
+
+            let sel_rect = if let DragState::Selecting { start_world } = &self.drag {
+                Some((*start_world, self.camera.screen_to_world(self.mouse_pos)))
+            } else {
+                None
+            };
+
+            #[cfg(feature = "native")]
+            let playhead_world_x = self
+                .audio_engine
+                .as_ref()
+                .filter(|e| e.is_playing())
+                .map(|e| (e.position_seconds() * PIXELS_PER_SECOND as f64) as f32);
+            #[cfg(not(feature = "native"))]
+            let playhead_world_x: Option<f32> = None;
+
+            let camera_moved = self.camera.position != self.last_rendered_camera_pos
+                || self.camera.zoom != self.last_rendered_camera_zoom;
+            let hover_changed = self.hovered != self.last_rendered_hovered;
+            let sel_changed = self.selected.len() != self.last_rendered_selected_len;
+            let gen_changed = self.render_generation != self.last_rendered_generation;
+            let needs_rebuild = camera_moved
+                || hover_changed
+                || sel_changed
+                || gen_changed
+                || playhead_world_x.is_some()
+                || sel_rect.is_some()
+                || self.file_hovering;
+
+            if needs_rebuild {
+                let selected_set: HashSet<HitTarget> =
+                    self.selected.iter().copied().collect();
+                let render_ctx = RenderContext {
+                    camera: &self.camera,
+                    screen_w: w,
+                    screen_h: h,
+                    objects: &self.objects,
+                    waveforms: &self.waveforms,
+                    effect_regions: &self.effect_regions,
+                    plugin_blocks: &self.plugin_blocks,
+                    hovered: self.hovered,
+                    selected: &selected_set,
+                    selection_rect: sel_rect,
+                    select_area: self.select_area.as_ref(),
+                    file_hovering: self.file_hovering,
+                    playhead_world_x,
+                    export_regions: &self.export_regions,
+                    loop_regions: &self.loop_regions,
+                    components: &self.components,
+                    component_instances: &self.component_instances,
+                    editing_component: self.editing_component,
+                    settings: &self.settings,
+                    fade_curve_hovered: self.fade_curve_hovered,
+                    fade_curve_dragging: if let DragState::DraggingFadeCurve { waveform_id, is_fade_in, .. } = self.drag {
+                        Some((waveform_id, is_fade_in))
+                    } else {
+                        None
+                    },
+                    mouse_world: self.camera.screen_to_world(self.mouse_pos),
+                    bpm: self.bpm,
+                    automation_mode: self.automation_mode,
+                    active_automation_param: self.active_automation_param,
+                    editing_midi_clip: self.editing_midi_clip,
+                    instrument_regions: &self.instrument_regions,
+                    midi_clips: &self.midi_clips,
+                    selected_midi_notes: &self.selected_midi_notes,
+                    midi_note_select_rect: self.midi_note_select_rect,
+                    remote_users: &self.remote_users,
+                    network_mode: self.network.mode(),
+                };
+                build_instances(&mut self.cached_instances, &render_ctx);
+                build_waveform_vertices(&mut self.cached_wf_verts, &render_ctx);
+
+                self.last_rendered_generation = self.render_generation;
+                self.last_rendered_camera_pos = self.camera.position;
+                self.last_rendered_camera_zoom = self.camera.zoom;
+                self.last_rendered_hovered = self.hovered;
+                self.last_rendered_selected_len = self.selected.len();
+            }
+
+            if self.sample_browser.visible {
+                self.sample_browser.get_text_entries(h, gpu.scale_factor);
+            }
+            let browser_ref = if self.sample_browser.visible {
+                Some(&self.sample_browser)
+            } else {
+                None
+            };
+
+            let drag_ghost =
+                if let DragState::DraggingFromBrowser { ref filename, .. } = self.drag {
+                    Some((filename.as_str(), self.mouse_pos))
+                } else if let DragState::DraggingPlugin {
+                    ref plugin_name, ..
+                } = self.drag
+                {
+                    Some((plugin_name.as_str(), self.mouse_pos))
+                } else {
+                    None
+                };
+
+            if let Some(p) = &mut self.command_palette {
+                if p.mode == PaletteMode::VolumeFader {
+                    #[cfg(feature = "native")]
+                    { p.fader_rms = self.audio_engine.as_ref().map_or(0.0, |e| e.rms_peak()); }
+                }
+            }
+
+            #[cfg(feature = "native")]
+            let is_playing = self.audio_engine.as_ref().map_or(false, |e| e.is_playing());
+            #[cfg(not(feature = "native"))]
+            let is_playing = false;
+
+            #[cfg(feature = "native")]
+            let playback_pos = self
+                .audio_engine
+                .as_ref()
+                .map_or(0.0, |e| e.position_seconds());
+            #[cfg(not(feature = "native"))]
+            let playback_pos = 0.0;
+
+            #[cfg(feature = "native")]
+            let is_recording = self.recorder.as_ref().map_or(false, |r| r.is_recording());
+            #[cfg(not(feature = "native"))]
+            let is_recording = false;
+
+            gpu.render(
+                &self.camera,
+                &self.cached_instances,
+                &self.cached_wf_verts,
+                self.command_palette.as_ref(),
+                self.context_menu.as_ref(),
+                browser_ref,
+                drag_ghost,
+                is_playing,
+                is_recording,
+                playback_pos,
+                &self.export_regions,
+                &self.effect_regions,
+                &self.plugin_blocks,
+                self.editing_effect_name
+                    .as_ref()
+                    .map(|(idx, s)| (*idx, s.as_str())),
+                &self.waveforms,
+                self.editing_waveform_name
+                    .as_ref()
+                    .map(|(idx, s)| (*idx, s.as_str())),
+                self.plugin_editor.as_ref(),
+                {
+                    #[cfg(feature = "native")]
+                    { self.settings_window.as_ref() }
+                    #[cfg(not(feature = "native"))]
+                    { Option::<&ui::settings_window::SettingsWindow>::None }
+                },
+                &self.settings,
+                &self.toast_manager,
+                self.bpm,
+                self.editing_bpm.input.as_deref(),
+                self.automation_mode,
+                self.active_automation_param,
+                &self.midi_clips,
+                match self.hovered {
+                    Some(HitTarget::MidiClip(i)) => Some(i),
+                    _ => None,
+                },
+                self.editing_midi_clip,
+                self.camera.screen_to_world(self.mouse_pos),
+                match &self.drag {
+                    DragState::DraggingVelocity { clip_id, note_indices, .. } => {
+                        note_indices.first().map(|&ni| (*clip_id, ni))
+                    }
+                    _ => self.cmd_velocity_hover_note,
+                },
+                self.remote_storage.is_some(),
+                self.right_window.as_ref(),
+            );
+        }
+        if self.toast_manager.has_active() {
+            self.request_redraw();
+        }
+    }
+}

@@ -1,3 +1,4 @@
+- refactor: split events.rs (4749 lines) into events/ directory with 6 files (32.8k loc)
 - fix: waveform label text no longer renders over the right inspector panel (32.8k loc)
 - 2026-03-20: overlap system now splits background clip when a smaller clip is dropped inside it (32.8k loc)
 - recording now auto-starts playback (seeked to clip position) and stops it when recording ends (32.4k loc)
