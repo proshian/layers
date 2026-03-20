@@ -4,9 +4,55 @@ use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::ActiveEventLoop,
-    keyboard::{Key, NamedKey},
+    keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
     window::{Window, WindowId},
 };
+
+fn physical_key_to_char(key: &PhysicalKey) -> Option<&'static str> {
+    match key {
+        PhysicalKey::Code(code) => match code {
+            KeyCode::KeyA => Some("a"),
+            KeyCode::KeyB => Some("b"),
+            KeyCode::KeyC => Some("c"),
+            KeyCode::KeyD => Some("d"),
+            KeyCode::KeyE => Some("e"),
+            KeyCode::KeyF => Some("f"),
+            KeyCode::KeyG => Some("g"),
+            KeyCode::KeyH => Some("h"),
+            KeyCode::KeyI => Some("i"),
+            KeyCode::KeyJ => Some("j"),
+            KeyCode::KeyK => Some("k"),
+            KeyCode::KeyL => Some("l"),
+            KeyCode::KeyM => Some("m"),
+            KeyCode::KeyN => Some("n"),
+            KeyCode::KeyO => Some("o"),
+            KeyCode::KeyP => Some("p"),
+            KeyCode::KeyQ => Some("q"),
+            KeyCode::KeyR => Some("r"),
+            KeyCode::KeyS => Some("s"),
+            KeyCode::KeyT => Some("t"),
+            KeyCode::KeyU => Some("u"),
+            KeyCode::KeyV => Some("v"),
+            KeyCode::KeyW => Some("w"),
+            KeyCode::KeyX => Some("x"),
+            KeyCode::KeyY => Some("y"),
+            KeyCode::KeyZ => Some("z"),
+            KeyCode::Digit0 => Some("0"),
+            KeyCode::Digit1 => Some("1"),
+            KeyCode::Digit2 => Some("2"),
+            KeyCode::Digit3 => Some("3"),
+            KeyCode::Digit4 => Some("4"),
+            KeyCode::Digit5 => Some("5"),
+            KeyCode::Digit6 => Some("6"),
+            KeyCode::Digit7 => Some("7"),
+            KeyCode::Digit8 => Some("8"),
+            KeyCode::Digit9 => Some("9"),
+            KeyCode::Comma => Some(","),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 #[cfg(target_os = "macos")]
 use winit::platform::macos::WindowAttributesExtMacOS;
 
@@ -48,18 +94,27 @@ impl ApplicationHandler for App {
             window.set_prevent_default(true);
 
             // Prevent browser from intercepting keyboard shortcuts (Cmd+T, Cmd+, etc.)
+            // Uses both logical key and physical code so shortcuts work on non-Latin layouts
             {
                 use wasm_bindgen::prelude::*;
                 let closure = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
                     if e.meta_key() || e.ctrl_key() {
                         let key = e.key();
-                        let dominated = matches!(
+                        let code = e.code();
+                        let dominated_logical = matches!(
                             key.as_str(),
                             "t" | "p" | "k" | "b" | "," | "r" | "c" | "v" | "d"
                             | "e" | "l" | "s" | "z" | "1" | "2" | "3" | "4"
                         );
-                        let shift_combo = e.shift_key() && matches!(key.as_str(), "a" | "z");
-                        if dominated || shift_combo {
+                        let dominated_physical = matches!(
+                            code.as_str(),
+                            "KeyT" | "KeyP" | "KeyK" | "KeyB" | "Comma" | "KeyR"
+                            | "KeyC" | "KeyV" | "KeyD" | "KeyE" | "KeyL" | "KeyS"
+                            | "KeyZ" | "Digit1" | "Digit2" | "Digit3" | "Digit4"
+                        );
+                        let shift_logical = e.shift_key() && matches!(key.as_str(), "a" | "z");
+                        let shift_physical = e.shift_key() && matches!(code.as_str(), "KeyA" | "KeyZ");
+                        if dominated_logical || dominated_physical || shift_logical || shift_physical {
                             e.prevent_default();
                         }
                     }
@@ -3279,7 +3334,7 @@ impl ApplicationHandler for App {
                             }
                         }
                         // Cmd+D: duplicate selected MIDI notes
-                        if matches!(&event.logical_key, Key::Character(ch) if ch.as_ref() == "d") && self.modifiers.super_key() {
+                        if self.modifiers.super_key() && matches!(physical_key_to_char(&event.physical_key), Some("d")) {
                             if let Some(mc_idx) = self.editing_midi_clip {
                                 if self.midi_clips.contains_key(&mc_idx) && !self.selected_midi_notes.is_empty() {
                                     let before_notes = self.midi_clips[&mc_idx].notes.clone();
@@ -4255,119 +4310,123 @@ impl ApplicationHandler for App {
                             }
                             _ => {}
                         },
-                        Key::Character(ch) if self.modifiers.super_key() => match ch.as_ref() {
-                            "," => {
-                                #[cfg(feature = "native")]
-                                {
-                                    self.command_palette = None;
-                                    self.context_menu = None;
-                                    self.settings_window = if self.settings_window.is_some() {
-                                        None
-                                    } else {
-                                        Some(SettingsWindow::new())
-                                    };
-                                    self.request_redraw();
+                        _ if self.modifiers.super_key() => {
+                            if let Some(ch) = physical_key_to_char(&event.physical_key) {
+                                match ch {
+                                    "," => {
+                                        #[cfg(feature = "native")]
+                                        {
+                                            self.command_palette = None;
+                                            self.context_menu = None;
+                                            self.settings_window = if self.settings_window.is_some() {
+                                                None
+                                            } else {
+                                                Some(SettingsWindow::new())
+                                            };
+                                            self.request_redraw();
+                                        }
+                                    }
+                                    "k" => {
+                                        self.context_menu = None;
+                                        self.settings_window = None;
+                                        self.command_palette = if self.command_palette.is_some() {
+                                            None
+                                        } else {
+                                            #[allow(unused_mut)]
+                                            let mut p = CommandPalette::new(self.settings.dev_mode);
+                                            #[cfg(feature = "native")]
+                                            { p.plugin_entries = self.build_palette_plugin_entries(); }
+                                            Some(p)
+                                        };
+                                        self.request_redraw();
+                                    }
+                                    "t" | "p" => {
+                                        self.context_menu = None;
+                                        self.settings_window = None;
+                                        self.command_palette = if self.command_palette.is_some() {
+                                            None
+                                        } else {
+                                            #[allow(unused_mut)]
+                                            let mut p = CommandPalette::new(self.settings.dev_mode);
+                                            #[cfg(feature = "native")]
+                                            { p.plugin_entries = self.build_palette_plugin_entries(); }
+                                            Some(p)
+                                        };
+                                        self.request_redraw();
+                                    }
+                                    "b" => {
+                                        self.sample_browser.visible = !self.sample_browser.visible;
+                                        #[cfg(feature = "native")]
+                                        if self.sample_browser.visible {
+                                            self.ensure_plugins_scanned();
+                                        }
+                                        self.request_redraw();
+                                    }
+                                    "a" if self.modifiers.shift_key() => {
+                                        #[cfg(feature = "native")]
+                                        self.open_add_folder_dialog();
+                                    }
+                                    "r" => {
+                                        let has_er = self
+                                            .selected
+                                            .iter()
+                                            .any(|t| matches!(t, HitTarget::EffectRegion(_)));
+                                        let has_wf = self
+                                            .selected
+                                            .iter()
+                                            .any(|t| matches!(t, HitTarget::Waveform(_)));
+                                        if has_er {
+                                            self.execute_command(CommandAction::RenameEffectRegion);
+                                        } else if has_wf {
+                                            self.execute_command(CommandAction::RenameSample);
+                                        } else {
+                                            self.toggle_recording();
+                                        }
+                                        self.request_redraw();
+                                    }
+                                    "c" => {
+                                        self.copy_selected();
+                                        self.request_redraw();
+                                    }
+                                    "v" => {
+                                        self.paste_clipboard();
+                                        self.request_redraw();
+                                    }
+                                    "d" => {
+                                        self.duplicate_selected();
+                                        self.request_redraw();
+                                    }
+                                    "e" => {
+                                        self.execute_command(CommandAction::SplitSample);
+                                    }
+                                    "l" => {
+                                        self.execute_command(CommandAction::AddLoopArea);
+                                    }
+                                    "s" => self.save_project(),
+                                    "z" => {
+                                        println!("[KEY] Cmd+Z pressed, shift={}", self.modifiers.shift_key());
+                                        if self.modifiers.shift_key() {
+                                            self.redo_op();
+                                        } else {
+                                            self.undo_op();
+                                        }
+                                    }
+                                    "1" => {
+                                        self.execute_command(CommandAction::NarrowGrid);
+                                    }
+                                    "2" => {
+                                        self.execute_command(CommandAction::WidenGrid);
+                                    }
+                                    "3" => {
+                                        self.execute_command(CommandAction::ToggleTripletGrid);
+                                    }
+                                    "4" => {
+                                        self.execute_command(CommandAction::ToggleSnapToGrid);
+                                    }
+                                    _ => {}
                                 }
                             }
-                            "k" => {
-                                self.context_menu = None;
-                                self.settings_window = None;
-                                self.command_palette = if self.command_palette.is_some() {
-                                    None
-                                } else {
-                                    #[allow(unused_mut)]
-                                    let mut p = CommandPalette::new(self.settings.dev_mode);
-                                    #[cfg(feature = "native")]
-                                    { p.plugin_entries = self.build_palette_plugin_entries(); }
-                                    Some(p)
-                                };
-                                self.request_redraw();
-                            }
-                            "t" | "p" => {
-                                self.context_menu = None;
-                                self.settings_window = None;
-                                self.command_palette = if self.command_palette.is_some() {
-                                    None
-                                } else {
-                                    #[allow(unused_mut)]
-                                    let mut p = CommandPalette::new(self.settings.dev_mode);
-                                    #[cfg(feature = "native")]
-                                    { p.plugin_entries = self.build_palette_plugin_entries(); }
-                                    Some(p)
-                                };
-                                self.request_redraw();
-                            }
-                            "b" => {
-                                self.sample_browser.visible = !self.sample_browser.visible;
-                                #[cfg(feature = "native")]
-                                if self.sample_browser.visible {
-                                    self.ensure_plugins_scanned();
-                                }
-                                self.request_redraw();
-                            }
-                            "a" if self.modifiers.shift_key() => {
-                                #[cfg(feature = "native")]
-                                self.open_add_folder_dialog();
-                            }
-                            "r" => {
-                                let has_er = self
-                                    .selected
-                                    .iter()
-                                    .any(|t| matches!(t, HitTarget::EffectRegion(_)));
-                                let has_wf = self
-                                    .selected
-                                    .iter()
-                                    .any(|t| matches!(t, HitTarget::Waveform(_)));
-                                if has_er {
-                                    self.execute_command(CommandAction::RenameEffectRegion);
-                                } else if has_wf {
-                                    self.execute_command(CommandAction::RenameSample);
-                                } else {
-                                    self.toggle_recording();
-                                }
-                                self.request_redraw();
-                            }
-                            "c" => {
-                                self.copy_selected();
-                                self.request_redraw();
-                            }
-                            "v" => {
-                                self.paste_clipboard();
-                                self.request_redraw();
-                            }
-                            "d" => {
-                                self.duplicate_selected();
-                                self.request_redraw();
-                            }
-                            "e" => {
-                                self.execute_command(CommandAction::SplitSample);
-                            }
-                            "l" => {
-                                self.execute_command(CommandAction::AddLoopArea);
-                            }
-                            "s" => self.save_project(),
-                            "z" => {
-                                println!("[KEY] Cmd+Z pressed, shift={}", self.modifiers.shift_key());
-                                if self.modifiers.shift_key() {
-                                    self.redo_op();
-                                } else {
-                                    self.undo_op();
-                                }
-                            }
-                            "1" => {
-                                self.execute_command(CommandAction::NarrowGrid);
-                            }
-                            "2" => {
-                                self.execute_command(CommandAction::WidenGrid);
-                            }
-                            "3" => {
-                                self.execute_command(CommandAction::ToggleTripletGrid);
-                            }
-                            "4" => {
-                                self.execute_command(CommandAction::ToggleSnapToGrid);
-                            }
-                            _ => {}
-                        },
+                        }
                         _ => {}
                     }
                 }

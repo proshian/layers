@@ -1,3 +1,4 @@
+- keyboard shortcuts now work on non-Latin layouts (e.g. Russian) by using physical key codes for Cmd+key combos (32.4k loc)
 - fix: grid line colors now derived from canvas background instead of accent hue (32.3k loc)
 - ui: color swatch vertical gap now matches horizontal gap (2px) for uniform grid spacing (32.3k loc)
 - fix: block canvas dragging, scrolling, zooming, and hovering while settings window is open (32.3k loc)
