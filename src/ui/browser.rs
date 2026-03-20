@@ -60,7 +60,7 @@ pub struct SampleBrowser {
     pub width: f32,
     pub resize_hovered: bool,
     pub text_dirty: bool,
-    pub cached_text: Vec<BrowserTextEntry>,
+    pub cached_text: Vec<TextEntry>,
     pub text_generation: u64,
     cached_screen_h: f32,
     cached_scale: f32,
@@ -544,7 +544,7 @@ impl SampleBrowser {
         out
     }
 
-    pub fn get_text_entries(&mut self, screen_h: f32, scale: f32) -> &[BrowserTextEntry] {
+    pub fn get_text_entries(&mut self, screen_h: f32, scale: f32) -> &[TextEntry] {
         if self.text_dirty
             || (self.cached_screen_h - screen_h).abs() > 0.5
             || (self.cached_scale - scale).abs() > 0.001
@@ -558,22 +558,24 @@ impl SampleBrowser {
         &self.cached_text
     }
 
-    fn build_text_entries(&self, _screen_h: f32, scale: f32) -> Vec<BrowserTextEntry> {
+    fn build_text_entries(&self, _screen_h: f32, scale: f32) -> Vec<TextEntry> {
         let mut out = Vec::new();
         let w = self.panel_width(scale);
         let header_h = HEADER_HEIGHT * scale;
         let item_h = ITEM_HEIGHT * scale;
 
-        out.push(BrowserTextEntry {
+        // Header entries use bounds = Some([0,0,0,0]) as a marker (no scroll applied)
+        out.push(TextEntry {
             text: "EXPLORER".to_string(),
             x: 12.0 * scale,
-            base_y: (header_h - 14.0 * scale) * 0.5,
+            y: (header_h - 14.0 * scale) * 0.5,
             font_size: 11.0 * scale,
             line_height: 14.0 * scale,
             max_width: w * 0.6,
             color: [150, 150, 160, 200],
             weight: 600,
-            is_header: true,
+            bounds: Some([0.0, 0.0, 0.0, 0.0]),
+            center: false,
         });
 
         for (i, entry) in self.entries.iter().enumerate() {
@@ -581,32 +583,34 @@ impl SampleBrowser {
 
             match &entry.kind {
                 EntryKind::PluginHeader => {
-                    out.push(BrowserTextEntry {
+                    out.push(TextEntry {
                         text: "VST PLUGINS".to_string(),
                         x: 30.0 * scale,
-                        base_y: base_y + (item_h - 12.0 * scale) * 0.5,
+                        y: base_y + (item_h - 12.0 * scale) * 0.5,
                         font_size: 10.0 * scale,
                         line_height: 12.0 * scale,
                         max_width: w * 0.6,
                         color: [140, 160, 200, 200],
                         weight: 600,
-                        is_header: false,
+                        bounds: None,
+                center: false,
                     });
                 }
                 EntryKind::Plugin { .. } => {
                     let text_x = 22.0 * scale;
                     let font_sz = 12.0 * scale;
                     let line_h = 16.0 * scale;
-                    out.push(BrowserTextEntry {
+                    out.push(TextEntry {
                         text: entry.name.clone(),
                         x: text_x,
-                        base_y: base_y + (item_h - line_h) * 0.5,
+                        y: base_y + (item_h - line_h) * 0.5,
                         font_size: font_sz,
                         line_height: line_h,
                         max_width: w - text_x - 12.0 * scale,
                         color: [170, 190, 220, 255],
                         weight: 400,
-                        is_header: false,
+                        bounds: None,
+                center: false,
                     });
                 }
                 EntryKind::Dir | EntryKind::File => {
@@ -621,16 +625,17 @@ impl SampleBrowser {
                         ([170, 170, 180, 255], 400u16)
                     };
 
-                    out.push(BrowserTextEntry {
+                    out.push(TextEntry {
                         text: entry.name.clone(),
                         x: text_x,
-                        base_y: base_y + (item_h - line_h) * 0.5,
+                        y: base_y + (item_h - line_h) * 0.5,
                         font_size: font_sz,
                         line_height: line_h,
                         max_width: w - text_x - 12.0 * scale,
                         color,
                         weight,
-                        is_header: false,
+                        bounds: None,
+                center: false,
                     });
                 }
             }
@@ -696,14 +701,4 @@ fn walk_dir(
     }
 }
 
-pub struct BrowserTextEntry {
-    pub text: String,
-    pub x: f32,
-    pub base_y: f32,
-    pub font_size: f32,
-    pub line_height: f32,
-    pub max_width: f32,
-    pub color: [u8; 4],
-    pub weight: u16,
-    pub is_header: bool,
-}
+use crate::gpu::TextEntry;

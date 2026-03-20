@@ -1,3 +1,4 @@
+use crate::gpu::TextEntry;
 use crate::InstanceRaw;
 use crate::theme::{SCROLLBAR_BG, SCROLLBAR_THUMB, RMS_LOW, RMS_MID, RMS_HIGH};
 
@@ -1129,6 +1130,239 @@ impl CommandPalette {
                         color: SCROLLBAR_THUMB,
                         border_radius: 3.0 * scale,
                     });
+                }
+            }
+        }
+
+        out
+    }
+
+    pub fn get_text_entries(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<TextEntry> {
+        let mut out = Vec::new();
+        let (ppos, _psize) = self.palette_rect(screen_w, screen_h, scale);
+        let margin = PALETTE_PADDING * scale;
+        let list_top = ppos[1] + PALETTE_INPUT_HEIGHT * scale + 1.0 * scale;
+
+        // Search input text (or placeholder)
+        let (display_text, search_color) = match self.mode {
+            PaletteMode::VolumeFader => ("Master Volume", [235, 235, 240, 255]),
+            PaletteMode::PluginPicker | PaletteMode::InstrumentPicker if self.search_text.is_empty() => {
+                ("Search plugins...", [140, 140, 150, 160])
+            }
+            _ if self.search_text.is_empty() => {
+                ("Search", [140, 140, 150, 160])
+            }
+            _ => (self.search_text.as_str(), [235, 235, 240, 255]),
+        };
+        let sfont = 15.0 * scale;
+        let sline = 22.0 * scale;
+        out.push(TextEntry {
+            text: display_text.to_string(),
+            x: ppos[0] + 36.0 * scale,
+            y: ppos[1] + (PALETTE_INPUT_HEIGHT * scale - sline) * 0.5,
+            font_size: sfont,
+            line_height: sline,
+            max_width: PALETTE_WIDTH * scale - 60.0 * scale,
+            color: search_color,
+            weight: 400,
+            bounds: None,
+                center: false,
+        });
+
+        match self.mode {
+            PaletteMode::VolumeFader => {
+                let pad = 16.0 * scale;
+                let track_y = list_top + 36.0 * scale;
+                let track_h = 6.0 * scale;
+                let rms_y = track_y + track_h + 22.0 * scale;
+
+                let pct = (self.fader_value * 100.0) as u32;
+                let vol_text = format!("{}%", pct);
+                let label_font = 13.0 * scale;
+                let label_line = 18.0 * scale;
+                out.push(TextEntry {
+                    text: vol_text,
+                    x: ppos[0] + margin + pad,
+                    y: list_top + 14.0 * scale,
+                    font_size: label_font,
+                    line_height: label_line,
+                    max_width: PALETTE_WIDTH * scale - margin * 2.0,
+                    color: [200, 200, 210, 220],
+                    weight: 400,
+                    bounds: None,
+                center: false,
+                });
+
+                let db_val = if self.fader_rms > 0.0001 {
+                    20.0 * self.fader_rms.log10()
+                } else {
+                    -60.0
+                };
+                let rms_text = format!("RMS: {:.1} dB", db_val);
+                let small_font = 11.0 * scale;
+                let small_line = 15.0 * scale;
+                out.push(TextEntry {
+                    text: rms_text,
+                    x: ppos[0] + margin + pad,
+                    y: rms_y + 8.0 * scale,
+                    font_size: small_font,
+                    line_height: small_line,
+                    max_width: PALETTE_WIDTH * scale - margin * 2.0,
+                    color: [140, 140, 150, 180],
+                    weight: 400,
+                    bounds: None,
+                center: false,
+                });
+            }
+            PaletteMode::Commands => {
+                let sect_font = 11.0 * scale;
+                let sect_line = 16.0 * scale;
+                let ifont = 13.5 * scale;
+                let iline = 20.0 * scale;
+                let shortcut_font = 12.0 * scale;
+                let shortcut_line = 17.0 * scale;
+
+                let mut y = list_top;
+                for row in self.visible_rows() {
+                    match row {
+                        PaletteRow::Section(label) => {
+                            out.push(TextEntry {
+                                text: label.to_string(),
+                                x: ppos[0] + margin + 12.0 * scale,
+                                y: y + (PALETTE_SECTION_HEIGHT * scale - sect_line) * 0.5 + 2.0 * scale,
+                                font_size: sect_font,
+                                line_height: sect_line,
+                                max_width: PALETTE_WIDTH * scale - margin * 4.0,
+                                color: [120, 140, 170, 200],
+                                weight: 400,
+                                bounds: None,
+                center: false,
+                            });
+                            y += PALETTE_SECTION_HEIGHT * scale;
+                        }
+                        PaletteRow::Command(ci) => {
+                            let cmd = &COMMANDS[*ci];
+
+                            out.push(TextEntry {
+                                text: cmd.name.to_string(),
+                                x: ppos[0] + margin + 12.0 * scale,
+                                y: y + (PALETTE_ITEM_HEIGHT * scale - iline) * 0.5,
+                                font_size: ifont,
+                                line_height: iline,
+                                max_width: PALETTE_WIDTH * scale * 0.65,
+                                color: [215, 215, 222, 255],
+                                weight: 400,
+                                bounds: None,
+                center: false,
+                            });
+
+                            if !cmd.shortcut.is_empty() {
+                                out.push(TextEntry {
+                                    text: cmd.shortcut.to_string(),
+                                    x: ppos[0] + PALETTE_WIDTH * scale - margin - 70.0 * scale,
+                                    y: y + (PALETTE_ITEM_HEIGHT * scale - shortcut_line) * 0.5,
+                                    font_size: shortcut_font,
+                                    line_height: shortcut_line,
+                                    max_width: 80.0 * scale,
+                                    color: [120, 120, 135, 180],
+                                    weight: 400,
+                                    bounds: None,
+                center: false,
+                                });
+                            }
+
+                            y += PALETTE_ITEM_HEIGHT * scale;
+                        }
+                        PaletteRow::Plugin(pi) => {
+                            let entry = &self.plugin_entries[*pi];
+
+                            // Plugin name
+                            out.push(TextEntry {
+                                text: entry.name.clone(),
+                                x: ppos[0] + margin + 12.0 * scale,
+                                y: y + (PALETTE_ITEM_HEIGHT * scale - iline) * 0.5,
+                                font_size: ifont,
+                                line_height: iline,
+                                max_width: PALETTE_WIDTH * scale * 0.55,
+                                color: [215, 215, 222, 255],
+                                weight: 400,
+                                bounds: None,
+                center: false,
+                            });
+
+                            // Type label pill: "Instrument" or "Effect"
+                            let label = if entry.is_instrument { "Instrument" } else { "Effect" };
+                            let color = if entry.is_instrument {
+                                [100, 160, 255, 220]
+                            } else {
+                                [255, 170, 80, 220]
+                            };
+                            let label_font = 10.5 * scale;
+                            let label_line = 14.0 * scale;
+                            let pill_w = if entry.is_instrument { 72.0 } else { 44.0 };
+                            let pill_h = 20.0 * scale;
+                            let pill_x = ppos[0] + PALETTE_WIDTH * scale - margin - (pill_w + 10.0) * scale;
+                            let pill_y = y + (PALETTE_ITEM_HEIGHT * scale - pill_h) * 0.5;
+                            out.push(TextEntry {
+                                text: label.to_string(),
+                                x: pill_x + (pill_w * scale - pill_w * scale * 0.9) * 0.5,
+                                y: pill_y + (pill_h - label_line) * 0.5,
+                                font_size: label_font,
+                                line_height: label_line,
+                                max_width: pill_w * scale,
+                                color,
+                                weight: 400,
+                                bounds: None,
+                center: false,
+                            });
+
+                            y += PALETTE_ITEM_HEIGHT * scale;
+                        }
+                    }
+                }
+            }
+            PaletteMode::PluginPicker | PaletteMode::InstrumentPicker => {
+                let ifont = 13.5 * scale;
+                let iline = 20.0 * scale;
+                let mfont = 11.0 * scale;
+                let mline = 16.0 * scale;
+
+                let y_offset = self.plugin_scroll_y_offset(scale);
+                let mut y = list_top - y_offset;
+                for &entry_idx in self.visible_plugin_entries(scale) {
+                    if let Some(entry) = self.plugin_entries.get(entry_idx) {
+                        // Plugin name
+                        out.push(TextEntry {
+                            text: entry.name.clone(),
+                            x: ppos[0] + margin + 12.0 * scale,
+                            y: y + (PALETTE_ITEM_HEIGHT * scale - iline) * 0.5,
+                            font_size: ifont,
+                            line_height: iline,
+                            max_width: PALETTE_WIDTH * scale * 0.65,
+                            color: [215, 215, 222, 255],
+                            weight: 400,
+                            bounds: None,
+                center: false,
+                        });
+
+                        // Manufacturer (right-aligned, dimmer)
+                        if !entry.manufacturer.is_empty() {
+                            out.push(TextEntry {
+                                text: entry.manufacturer.clone(),
+                                x: ppos[0] + PALETTE_WIDTH * scale - margin - 130.0 * scale,
+                                y: y + (PALETTE_ITEM_HEIGHT * scale - mline) * 0.5,
+                                font_size: mfont,
+                                line_height: mline,
+                                max_width: 140.0 * scale,
+                                color: [120, 120, 135, 180],
+                                weight: 400,
+                                bounds: None,
+                center: false,
+                            });
+                        }
+
+                        y += PALETTE_ITEM_HEIGHT * scale;
+                    }
                 }
             }
         }

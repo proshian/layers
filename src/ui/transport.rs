@@ -1,4 +1,5 @@
 use crate::InstanceRaw;
+use crate::gpu::TextEntry;
 use crate::ui::hit_testing::point_in_rect;
 use crate::theme::{RECORD_ACTIVE, RECORD_DIM};
 
@@ -138,4 +139,54 @@ impl TransportPanel {
         point_in_rect(pos, rp, rs)
     }
 
+    pub(crate) fn get_text_entries(
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+        playback_position: f64,
+        bpm: f32,
+        editing_bpm: Option<&str>,
+    ) -> Vec<TextEntry> {
+        let mut out = Vec::new();
+        let (tp_pos, tp_size) = Self::panel_rect(screen_w, screen_h, scale);
+        let tfont = 13.0 * scale;
+        let tline = 18.0 * scale;
+
+        // Time display
+        let time_str = crate::format_playback_time(playback_position);
+        out.push(TextEntry {
+            text: time_str,
+            x: tp_pos[0] + 38.0 * scale,
+            y: tp_pos[1] + (tp_size[1] - tline) * 0.5,
+            font_size: tfont,
+            line_height: tline,
+            max_width: TRANSPORT_WIDTH * scale * 0.6,
+            color: [220, 220, 230, 220],
+            weight: 400,
+            bounds: None,
+                center: false,
+        });
+
+        // BPM display
+        let bpm_str = if let Some(text) = editing_bpm {
+            format!("{}|", text)
+        } else {
+            format!("{} bpm", bpm as u32)
+        };
+        let alpha = if editing_bpm.is_some() { 255 } else { 220 };
+        out.push(TextEntry {
+            text: bpm_str,
+            x: tp_pos[0] + tp_size[0] - 80.0 * scale,
+            y: tp_pos[1] + (tp_size[1] - tline) * 0.5,
+            font_size: tfont,
+            line_height: tline,
+            max_width: 80.0 * scale,
+            color: [220, 220, 230, alpha],
+            weight: 400,
+            bounds: None,
+                center: false,
+        });
+
+        out
+    }
 }
