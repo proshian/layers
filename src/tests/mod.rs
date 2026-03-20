@@ -15,3 +15,4 @@ mod vertical_snap;
 mod recording_playback;
 mod waveform_overlap;
 mod metronome;
+mod tooltip;

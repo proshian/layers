@@ -1,3 +1,4 @@
+- feat: transport tooltips — general tooltip system with 300ms delay, hints for metronome/play/record/BPM (33.4k loc)
 - feat: metronome click track — synthesized sine bursts, transport toggle, settings persistence (33.1k loc)
 - 2026-03-20: Windows build support, cross-platform Ctrl/Cmd shortcuts (32.9k loc)
 - add `make release-intel` and `make dist-intel` for Intel-only build + zip (32.9k loc)

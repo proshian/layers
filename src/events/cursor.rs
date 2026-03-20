@@ -814,6 +814,40 @@ impl App {
         }
 
         self.update_hover();
+
+        // Transport tooltip detection
+        let (sw, sh, scale) = self.screen_info();
+        if TransportPanel::contains(self.mouse_pos, sw, sh, scale) {
+            if TransportPanel::hit_metronome_button(self.mouse_pos, sw, sh, scale) {
+                let text = if self.settings.metronome_enabled { "Metronome (On)" } else { "Metronome" };
+                let rect = TransportPanel::metronome_button_rect(sw, sh, scale);
+                self.tooltip.set_target("transport:metronome", text, rect);
+            } else if TransportPanel::hit_play_pause(self.mouse_pos, sw, sh, scale) {
+                #[cfg(feature = "native")]
+                let is_playing = self.audio_engine.as_ref().map_or(false, |e| e.is_playing());
+                #[cfg(not(feature = "native"))]
+                let is_playing = false;
+                let text = if is_playing { "Pause" } else { "Play" };
+                let rect = TransportPanel::play_pause_rect(sw, sh, scale);
+                self.tooltip.set_target("transport:play_pause", text, rect);
+            } else if TransportPanel::hit_bpm(self.mouse_pos, sw, sh, scale) {
+                let rect = TransportPanel::bpm_rect(sw, sh, scale);
+                self.tooltip.set_target("transport:bpm", "Tempo \u{2014} double-click to edit", rect);
+            } else if TransportPanel::hit_record_button(self.mouse_pos, sw, sh, scale) {
+                #[cfg(feature = "native")]
+                let is_recording = self.recorder.as_ref().map_or(false, |r| r.is_recording());
+                #[cfg(not(feature = "native"))]
+                let is_recording = false;
+                let text = if is_recording { "Stop Recording" } else { "Record" };
+                let rect = TransportPanel::record_button_rect(sw, sh, scale);
+                self.tooltip.set_target("transport:record", text, rect);
+            } else {
+                self.tooltip.clear();
+            }
+        } else {
+            self.tooltip.clear();
+        }
+
         self.request_redraw();
     }
 }

@@ -3,6 +3,7 @@ use super::*;
 impl App {
     pub(crate) fn handle_redraw(&mut self) {
         self.toast_manager.tick();
+        self.tooltip.tick();
         self.update_recording_waveform();
         self.poll_pending_audio_loads();
         if let Some(gpu) = &mut self.gpu {
@@ -164,6 +165,7 @@ impl App {
                 },
                 &self.settings,
                 &self.toast_manager,
+                &self.tooltip,
                 self.bpm,
                 self.editing_bpm.input.as_deref(),
                 self.automation_mode,
@@ -186,6 +188,9 @@ impl App {
             );
         }
         if self.toast_manager.has_active() {
+            self.request_redraw();
+        }
+        if self.tooltip.is_pending() {
             self.request_redraw();
         }
     }

@@ -6,6 +6,7 @@ pub(crate) mod rendering;
 pub(crate) mod settings_window;
 pub(crate) mod plugin_editor;
 pub(crate) mod toast;
+pub(crate) mod tooltip;
 pub(crate) mod transport;
 pub(crate) mod right_window;
 pub(crate) mod waveform;

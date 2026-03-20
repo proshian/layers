@@ -146,6 +146,19 @@ impl TransportPanel {
         point_in_rect(pos, rp, rs)
     }
 
+    pub(crate) fn play_pause_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (pos, size) = Self::panel_rect(screen_w, screen_h, scale);
+        let btn_size = 24.0 * scale;
+        let btn_x = pos[0] + 24.0 * scale;
+        let btn_y = pos[1] + (size[1] - btn_size) * 0.5;
+        ([btn_x, btn_y], [btn_size, btn_size])
+    }
+
+    pub(crate) fn hit_play_pause(pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        let (rp, rs) = Self::play_pause_rect(screen_w, screen_h, scale);
+        point_in_rect(pos, rp, rs)
+    }
+
     pub(crate) fn contains(pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
         let (rp, rs) = Self::panel_rect(screen_w, screen_h, scale);
         point_in_rect(pos, rp, rs)

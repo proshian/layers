@@ -19,6 +19,7 @@ use crate::ui::context_menu::ContextMenu;
 use crate::ui::palette::CommandPalette;
 use crate::ui::plugin_editor;
 use crate::ui::toast;
+use crate::ui::tooltip;
 use crate::ui::waveform;
 use crate::ui::waveform::WaveformVertex;
 use crate::{
@@ -680,6 +681,7 @@ impl Gpu {
         settings_window: Option<&SettingsWindow>,
         settings: &Settings,
         toast_manager: &toast::ToastManager,
+        tooltip: &tooltip::TooltipState,
         bpm: f32,
         editing_bpm: Option<&str>,
         automation_mode: bool,
@@ -777,6 +779,7 @@ impl Gpu {
 
 
         overlay_instances.extend(toast_manager.build_instances(w, h, self.scale_factor));
+        overlay_instances.extend(tooltip.build_instances(self.scale_factor));
 
         // Velocity tooltip background pill
         if let Some((mc_idx, note_idx)) = cmd_velocity_hover_note {
@@ -1711,6 +1714,18 @@ impl Gpu {
 
         // Toast text
         for te in toast_manager.build_text_entries(w, h, scale) {
+            let buf = shape_text_entry(&mut self.font_system, &te);
+            text_buffers.push(buf);
+            text_meta.push((
+                te.x,
+                te.y,
+                TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
+                full_bounds,
+            ));
+        }
+
+        // Tooltip text
+        for te in tooltip.build_text_entries(scale) {
             let buf = shape_text_entry(&mut self.font_system, &te);
             text_buffers.push(buf);
             text_meta.push((
