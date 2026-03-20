@@ -26,16 +26,7 @@ pub struct ToastManager {
     pub toasts: Vec<Toast>,
 }
 
-/// Text element descriptor returned by `build_text_elements`.
-pub struct ToastTextElement {
-    pub text: String,
-    pub x: f32,
-    pub y: f32,
-    pub font_size: f32,
-    pub line_height: f32,
-    pub max_width: f32,
-    pub color: [u8; 4],
-}
+use crate::gpu::TextEntry;
 
 const TOAST_WIDTH: f32 = 320.0;
 const TOAST_HEIGHT: f32 = 52.0;
@@ -122,7 +113,7 @@ impl ToastManager {
     }
 
     /// Build text descriptors for all active toasts.
-    pub fn build_text_elements(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<ToastTextElement> {
+    pub fn build_text_entries(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<TextEntry> {
         let mut out = Vec::new();
         let w = TOAST_WIDTH * scale;
         let h = TOAST_HEIGHT * scale;
@@ -140,7 +131,7 @@ impl ToastManager {
             let text_y = y + (h - line_height) * 0.5;
 
             let a = (255.0 * alpha) as u8;
-            out.push(ToastTextElement {
+            out.push(TextEntry {
                 text: toast.message.clone(),
                 x,
                 y: text_y,
@@ -148,6 +139,9 @@ impl ToastManager {
                 line_height,
                 max_width: w - accent_w - 16.0 * scale,
                 color: [230, 230, 235, a],
+                weight: 400,
+                bounds: None,
+                center: false,
             });
         }
 

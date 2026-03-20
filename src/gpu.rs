@@ -15,21 +15,15 @@ use crate::effects;
 use crate::midi;
 use crate::settings::Settings;
 use crate::ui::settings_window::SettingsWindow;
-use crate::ui::context_menu::{
-    ContextMenu, ContextMenuEntry, CTX_MENU_INLINE_HEIGHT, CTX_MENU_ITEM_HEIGHT, CTX_MENU_PADDING,
-    CTX_MENU_SECTION_HEIGHT, CTX_MENU_SEPARATOR_HEIGHT, CTX_MENU_SWATCH_HEIGHT, CTX_MENU_WIDTH,
-};
-use crate::ui::palette::{
-    CommandPalette, PaletteMode, PaletteRow, COMMANDS, PALETTE_INPUT_HEIGHT, PALETTE_ITEM_HEIGHT,
-    PALETTE_PADDING, PALETTE_SECTION_HEIGHT, PALETTE_WIDTH,
-};
+use crate::ui::context_menu::ContextMenu;
+use crate::ui::palette::CommandPalette;
 use crate::ui::plugin_editor;
 use crate::ui::toast;
 use crate::ui::waveform;
 use crate::ui::waveform::WaveformVertex;
 use crate::{
-    format_playback_time, ExportRegion, TransportPanel, EXPORT_RENDER_PILL_H,
-    EXPORT_RENDER_PILL_W, TRANSPORT_WIDTH,
+    ExportRegion, TransportPanel, EXPORT_RENDER_PILL_H,
+    EXPORT_RENDER_PILL_W,
 };
 
 // ---------------------------------------------------------------------------
@@ -305,6 +299,35 @@ pub(crate) struct Gpu {
     cached_midi_note_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_midi_per_note_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     pub(crate) auto_lane_close_rects: Vec<(crate::entity_id::EntityId, [f32; 4])>,
+}
+
+pub(crate) struct TextEntry {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub font_size: f32,
+    pub line_height: f32,
+    pub max_width: f32,
+    pub color: [u8; 4],
+    pub weight: u16,
+    pub bounds: Option<[f32; 4]>, // [left, top, right, bottom] clip rect; None = full screen
+    pub center: bool,
+}
+
+fn shape_text_entry(font_system: &mut FontSystem, entry: &TextEntry) -> TextBuffer {
+    let mut buf = TextBuffer::new(font_system, Metrics::new(entry.font_size, entry.line_height));
+    buf.set_size(font_system, Some(entry.max_width), Some(entry.line_height * 2.0));
+    let attrs = Attrs::new()
+        .family(Family::SansSerif)
+        .weight(glyphon::Weight(entry.weight));
+    buf.set_text(font_system, &entry.text, attrs, Shaping::Advanced);
+    if entry.center {
+        for line in buf.lines.iter_mut() {
+            line.set_align(Some(glyphon::cosmic_text::Align::Center));
+        }
+    }
+    buf.shape_until_scroll(font_system, false);
+    buf
 }
 
 impl Gpu {
@@ -808,20 +831,7 @@ impl Gpu {
             if br.text_generation != self.browser_text_generation {
                 self.browser_text_buffers.clear();
                 for te in &br.cached_text {
-                    let mut buf = TextBuffer::new(
-                        &mut self.font_system,
-                        Metrics::new(te.font_size, te.line_height),
-                    );
-                    buf.set_size(
-                        &mut self.font_system,
-                        Some(te.max_width),
-                        Some(te.line_height),
-                    );
-                    let attrs = Attrs::new()
-                        .family(Family::Name(".AppleSystemUIFont"))
-                        .weight(glyphon::Weight(te.weight));
-                    buf.set_text(&mut self.font_system, &te.text, attrs, Shaping::Advanced);
-                    buf.shape_until_scroll(&mut self.font_system, false);
+                    let buf = shape_text_entry(&mut self.font_system, te);
                     self.browser_text_buffers.push(buf);
                 }
                 self.browser_text_generation = br.text_generation;
@@ -855,707 +865,54 @@ impl Gpu {
 
         // Right window text
         if let Some(rw) = right_window {
-            let (pp, _) = right_window::RightWindow::panel_rect(w, h, scale);
-            let layout = right_window::RightWindow::vol_fader_layout(w, h, scale);
-            let fader_pos = layout.track_pos;
-            let fader_size = layout.track_size;
-            let pan_layout = right_window::RightWindow::pan_knob_layout(w, h, scale);
-            let header_font = 10.0 * scale;
-            let header_line = 14.0 * scale;
-            let label_font = 11.0 * scale;
-            let label_line = 15.0 * scale;
-            let val_font = 12.0 * scale;
-            let val_line = 16.0 * scale;
-            let rw_w = right_window::RIGHT_WINDOW_WIDTH * scale;
-
-            // "INSPECTOR" header label
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(header_font, header_line));
-            buf.set_size(&mut self.font_system, Some(rw_w), Some(header_line));
-            buf.set_text(&mut self.font_system, "INSPECTOR", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((pp[0] + 12.0 * scale, 11.0 * scale, TextColor::rgba(120, 140, 170, 200), full_bounds));
-
-            // pan knob geometry now in pan_layout
-
-            // Fader geometry helpers
-            let vol_fader_pos_val = crate::ui::palette::gain_to_vol_fader_pos(rw.volume);
-            let thumb_y = fader_pos[1] + (1.0 - vol_fader_pos_val) * fader_size[1];
-
-            // "Gain" label (above fader top, centered)
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
-            buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
-            buf.set_text(&mut self.font_system, "Gain", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            for line in buf.lines.iter_mut() {
-                line.set_align(Some(glyphon::cosmic_text::Align::Center));
-            }
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((pp[0], layout.label_y, TextColor::rgba(140, 140, 150, 180), full_bounds));
-
-            // Triangle indicator (▶) to the left of the track at thumb position
-            let tri_font = 10.0 * scale;
-            let tri_line = 12.0 * scale;
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(tri_font, tri_line));
-            buf.set_size(&mut self.font_system, Some(16.0 * scale), Some(tri_line));
-            buf.set_text(&mut self.font_system, "▶", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((layout.triangle_x, thumb_y - tri_line * 0.5, TextColor::rgba(220, 220, 230, 230), full_bounds));
-
-            // Scale labels to the right of tick marks
-            let scale_font = 9.0 * scale;
-            let scale_line = 11.0 * scale;
-            let label_x = layout.scale_labels_x;
-            let label_bounds = TextBounds {
-                left: label_x as i32,
-                top: 0,
-                right: (label_x + 30.0 * scale) as i32,
-                bottom: h as i32,
-            };
-
-            // "+24" at fader top
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(scale_font, scale_line));
-            buf.set_size(&mut self.font_system, Some(30.0 * scale), Some(scale_line));
-            buf.set_text(&mut self.font_system, "24", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((label_x, fader_pos[1] - scale_line * 0.5, TextColor::rgba(140, 140, 150, 160), label_bounds));
-
-            // "0" at 0 dB position
-            let y_zero = fader_pos[1] + (1.0 - crate::ui::palette::VOL_FADER_P_ZERO) * fader_size[1];
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(scale_font, scale_line));
-            buf.set_size(&mut self.font_system, Some(30.0 * scale), Some(scale_line));
-            buf.set_text(&mut self.font_system, "0", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((label_x, y_zero - scale_line * 0.5, TextColor::rgba(140, 140, 150, 160), label_bounds));
-
-            // "70" at -70 dB position (near bottom)
-            let y_70 = fader_pos[1] + (1.0 - crate::ui::palette::VOL_FADER_P_BOTTOM) * fader_size[1];
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(scale_font, scale_line));
-            buf.set_size(&mut self.font_system, Some(30.0 * scale), Some(scale_line));
-            buf.set_text(&mut self.font_system, "70", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((label_x, y_70 - scale_line * 0.5, TextColor::rgba(140, 140, 150, 160), label_bounds));
-
-            // dB value below fader — centered on the fader track
-            let vol_idle = rw.vol_text();
-            let vol_display = rw.vol_entry.display(&vol_idle);
-            let vol_alpha: u8 = if rw.vol_entry.is_editing() { 255 } else { 220 };
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
-            buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
-            buf.set_text(&mut self.font_system, &vol_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            for line in buf.lines.iter_mut() {
-                line.set_align(Some(glyphon::cosmic_text::Align::Center));
-            }
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((pp[0], layout.db_text_y, TextColor::rgba(200, 200, 210, vol_alpha), full_bounds));
-
-            // PAN label — centered at the knob center
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
-            buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
-            buf.set_text(&mut self.font_system, "Pan", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            for line in buf.lines.iter_mut() {
-                line.set_align(Some(glyphon::cosmic_text::Align::Center));
-            }
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((pp[0], pan_layout.label_y, TextColor::rgba(140, 140, 150, 180), full_bounds));
-
-            // PAN value — below the knob
-            let pan_text = rw.pan_text();
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
-            buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
-            buf.set_text(&mut self.font_system, &pan_text, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            for line in buf.lines.iter_mut() {
-                line.set_align(Some(glyphon::cosmic_text::Align::Center));
-            }
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((pp[0], pan_layout.value_y, TextColor::rgba(200, 200, 210, 220), full_bounds));
-
-            // WARP label
-            let (btn_pos, btn_size) = right_window::RightWindow::warp_mode_button_rect_pub(w, h, scale);
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
-            buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
-            buf.set_text(&mut self.font_system, "WARP", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((btn_pos[0] + btn_size[0] * 0.5 - rw_w * 0.5, btn_pos[1] - 18.0 * scale, TextColor::rgba(140, 140, 150, 180), full_bounds));
-
-            // WARP toggle text (centered on button)
-            let warp_text = rw.warp_button_text();
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
-            buf.set_size(&mut self.font_system, Some(btn_size[0]), Some(btn_size[1]));
-            buf.set_text(&mut self.font_system, warp_text, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((btn_pos[0], btn_pos[1] + (btn_size[1] - val_line) * 0.5, TextColor::rgba(220, 220, 230, 240), full_bounds));
-
-            let warp_on = rw.warp_mode != waveform::WarpMode::Off;
-            if warp_on {
-                // Mode selector text (centered on selector rect)
-                let (sel_pos, sel_size) = right_window::RightWindow::warp_mode_selector_rect_pub(w, h, scale);
-                let mode_text = rw.warp_mode_selector_text();
-                let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
-                buf.set_size(&mut self.font_system, Some(sel_size[0]), Some(sel_size[1]));
-                buf.set_text(&mut self.font_system, mode_text, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-                buf.shape_until_scroll(&mut self.font_system, false);
+            for te in rw.get_text_entries(w, h, scale) {
+                let bounds = match te.bounds {
+                    Some([l, t, r, b]) => TextBounds {
+                        left: l as i32, top: t as i32, right: r as i32, bottom: b as i32,
+                    },
+                    None => full_bounds,
+                };
+                let buf = shape_text_entry(&mut self.font_system, &te);
                 text_buffers.push(buf);
-                text_meta.push((sel_pos[0], sel_pos[1] + (sel_size[1] - val_line) * 0.5, TextColor::rgba(200, 200, 210, 220), full_bounds));
-
-                // Mode-specific param label + value
-                let (param_pos, _param_size) = right_window::RightWindow::warp_param_text_rect_pub(w, h, scale);
-                if rw.warp_mode == waveform::WarpMode::RePitch {
-                    let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
-                    buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
-                    buf.set_text(&mut self.font_system, "SAMPLE BPM", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-                    for line in buf.lines.iter_mut() {
-                        line.set_align(Some(glyphon::cosmic_text::Align::Center));
-                    }
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    text_meta.push((param_pos[0], param_pos[1], TextColor::rgba(140, 140, 150, 180), full_bounds));
-
-                    let sbpm_idle = rw.sample_bpm_text();
-                    let sbpm_display = rw.sample_bpm_entry.display(&sbpm_idle);
-                    let sbpm_alpha: u8 = if rw.sample_bpm_entry.is_editing() { 255 } else { 220 };
-                    let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
-                    buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
-                    buf.set_text(&mut self.font_system, &sbpm_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-                    for line in buf.lines.iter_mut() {
-                        line.set_align(Some(glyphon::cosmic_text::Align::Center));
-                    }
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    text_meta.push((param_pos[0], param_pos[1] + label_line, TextColor::rgba(200, 200, 210, sbpm_alpha), full_bounds));
-                } else if rw.warp_mode == waveform::WarpMode::Semitone {
-                    let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(label_font, label_line));
-                    buf.set_size(&mut self.font_system, Some(rw_w), Some(label_line));
-                    buf.set_text(&mut self.font_system, "PITCH", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-                    for line in buf.lines.iter_mut() {
-                        line.set_align(Some(glyphon::cosmic_text::Align::Center));
-                    }
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    text_meta.push((param_pos[0], param_pos[1], TextColor::rgba(140, 140, 150, 180), full_bounds));
-
-                    let pitch_idle = rw.pitch_text();
-                    let pitch_display = rw.pitch_entry.display(&pitch_idle);
-                    let pitch_alpha: u8 = if rw.pitch_entry.is_editing() { 255 } else { 220 };
-                    let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(val_font, val_line));
-                    buf.set_size(&mut self.font_system, Some(rw_w), Some(val_line));
-                    buf.set_text(&mut self.font_system, &pitch_display, Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-                    for line in buf.lines.iter_mut() {
-                        line.set_align(Some(glyphon::cosmic_text::Align::Center));
-                    }
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    text_meta.push((param_pos[0], param_pos[1] + label_line, TextColor::rgba(200, 200, 210, pitch_alpha), full_bounds));
-                }
+                text_meta.push((
+                    te.x,
+                    te.y,
+                    TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
+                    bounds,
+                ));
             }
         }
 
         if let Some(palette) = command_palette {
-            let (ppos, _psize) = palette.palette_rect(w, h, scale);
-            let margin = PALETTE_PADDING * scale;
-            let list_top = ppos[1] + PALETTE_INPUT_HEIGHT * scale + 1.0 * scale;
-
-            // Search input text (or placeholder)
-            let (display_text, search_color) = match palette.mode {
-                PaletteMode::VolumeFader => ("Master Volume", TextColor::rgb(235, 235, 240)),
-                PaletteMode::PluginPicker | PaletteMode::InstrumentPicker if palette.search_text.is_empty() => {
-                    ("Search plugins...", TextColor::rgba(140, 140, 150, 160))
-                }
-                _ if palette.search_text.is_empty() => {
-                    ("Search", TextColor::rgba(140, 140, 150, 160))
-                }
-                _ => (palette.search_text.as_str(), TextColor::rgb(235, 235, 240)),
-            };
-            let sfont = 15.0 * scale;
-            let sline = 22.0 * scale;
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(sfont, sline));
-            buf.set_size(
-                &mut self.font_system,
-                Some(PALETTE_WIDTH * scale - 60.0 * scale),
-                Some(PALETTE_INPUT_HEIGHT * scale),
-            );
-            buf.set_text(
-                &mut self.font_system,
-                display_text,
-                Attrs::new().family(Family::SansSerif),
-                Shaping::Advanced,
-            );
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            text_meta.push((
-                ppos[0] + 36.0 * scale,
-                ppos[1] + (PALETTE_INPUT_HEIGHT * scale - sline) * 0.5,
-                search_color,
-                full_bounds,
-            ));
-
-            match palette.mode {
-                PaletteMode::VolumeFader => {
-                    let pad = 16.0 * scale;
-                    let track_y = list_top + 36.0 * scale;
-                    let track_h = 6.0 * scale;
-                    let rms_y = track_y + track_h + 22.0 * scale;
-
-                    let pct = (palette.fader_value * 100.0) as u32;
-                    let vol_text = format!("{}%", pct);
-                    let label_font = 13.0 * scale;
-                    let label_line = 18.0 * scale;
-                    let mut buf = TextBuffer::new(
-                        &mut self.font_system,
-                        Metrics::new(label_font, label_line),
-                    );
-                    buf.set_size(
-                        &mut self.font_system,
-                        Some(PALETTE_WIDTH * scale - margin * 2.0),
-                        Some(20.0 * scale),
-                    );
-                    buf.set_text(
-                        &mut self.font_system,
-                        &vol_text,
-                        Attrs::new().family(Family::SansSerif),
-                        Shaping::Advanced,
-                    );
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    text_meta.push((
-                        ppos[0] + margin + pad,
-                        list_top + 14.0 * scale,
-                        TextColor::rgba(200, 200, 210, 220),
-                        full_bounds,
-                    ));
-
-                    let db_val = if palette.fader_rms > 0.0001 {
-                        20.0 * palette.fader_rms.log10()
-                    } else {
-                        -60.0
-                    };
-                    let rms_text = format!("RMS: {:.1} dB", db_val);
-                    let small_font = 11.0 * scale;
-                    let small_line = 15.0 * scale;
-                    let mut buf = TextBuffer::new(
-                        &mut self.font_system,
-                        Metrics::new(small_font, small_line),
-                    );
-                    buf.set_size(
-                        &mut self.font_system,
-                        Some(PALETTE_WIDTH * scale - margin * 2.0),
-                        Some(16.0 * scale),
-                    );
-                    buf.set_text(
-                        &mut self.font_system,
-                        &rms_text,
-                        Attrs::new().family(Family::SansSerif),
-                        Shaping::Advanced,
-                    );
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    text_buffers.push(buf);
-                    text_meta.push((
-                        ppos[0] + margin + pad,
-                        rms_y + 8.0 * scale,
-                        TextColor::rgba(140, 140, 150, 180),
-                        full_bounds,
-                    ));
-                }
-                PaletteMode::Commands => {
-                    let sect_font = 11.0 * scale;
-                    let sect_line = 16.0 * scale;
-                    let ifont = 13.5 * scale;
-                    let iline = 20.0 * scale;
-                    let shortcut_font = 12.0 * scale;
-                    let shortcut_line = 17.0 * scale;
-
-                    let mut y = list_top;
-                    for row in palette.visible_rows() {
-                        match row {
-                            PaletteRow::Section(label) => {
-                                let mut buf = TextBuffer::new(
-                                    &mut self.font_system,
-                                    Metrics::new(sect_font, sect_line),
-                                );
-                                buf.set_size(
-                                    &mut self.font_system,
-                                    Some(PALETTE_WIDTH * scale - margin * 4.0),
-                                    Some(PALETTE_SECTION_HEIGHT * scale),
-                                );
-                                buf.set_text(
-                                    &mut self.font_system,
-                                    label,
-                                    Attrs::new().family(Family::SansSerif),
-                                    Shaping::Advanced,
-                                );
-                                buf.shape_until_scroll(&mut self.font_system, false);
-                                text_buffers.push(buf);
-                                text_meta.push((
-                                    ppos[0] + margin + 12.0 * scale,
-                                    y + (PALETTE_SECTION_HEIGHT * scale - sect_line) * 0.5
-                                        + 2.0 * scale,
-                                    TextColor::rgba(120, 140, 170, 200),
-                                    full_bounds,
-                                ));
-                                y += PALETTE_SECTION_HEIGHT * scale;
-                            }
-                            PaletteRow::Command(ci) => {
-                                let cmd = &COMMANDS[*ci];
-
-                                let mut buf = TextBuffer::new(
-                                    &mut self.font_system,
-                                    Metrics::new(ifont, iline),
-                                );
-                                buf.set_size(
-                                    &mut self.font_system,
-                                    Some(PALETTE_WIDTH * scale * 0.65),
-                                    Some(PALETTE_ITEM_HEIGHT * scale),
-                                );
-                                buf.set_text(
-                                    &mut self.font_system,
-                                    cmd.name,
-                                    Attrs::new().family(Family::SansSerif),
-                                    Shaping::Advanced,
-                                );
-                                buf.shape_until_scroll(&mut self.font_system, false);
-                                text_buffers.push(buf);
-                                text_meta.push((
-                                    ppos[0] + margin + 12.0 * scale,
-                                    y + (PALETTE_ITEM_HEIGHT * scale - iline) * 0.5,
-                                    TextColor::rgb(215, 215, 222),
-                                    full_bounds,
-                                ));
-
-                                if !cmd.shortcut.is_empty() {
-                                    let mut buf = TextBuffer::new(
-                                        &mut self.font_system,
-                                        Metrics::new(shortcut_font, shortcut_line),
-                                    );
-                                    buf.set_size(
-                                        &mut self.font_system,
-                                        Some(80.0 * scale),
-                                        Some(PALETTE_ITEM_HEIGHT * scale),
-                                    );
-                                    buf.set_text(
-                                        &mut self.font_system,
-                                        cmd.shortcut,
-                                        Attrs::new().family(Family::SansSerif),
-                                        Shaping::Advanced,
-                                    );
-                                    buf.shape_until_scroll(&mut self.font_system, false);
-                                    text_buffers.push(buf);
-                                    text_meta.push((
-                                        ppos[0] + PALETTE_WIDTH * scale - margin - 70.0 * scale,
-                                        y + (PALETTE_ITEM_HEIGHT * scale - shortcut_line) * 0.5,
-                                        TextColor::rgba(120, 120, 135, 180),
-                                        full_bounds,
-                                    ));
-                                }
-
-                                y += PALETTE_ITEM_HEIGHT * scale;
-                            }
-                            PaletteRow::Plugin(pi) => {
-                                let entry = &palette.plugin_entries[*pi];
-
-                                // Plugin name
-                                let mut buf = TextBuffer::new(
-                                    &mut self.font_system,
-                                    Metrics::new(ifont, iline),
-                                );
-                                buf.set_size(
-                                    &mut self.font_system,
-                                    Some(PALETTE_WIDTH * scale * 0.55),
-                                    Some(PALETTE_ITEM_HEIGHT * scale),
-                                );
-                                buf.set_text(
-                                    &mut self.font_system,
-                                    &entry.name,
-                                    Attrs::new().family(Family::SansSerif),
-                                    Shaping::Advanced,
-                                );
-                                buf.shape_until_scroll(&mut self.font_system, false);
-                                text_buffers.push(buf);
-                                text_meta.push((
-                                    ppos[0] + margin + 12.0 * scale,
-                                    y + (PALETTE_ITEM_HEIGHT * scale - iline) * 0.5,
-                                    TextColor::rgb(215, 215, 222),
-                                    full_bounds,
-                                ));
-
-                                // Type label pill: "Instrument" or "Effect"
-                                let label = if entry.is_instrument { "Instrument" } else { "Effect" };
-                                let color = if entry.is_instrument {
-                                    TextColor::rgba(100, 160, 255, 220)
-                                } else {
-                                    TextColor::rgba(255, 170, 80, 220)
-                                };
-                                let label_font = 10.5 * scale;
-                                let label_line = 14.0 * scale;
-                                let pill_w = if entry.is_instrument { 72.0 } else { 44.0 };
-                                let pill_h = 20.0 * scale;
-                                let pill_x = ppos[0] + PALETTE_WIDTH * scale - margin - (pill_w + 10.0) * scale;
-                                let pill_y = y + (PALETTE_ITEM_HEIGHT * scale - pill_h) * 0.5;
-                                let mut buf = TextBuffer::new(
-                                    &mut self.font_system,
-                                    Metrics::new(label_font, label_line),
-                                );
-                                buf.set_size(
-                                    &mut self.font_system,
-                                    Some(pill_w * scale),
-                                    Some(pill_h),
-                                );
-                                buf.set_text(
-                                    &mut self.font_system,
-                                    label,
-                                    Attrs::new().family(Family::SansSerif),
-                                    Shaping::Advanced,
-                                );
-                                buf.shape_until_scroll(&mut self.font_system, false);
-                                text_buffers.push(buf);
-                                text_meta.push((
-                                    pill_x + (pill_w * scale - pill_w * scale * 0.9) * 0.5,
-                                    pill_y + (pill_h - label_line) * 0.5,
-                                    color,
-                                    full_bounds,
-                                ));
-
-                                y += PALETTE_ITEM_HEIGHT * scale;
-                            }
-                        }
-                    }
-                }
-                PaletteMode::PluginPicker | PaletteMode::InstrumentPicker => {
-                    let ifont = 13.5 * scale;
-                    let iline = 20.0 * scale;
-                    let mfont = 11.0 * scale;
-                    let mline = 16.0 * scale;
-
-                    let y_offset = palette.plugin_scroll_y_offset(scale);
-                    let mut y = list_top - y_offset;
-                    for &entry_idx in palette.visible_plugin_entries(scale) {
-                        if let Some(entry) = palette.plugin_entries.get(entry_idx) {
-                            // Plugin name
-                            let mut buf = TextBuffer::new(
-                                &mut self.font_system,
-                                Metrics::new(ifont, iline),
-                            );
-                            buf.set_size(
-                                &mut self.font_system,
-                                Some(PALETTE_WIDTH * scale * 0.65),
-                                Some(PALETTE_ITEM_HEIGHT * scale),
-                            );
-                            buf.set_text(
-                                &mut self.font_system,
-                                &entry.name,
-                                Attrs::new().family(Family::SansSerif),
-                                Shaping::Advanced,
-                            );
-                            buf.shape_until_scroll(&mut self.font_system, false);
-                            text_buffers.push(buf);
-                            text_meta.push((
-                                ppos[0] + margin + 12.0 * scale,
-                                y + (PALETTE_ITEM_HEIGHT * scale - iline) * 0.5,
-                                TextColor::rgb(215, 215, 222),
-                                full_bounds,
-                            ));
-
-                            // Manufacturer (right-aligned, dimmer)
-                            if !entry.manufacturer.is_empty() {
-                                let mut buf = TextBuffer::new(
-                                    &mut self.font_system,
-                                    Metrics::new(mfont, mline),
-                                );
-                                buf.set_size(
-                                    &mut self.font_system,
-                                    Some(140.0 * scale),
-                                    Some(PALETTE_ITEM_HEIGHT * scale),
-                                );
-                                buf.set_text(
-                                    &mut self.font_system,
-                                    &entry.manufacturer,
-                                    Attrs::new().family(Family::SansSerif),
-                                    Shaping::Advanced,
-                                );
-                                buf.shape_until_scroll(&mut self.font_system, false);
-                                text_buffers.push(buf);
-                                text_meta.push((
-                                    ppos[0] + PALETTE_WIDTH * scale - margin - 130.0 * scale,
-                                    y + (PALETTE_ITEM_HEIGHT * scale - mline) * 0.5,
-                                    TextColor::rgba(120, 120, 135, 180),
-                                    full_bounds,
-                                ));
-                            }
-
-                            y += PALETTE_ITEM_HEIGHT * scale;
-                        }
-                    }
-                }
+            for te in palette.get_text_entries(w, h, scale) {
+                let buf = shape_text_entry(&mut self.font_system, &te);
+                text_buffers.push(buf);
+                text_meta.push((
+                    te.x,
+                    te.y,
+                    TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
+                    full_bounds,
+                ));
             }
         }
 
         if let Some(cm) = context_menu {
-            let (mpos, _msize) = cm.menu_rect(w, h, scale);
-            let pad = CTX_MENU_PADDING * scale;
-            let label_font = 13.0 * scale;
-            let label_line = 18.0 * scale;
-            let shortcut_font = 12.0 * scale;
-            let shortcut_line = 17.0 * scale;
-            let section_font = 11.0 * scale;
-            let section_line = 15.0 * scale;
-            let has_any_checked = cm
-                .entries
-                .iter()
-                .any(|e| matches!(e, ContextMenuEntry::Item(it) if it.checked));
-            let check_indent = if has_any_checked { 16.0 * scale } else { 0.0 };
-
-            let mut y = mpos[1] + pad;
-            for entry in &cm.entries {
-                match entry {
-                    ContextMenuEntry::Item(item) => {
-                        let mut buf = TextBuffer::new(
-                            &mut self.font_system,
-                            Metrics::new(label_font, label_line),
-                        );
-                        buf.set_size(
-                            &mut self.font_system,
-                            Some(CTX_MENU_WIDTH * scale * 0.55),
-                            Some(CTX_MENU_ITEM_HEIGHT * scale),
-                        );
-                        buf.set_text(
-                            &mut self.font_system,
-                            item.label,
-                            Attrs::new().family(Family::SansSerif),
-                            Shaping::Advanced,
-                        );
-                        buf.shape_until_scroll(&mut self.font_system, false);
-                        text_buffers.push(buf);
-                        text_meta.push((
-                            mpos[0] + pad + 10.0 * scale + check_indent,
-                            y + (CTX_MENU_ITEM_HEIGHT * scale - label_line) * 0.5,
-                            TextColor::rgb(220, 220, 228),
-                            full_bounds,
-                        ));
-
-                        if !item.shortcut.is_empty() {
-                            let mut buf = TextBuffer::new(
-                                &mut self.font_system,
-                                Metrics::new(shortcut_font, shortcut_line),
-                            );
-                            buf.set_size(
-                                &mut self.font_system,
-                                Some(60.0 * scale),
-                                Some(CTX_MENU_ITEM_HEIGHT * scale),
-                            );
-                            buf.set_text(
-                                &mut self.font_system,
-                                item.shortcut,
-                                Attrs::new().family(Family::SansSerif),
-                                Shaping::Advanced,
-                            );
-                            buf.shape_until_scroll(&mut self.font_system, false);
-                            text_buffers.push(buf);
-                            text_meta.push((
-                                mpos[0] + CTX_MENU_WIDTH * scale - pad - 50.0 * scale,
-                                y + (CTX_MENU_ITEM_HEIGHT * scale - shortcut_line) * 0.5,
-                                TextColor::rgba(160, 160, 175, 220),
-                                full_bounds,
-                            ));
-                        }
-
-                        y += CTX_MENU_ITEM_HEIGHT * scale;
-                    }
-                    ContextMenuEntry::Separator => {
-                        y += CTX_MENU_SEPARATOR_HEIGHT * scale;
-                    }
-                    ContextMenuEntry::SectionHeader(label) => {
-                        let mut buf = TextBuffer::new(
-                            &mut self.font_system,
-                            Metrics::new(section_font, section_line),
-                        );
-                        buf.set_size(
-                            &mut self.font_system,
-                            Some(CTX_MENU_WIDTH * scale * 0.8),
-                            Some(CTX_MENU_SECTION_HEIGHT * scale),
-                        );
-                        buf.set_text(
-                            &mut self.font_system,
-                            label,
-                            Attrs::new().family(Family::SansSerif),
-                            Shaping::Advanced,
-                        );
-                        buf.shape_until_scroll(&mut self.font_system, false);
-                        text_buffers.push(buf);
-                        text_meta.push((
-                            mpos[0] + pad + 10.0 * scale,
-                            y + (CTX_MENU_SECTION_HEIGHT * scale - section_line) * 0.5,
-                            TextColor::rgba(150, 150, 160, 200),
-                            full_bounds,
-                        ));
-                        y += CTX_MENU_SECTION_HEIGHT * scale;
-                    }
-                    ContextMenuEntry::InlineGroup(pills) => {
-                        let row_h = CTX_MENU_INLINE_HEIGHT * scale;
-                        let pill_h = 22.0 * scale;
-                        let pill_pad_x = 7.0 * scale;
-                        let pill_gap = 2.0 * scale;
-                        let pill_font = 11.0 * scale;
-                        let pill_line = 15.0 * scale;
-                        let pill_y = y + (row_h - pill_h) * 0.5;
-                        let mut px = mpos[0] + pad + 4.0 * scale;
-                        for pill in pills {
-                            let pw = pill.label.len() as f32 * pill_font * 0.55 + pill_pad_x * 2.0;
-                            let alpha: u8 = if pill.active { 240 } else { 160 };
-                            let mut buf = TextBuffer::new(
-                                &mut self.font_system,
-                                Metrics::new(pill_font, pill_line),
-                            );
-                            buf.set_size(&mut self.font_system, Some(pw), Some(pill_line));
-                            buf.set_text(
-                                &mut self.font_system,
-                                pill.label,
-                                Attrs::new().family(Family::SansSerif),
-                                Shaping::Advanced,
-                            );
-                            buf.shape_until_scroll(&mut self.font_system, false);
-                            text_buffers.push(buf);
-                            text_meta.push((
-                                px + pill_pad_x,
-                                pill_y + (pill_h - pill_line) * 0.5,
-                                TextColor::rgba(220, 220, 230, alpha),
-                                full_bounds,
-                            ));
-                            px += pw + pill_gap;
-                        }
-                        y += row_h;
-                    }
-                    ContextMenuEntry::ColorSwatchGroup(_) => {
-                        y += CTX_MENU_SWATCH_HEIGHT * scale;
-                    }
-                }
+            for te in cm.get_text_entries(w, h, scale) {
+                let buf = shape_text_entry(&mut self.font_system, &te);
+                text_buffers.push(buf);
+                text_meta.push((
+                    te.x,
+                    te.y,
+                    TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
+                    full_bounds,
+                ));
             }
         }
 
         // Plugin editor text
         if let Some(pe) = plugin_editor {
             for te in pe.get_text_entries(w, h, scale) {
-                let mut buf = TextBuffer::new(
-                    &mut self.font_system,
-                    Metrics::new(te.font_size, te.line_height),
-                );
-                buf.set_size(
-                    &mut self.font_system,
-                    Some(te.max_width),
-                    Some(te.line_height * 2.0),
-                );
-                let attrs = Attrs::new()
-                    .family(Family::Name(".AppleSystemUIFont"))
-                    .weight(glyphon::Weight(te.weight));
-                buf.set_text(&mut self.font_system, &te.text, attrs, Shaping::Advanced);
-                buf.shape_until_scroll(&mut self.font_system, false);
+                let buf = shape_text_entry(&mut self.font_system, &te);
                 text_buffers.push(buf);
                 text_meta.push((
                     te.x,
@@ -1569,20 +926,7 @@ impl Gpu {
         // Settings window text
         if let Some(sw) = settings_window {
             for te in sw.get_text_entries(settings, w, h, scale) {
-                let mut buf = TextBuffer::new(
-                    &mut self.font_system,
-                    Metrics::new(te.font_size, te.line_height),
-                );
-                buf.set_size(
-                    &mut self.font_system,
-                    Some(300.0 * scale),
-                    Some(te.line_height * 2.0),
-                );
-                let attrs = Attrs::new()
-                    .family(Family::Name(".AppleSystemUIFont"))
-                    .weight(glyphon::Weight(te.weight));
-                buf.set_text(&mut self.font_system, &te.text, attrs, Shaping::Advanced);
-                buf.shape_until_scroll(&mut self.font_system, false);
+                let buf = shape_text_entry(&mut self.font_system, &te);
                 text_buffers.push(buf);
                 text_meta.push((
                     te.x,
@@ -2352,77 +1696,21 @@ impl Gpu {
             }
         }
 
-        // Transport panel time text
-        {
-            let (tp_pos, tp_size) = TransportPanel::panel_rect(w, h, scale);
-            let time_str = format_playback_time(playback_position);
-            let tfont = 13.0 * scale;
-            let tline = 18.0 * scale;
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(tfont, tline));
-            buf.set_size(
-                &mut self.font_system,
-                Some(TRANSPORT_WIDTH * scale * 0.6),
-                Some(tline),
-            );
-            buf.set_text(
-                &mut self.font_system,
-                &time_str,
-                Attrs::new().family(Family::SansSerif),
-                Shaping::Advanced,
-            );
-            buf.shape_until_scroll(&mut self.font_system, false);
+        // Transport panel text
+        for te in TransportPanel::get_text_entries(w, h, scale, playback_position, bpm, editing_bpm) {
+            let buf = shape_text_entry(&mut self.font_system, &te);
             text_buffers.push(buf);
             text_meta.push((
-                tp_pos[0] + 38.0 * scale,
-                tp_pos[1] + (tp_size[1] - tline) * 0.5,
-                TextColor::rgba(220, 220, 230, 220),
-                full_bounds,
-            ));
-        }
-
-        // Transport panel BPM text
-        {
-            let (tp_pos, tp_size) = TransportPanel::panel_rect(w, h, scale);
-            let bpm_str = if let Some(text) = editing_bpm {
-                format!("{}|", text)
-            } else {
-                format!("{} bpm", bpm as u32)
-            };
-            let tfont = 13.0 * scale;
-            let tline = 18.0 * scale;
-            let mut buf = TextBuffer::new(&mut self.font_system, Metrics::new(tfont, tline));
-            buf.set_size(&mut self.font_system, Some(80.0 * scale), Some(tline));
-            buf.set_text(
-                &mut self.font_system,
-                &bpm_str,
-                Attrs::new().family(Family::SansSerif),
-                Shaping::Advanced,
-            );
-            buf.shape_until_scroll(&mut self.font_system, false);
-            text_buffers.push(buf);
-            let alpha = if editing_bpm.is_some() { 255 } else { 220 };
-            text_meta.push((
-                tp_pos[0] + tp_size[0] - 80.0 * scale,
-                tp_pos[1] + (tp_size[1] - tline) * 0.5,
-                TextColor::rgba(220, 220, 230, alpha),
+                te.x,
+                te.y,
+                TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
                 full_bounds,
             ));
         }
 
         // Toast text
-        for te in toast_manager.build_text_elements(w, h, scale) {
-            let mut buf = TextBuffer::new(
-                &mut self.font_system,
-                Metrics::new(te.font_size, te.line_height),
-            );
-            buf.set_size(&mut self.font_system, Some(te.max_width), None);
-            buf.set_text(
-                &mut self.font_system,
-                &te.text,
-                Attrs::new().family(Family::SansSerif),
-                Shaping::Advanced,
-            );
-            buf.shape_until_scroll(&mut self.font_system, false);
+        for te in toast_manager.build_text_entries(w, h, scale) {
+            let buf = shape_text_entry(&mut self.font_system, &te);
             text_buffers.push(buf);
             text_meta.push((
                 te.x,
@@ -2450,12 +1738,13 @@ impl Gpu {
                     if idx >= self.browser_text_buffers.len() {
                         break;
                     }
-                    let actual_y = if te.is_header {
-                        te.base_y
+                    let is_header = te.bounds.is_some();
+                    let actual_y = if is_header {
+                        te.y
                     } else {
-                        te.base_y - br.scroll_offset
+                        te.y - br.scroll_offset
                     };
-                    if !te.is_header && (actual_y + te.line_height < header_h || actual_y > h) {
+                    if !is_header && (actual_y + te.line_height < header_h || actual_y > h) {
                         continue;
                     }
                     let clip_top = if actual_y < header_h {

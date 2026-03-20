@@ -239,16 +239,7 @@ impl PluginEditorWindow {
     }
 }
 
-pub struct PluginEditorTextEntry {
-    pub text: String,
-    pub x: f32,
-    pub y: f32,
-    pub font_size: f32,
-    pub line_height: f32,
-    pub color: [u8; 4],
-    pub weight: u16,
-    pub max_width: f32,
-}
+use crate::gpu::TextEntry;
 
 impl PluginEditorWindow {
     pub fn get_text_entries(
@@ -256,14 +247,14 @@ impl PluginEditorWindow {
         screen_w: f32,
         screen_h: f32,
         scale: f32,
-    ) -> Vec<PluginEditorTextEntry> {
+    ) -> Vec<TextEntry> {
         let mut out = Vec::new();
         let (wp, ws) = self.win_rect(screen_w, screen_h, scale);
 
         // Title
         let title_font = 12.0 * scale;
         let title_line = 16.0 * scale;
-        out.push(PluginEditorTextEntry {
+        out.push(TextEntry {
             text: self.plugin_name.clone(),
             x: wp[0] + PADDING * scale,
             y: wp[1] + (HEADER_H * scale - title_line) * 0.5,
@@ -272,6 +263,8 @@ impl PluginEditorWindow {
             color: [230, 230, 240, 255],
             weight: 600,
             max_width: ws[0] - PADDING * 2.0 * scale,
+            bounds: None,
+                center: false,
         });
 
         let content_top = wp[1] + HEADER_H * scale;
@@ -289,7 +282,7 @@ impl PluginEditorWindow {
             let text_y = row_y + (ROW_H * scale - label_line) * 0.5;
 
             // Parameter name
-            out.push(PluginEditorTextEntry {
+            out.push(TextEntry {
                 text: param.name.clone(),
                 x: wp[0] + PADDING * scale,
                 y: text_y,
@@ -298,6 +291,8 @@ impl PluginEditorWindow {
                 color: [190, 190, 200, 255],
                 weight: 400,
                 max_width: LABEL_W * scale,
+                bounds: None,
+                center: false,
             });
 
             // Parameter value text
@@ -308,7 +303,7 @@ impl PluginEditorWindow {
                 format!("{:.0} {}", display_val, param.unit)
             };
             let (tp, ts) = self.slider_track_rect(i, screen_w, screen_h, scale);
-            out.push(PluginEditorTextEntry {
+            out.push(TextEntry {
                 text: val_text,
                 x: tp[0] + ts[0] + 6.0 * scale,
                 y: text_y,
@@ -317,6 +312,8 @@ impl PluginEditorWindow {
                 color: [160, 160, 170, 255],
                 weight: 400,
                 max_width: 40.0 * scale,
+                bounds: None,
+                center: false,
             });
         }
 

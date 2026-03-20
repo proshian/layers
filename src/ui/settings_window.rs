@@ -1153,18 +1153,10 @@ impl SettingsWindow {
 }
 
 // ---------------------------------------------------------------------------
-// Text entries (for glyphon rendering in main.rs)
+// Text entries (for glyphon rendering in gpu.rs)
 // ---------------------------------------------------------------------------
 
-pub struct SettingsTextEntry {
-    pub text: String,
-    pub x: f32,
-    pub y: f32,
-    pub font_size: f32,
-    pub line_height: f32,
-    pub color: [u8; 4],
-    pub weight: u16,
-}
+use crate::gpu::TextEntry;
 
 impl SettingsWindow {
     pub fn get_text_entries(
@@ -1173,14 +1165,14 @@ impl SettingsWindow {
         screen_w: f32,
         screen_h: f32,
         scale: f32,
-    ) -> Vec<SettingsTextEntry> {
+    ) -> Vec<TextEntry> {
         let mut out = Vec::new();
         let (wp, ws) = self.win_rect(screen_w, screen_h, scale);
 
         // Window title
         let title_font = 13.0 * scale;
         let title_line = 18.0 * scale;
-        out.push(SettingsTextEntry {
+        out.push(TextEntry {
             text: "Settings".to_string(),
             x: wp[0] + ws[0] * 0.5 - 24.0 * scale,
             y: wp[1] - title_line - 6.0 * scale,
@@ -1188,6 +1180,9 @@ impl SettingsWindow {
             line_height: title_line,
             color: [210, 210, 218, 255],
             weight: 600,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
         });
 
         // Sidebar categories
@@ -1203,7 +1198,7 @@ impl SettingsWindow {
             } else {
                 [170, 170, 180, 255]
             };
-            out.push(SettingsTextEntry {
+            out.push(TextEntry {
                 text: cat.label().to_string(),
                 x: wp[0] + 18.0 * scale,
                 y,
@@ -1211,6 +1206,9 @@ impl SettingsWindow {
                 line_height: cat_line,
                 color,
                 weight: if is_active { 600 } else { 400 },
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
             });
         }
 
@@ -1220,7 +1218,7 @@ impl SettingsWindow {
 
         match self.active_category {
             SettingsCategory::ThemeAndColors => {
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: "Customization".to_string(),
                     x: content_x + ROW_LABEL_X * scale,
                     y: wp[1] + (SECTION_HEADER_HEIGHT * scale - section_line) * 0.5,
@@ -1228,6 +1226,9 @@ impl SettingsWindow {
                     line_height: section_line,
                     color: [140, 140, 150, 200],
                     weight: 600,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
 
                 let label_font = 13.0 * scale;
@@ -1240,7 +1241,7 @@ impl SettingsWindow {
 
                 // Row 0: Theme preset dropdown
                 let theme_row_y = wp[1] + SECTION_HEADER_HEIGHT * scale;
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: "Theme".to_string(),
                     x: content_x + ROW_LABEL_X * scale,
                     y: theme_row_y + (ROW_HEIGHT * scale - label_line) * 0.5,
@@ -1248,9 +1249,12 @@ impl SettingsWindow {
                     line_height: label_line,
                     color: [210, 210, 218, 255],
                     weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
                 let (dp, ds) = self.dropdown_rect(0, screen_w, screen_h, scale);
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: settings.theme_preset.clone(),
                     x: dp[0] + 10.0 * scale,
                     y: dp[1] + (ds[1] - dd_line) * 0.5,
@@ -1258,6 +1262,9 @@ impl SettingsWindow {
                     line_height: dd_line,
                     color: [210, 210, 218, 255],
                     weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
 
                 // Theme preset popup text
@@ -1267,7 +1274,7 @@ impl SettingsWindow {
                     for (j, preset) in THEME_PRESETS.iter().enumerate() {
                         let iy = popup_y + j as f32 * item_h;
                         let is_selected = *preset == settings.theme_preset;
-                        out.push(SettingsTextEntry {
+                        out.push(TextEntry {
                             text: preset.to_string(),
                             x: dp[0] + 12.0 * scale,
                             y: iy + (item_h - dd_line) * 0.5,
@@ -1275,6 +1282,9 @@ impl SettingsWindow {
                             line_height: dd_line,
                             color: if is_selected { [240, 240, 255, 255] } else { [200, 200, 210, 255] },
                             weight: if is_selected { 600 } else { 400 },
+                            max_width: 300.0 * scale,
+                            bounds: None,
+                center: false,
                         });
                     }
                 }
@@ -1286,7 +1296,7 @@ impl SettingsWindow {
                             + SECTION_HEADER_HEIGHT * scale
                             + (i + 1) as f32 * ROW_HEIGHT * scale;
 
-                        out.push(SettingsTextEntry {
+                        out.push(TextEntry {
                             text: def.label.to_string(),
                             x: content_x + ROW_LABEL_X * scale,
                             y: row_y + (ROW_HEIGHT * scale - label_line) * 0.5,
@@ -1294,6 +1304,9 @@ impl SettingsWindow {
                             line_height: label_line,
                             color: [210, 210, 218, 255],
                             weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                         });
 
                         let val = Self::slider_value(settings, i);
@@ -1302,7 +1315,7 @@ impl SettingsWindow {
                         let val_x = content_x + content_w - SLIDER_RIGHT_PAD * scale
                             - VALUE_WIDTH * scale
                             + 8.0 * scale;
-                        out.push(SettingsTextEntry {
+                        out.push(TextEntry {
                             text: val_text,
                             x: val_x,
                             y: row_y + (ROW_HEIGHT * scale - value_line) * 0.5,
@@ -1310,12 +1323,15 @@ impl SettingsWindow {
                             line_height: value_line,
                             color: [170, 170, 180, 255],
                             weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                         });
                     }
                 }
             }
             SettingsCategory::Audio => {
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: "Audio Device".to_string(),
                     x: content_x + ROW_LABEL_X * scale,
                     y: wp[1] + (SECTION_HEADER_HEIGHT * scale - section_line) * 0.5,
@@ -1323,6 +1339,9 @@ impl SettingsWindow {
                     line_height: section_line,
                     color: [140, 140, 150, 200],
                     weight: 600,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
 
                 let label_font = 13.0 * scale;
@@ -1335,7 +1354,7 @@ impl SettingsWindow {
                     let row_y =
                         wp[1] + SECTION_HEADER_HEIGHT * scale + i as f32 * ROW_HEIGHT * scale;
 
-                    out.push(SettingsTextEntry {
+                    out.push(TextEntry {
                         text: labels[i].to_string(),
                         x: content_x + ROW_LABEL_X * scale,
                         y: row_y + (ROW_HEIGHT * scale - label_line) * 0.5,
@@ -1343,11 +1362,14 @@ impl SettingsWindow {
                         line_height: label_line,
                         color: [210, 210, 218, 255],
                         weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                     });
 
                     let current = Self::dropdown_current(settings, i);
                     let (dp, ds) = self.dropdown_rect(i, screen_w, screen_h, scale);
-                    out.push(SettingsTextEntry {
+                    out.push(TextEntry {
                         text: current.to_string(),
                         x: dp[0] + 10.0 * scale,
                         y: dp[1] + (ds[1] - dd_line) * 0.5,
@@ -1355,6 +1377,9 @@ impl SettingsWindow {
                         line_height: dd_line,
                         color: [210, 210, 218, 255],
                         weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                     });
                 }
 
@@ -1363,7 +1388,7 @@ impl SettingsWindow {
                     let row_y = wp[1]
                         + SECTION_HEADER_HEIGHT * scale
                         + 3.0 * ROW_HEIGHT * scale;
-                    out.push(SettingsTextEntry {
+                    out.push(TextEntry {
                         text: "Auto Clip Fades".to_string(),
                         x: content_x + ROW_LABEL_X * scale,
                         y: row_y + (ROW_HEIGHT * scale - label_line) * 0.5,
@@ -1371,11 +1396,14 @@ impl SettingsWindow {
                         line_height: label_line,
                         color: [210, 210, 218, 255],
                         weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                     });
 
                     let current_text = if settings.auto_clip_fades { "On" } else { "Off" };
                     let (dp3, ds3) = self.dropdown_rect(3, screen_w, screen_h, scale);
-                    out.push(SettingsTextEntry {
+                    out.push(TextEntry {
                         text: current_text.to_string(),
                         x: dp3[0] + 10.0 * scale,
                         y: dp3[1] + (ds3[1] - dd_line) * 0.5,
@@ -1383,6 +1411,9 @@ impl SettingsWindow {
                         line_height: dd_line,
                         color: [210, 210, 218, 255],
                         weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                     });
                 }
 
@@ -1398,7 +1429,7 @@ impl SettingsWindow {
                         for (j, opt) in options.iter().enumerate() {
                             let iy = popup_y + j as f32 * item_h;
                             let is_selected = opt == current;
-                            out.push(SettingsTextEntry {
+                            out.push(TextEntry {
                                 text: opt.clone(),
                                 x: dp[0] + 12.0 * scale,
                                 y: iy + (item_h - dd_line) * 0.5,
@@ -1410,6 +1441,9 @@ impl SettingsWindow {
                                     [200, 200, 210, 255]
                                 },
                                 weight: if is_selected { 600 } else { 400 },
+                                max_width: 300.0 * scale,
+                                bounds: None,
+                center: false,
                             });
                         }
                     } else if dd_idx == 3 {
@@ -1423,7 +1457,7 @@ impl SettingsWindow {
                         for (j, opt) in options.iter().enumerate() {
                             let iy = popup_y + j as f32 * item_h;
                             let is_selected = j == current_idx;
-                            out.push(SettingsTextEntry {
+                            out.push(TextEntry {
                                 text: opt.to_string(),
                                 x: dp[0] + 12.0 * scale,
                                 y: iy + (item_h - dd_line) * 0.5,
@@ -1435,13 +1469,16 @@ impl SettingsWindow {
                                     [200, 200, 210, 255]
                                 },
                                 weight: if is_selected { 600 } else { 400 },
+                                max_width: 300.0 * scale,
+                                bounds: None,
+                center: false,
                             });
                         }
                     }
                 }
             }
             SettingsCategory::Developer => {
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: "Developer".to_string(),
                     x: content_x + ROW_LABEL_X * scale,
                     y: wp[1] + (SECTION_HEADER_HEIGHT * scale - section_line) * 0.5,
@@ -1449,6 +1486,9 @@ impl SettingsWindow {
                     line_height: section_line,
                     color: [140, 140, 150, 200],
                     weight: 600,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
 
                 let label_font = 13.0 * scale;
@@ -1457,7 +1497,7 @@ impl SettingsWindow {
                 let dd_line = 16.0 * scale;
 
                 let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale;
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: "Mode".to_string(),
                     x: content_x + ROW_LABEL_X * scale,
                     y: row_y + (ROW_HEIGHT * scale - label_line) * 0.5,
@@ -1465,11 +1505,14 @@ impl SettingsWindow {
                     line_height: label_line,
                     color: [210, 210, 218, 255],
                     weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
 
                 let current_text = if settings.dev_mode { "Development" } else { "Production" };
                 let (dp, ds) = self.dropdown_rect(0, screen_w, screen_h, scale);
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: current_text.to_string(),
                     x: dp[0] + 10.0 * scale,
                     y: dp[1] + (ds[1] - dd_line) * 0.5,
@@ -1477,11 +1520,14 @@ impl SettingsWindow {
                     line_height: dd_line,
                     color: [210, 210, 218, 255],
                     weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
 
                 // Build version
                 let build_row_y = row_y + ROW_HEIGHT * scale;
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: "Build".to_string(),
                     x: content_x + ROW_LABEL_X * scale,
                     y: build_row_y + (ROW_HEIGHT * scale - label_line) * 0.5,
@@ -1489,11 +1535,14 @@ impl SettingsWindow {
                     line_height: label_line,
                     color: [210, 210, 218, 255],
                     weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
                 let build_version = std::fs::read_to_string("build_version")
                     .unwrap_or_else(|_| "0".to_string());
                 let build_version = build_version.trim();
-                out.push(SettingsTextEntry {
+                out.push(TextEntry {
                     text: format!("#{}", build_version),
                     x: dp[0] + 10.0 * scale,
                     y: build_row_y + (ROW_HEIGHT * scale - dd_line) * 0.5,
@@ -1501,6 +1550,9 @@ impl SettingsWindow {
                     line_height: dd_line,
                     color: [140, 140, 150, 200],
                     weight: 400,
+                max_width: 300.0 * scale,
+                bounds: None,
+                center: false,
                 });
 
                 // Popup item text
@@ -1513,7 +1565,7 @@ impl SettingsWindow {
                     for (j, opt) in options.iter().enumerate() {
                         let iy = popup_y + j as f32 * item_h;
                         let is_selected = j == current_idx;
-                        out.push(SettingsTextEntry {
+                        out.push(TextEntry {
                             text: opt.to_string(),
                             x: dp[0] + 12.0 * scale,
                             y: iy + (item_h - dd_line) * 0.5,
@@ -1525,6 +1577,9 @@ impl SettingsWindow {
                                 [200, 200, 210, 255]
                             },
                             weight: if is_selected { 600 } else { 400 },
+                            max_width: 300.0 * scale,
+                            bounds: None,
+                center: false,
                         });
                     }
                 }

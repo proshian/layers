@@ -1,3 +1,4 @@
+use crate::gpu::TextEntry;
 use crate::settings::{AdaptiveGridSize, FixedGrid, GridMode, Settings};
 use crate::ui::palette::CommandAction;
 use crate::InstanceRaw;
@@ -723,6 +724,111 @@ impl ContextMenu {
                 }
             }
             y += rh;
+        }
+
+        out
+    }
+
+    pub fn get_text_entries(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<TextEntry> {
+        let mut out = Vec::new();
+        let (mpos, _msize) = self.menu_rect(screen_w, screen_h, scale);
+        let pad = CTX_MENU_PADDING * scale;
+        let label_font = 13.0 * scale;
+        let label_line = 18.0 * scale;
+        let shortcut_font = 12.0 * scale;
+        let shortcut_line = 17.0 * scale;
+        let section_font = 11.0 * scale;
+        let section_line = 15.0 * scale;
+        let has_any_checked = self
+            .entries
+            .iter()
+            .any(|e| matches!(e, ContextMenuEntry::Item(it) if it.checked));
+        let check_indent = if has_any_checked { 16.0 * scale } else { 0.0 };
+
+        let mut y = mpos[1] + pad;
+        for entry in &self.entries {
+            match entry {
+                ContextMenuEntry::Item(item) => {
+                    out.push(TextEntry {
+                        text: item.label.to_string(),
+                        x: mpos[0] + pad + 10.0 * scale + check_indent,
+                        y: y + (CTX_MENU_ITEM_HEIGHT * scale - label_line) * 0.5,
+                        font_size: label_font,
+                        line_height: label_line,
+                        max_width: CTX_MENU_WIDTH * scale * 0.55,
+                        color: [220, 220, 228, 255],
+                        weight: 400,
+                        bounds: None,
+                center: false,
+                    });
+
+                    if !item.shortcut.is_empty() {
+                        out.push(TextEntry {
+                            text: item.shortcut.to_string(),
+                            x: mpos[0] + CTX_MENU_WIDTH * scale - pad - 50.0 * scale,
+                            y: y + (CTX_MENU_ITEM_HEIGHT * scale - shortcut_line) * 0.5,
+                            font_size: shortcut_font,
+                            line_height: shortcut_line,
+                            max_width: 60.0 * scale,
+                            color: [160, 160, 175, 220],
+                            weight: 400,
+                            bounds: None,
+                center: false,
+                        });
+                    }
+
+                    y += CTX_MENU_ITEM_HEIGHT * scale;
+                }
+                ContextMenuEntry::Separator => {
+                    y += CTX_MENU_SEPARATOR_HEIGHT * scale;
+                }
+                ContextMenuEntry::SectionHeader(label) => {
+                    out.push(TextEntry {
+                        text: label.to_string(),
+                        x: mpos[0] + pad + 10.0 * scale,
+                        y: y + (CTX_MENU_SECTION_HEIGHT * scale - section_line) * 0.5,
+                        font_size: section_font,
+                        line_height: section_line,
+                        max_width: CTX_MENU_WIDTH * scale * 0.8,
+                        color: [150, 150, 160, 200],
+                        weight: 400,
+                        bounds: None,
+                center: false,
+                    });
+                    y += CTX_MENU_SECTION_HEIGHT * scale;
+                }
+                ContextMenuEntry::InlineGroup(pills) => {
+                    let row_h = CTX_MENU_INLINE_HEIGHT * scale;
+                    let pill_h = 22.0 * scale;
+                    let pill_pad_x = 7.0 * scale;
+                    let pill_gap = 2.0 * scale;
+                    let pill_font = 11.0 * scale;
+                    let pill_line = 15.0 * scale;
+                    let pill_y = y + (row_h - pill_h) * 0.5;
+                    let mut px = mpos[0] + pad + 4.0 * scale;
+                    for pill in pills {
+                        let pw = pill.label.len() as f32 * pill_font * 0.55 + pill_pad_x * 2.0;
+                        let alpha: u8 = if pill.active { 240 } else { 160 };
+                        out.push(TextEntry {
+                            text: pill.label.to_string(),
+                            x: px + pill_pad_x,
+                            y: pill_y + (pill_h - pill_line) * 0.5,
+                            font_size: pill_font,
+                            line_height: pill_line,
+                            max_width: pw,
+                            color: [220, 220, 230, alpha],
+                            weight: 400,
+                            bounds: None,
+                center: false,
+                        });
+                        px += pw + pill_gap;
+                    }
+                    y += row_h;
+                }
+                ContextMenuEntry::ColorSwatchGroup(_) => {
+                    y += CTX_MENU_SWATCH_HEIGHT * scale;
+                }
+            }
         }
 
         out

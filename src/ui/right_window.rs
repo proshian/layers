@@ -1,4 +1,5 @@
 use crate::entity_id::EntityId;
+use crate::gpu::TextEntry;
 use crate::InstanceRaw;
 use crate::ui::palette::{gain_to_db, gain_to_vol_fader_pos, vol_fader_pos_to_gain,
     VOL_FADER_DB_MAX, VOL_FADER_DB_BOTTOM, VOL_FADER_P_ZERO, VOL_FADER_P_BOTTOM};
@@ -659,5 +660,278 @@ impl RightWindow {
     pub fn drag_pitch_delta(drag_start_y: f32, mouse_y: f32, drag_start_value: f32, scale: f32) -> f32 {
         let delta = (drag_start_y - mouse_y) / (8.0 * scale);
         (drag_start_value + delta).clamp(-24.0, 24.0)
+    }
+
+    pub fn get_text_entries(&self, screen_w: f32, screen_h: f32, scale: f32) -> Vec<TextEntry> {
+        let mut out = Vec::new();
+        let (pp, _) = Self::panel_rect(screen_w, screen_h, scale);
+        let layout = Self::vol_fader_layout(screen_w, screen_h, scale);
+        let fader_pos = layout.track_pos;
+        let fader_size = layout.track_size;
+        let pan_layout = Self::pan_knob_layout(screen_w, screen_h, scale);
+        let header_font = 10.0 * scale;
+        let header_line = 14.0 * scale;
+        let label_font = 11.0 * scale;
+        let label_line = 15.0 * scale;
+        let val_font = 12.0 * scale;
+        let val_line = 16.0 * scale;
+        let rw_w = RIGHT_WINDOW_WIDTH * scale;
+
+        // "INSPECTOR" header label
+        out.push(TextEntry {
+            text: "INSPECTOR".to_string(),
+            x: pp[0] + 12.0 * scale,
+            y: 11.0 * scale,
+            font_size: header_font,
+            line_height: header_line,
+            max_width: rw_w,
+            color: [120, 140, 170, 200],
+            weight: 400,
+            bounds: None,
+            center: false,
+        });
+
+        // Fader geometry helpers
+        let vol_fader_pos_val = gain_to_vol_fader_pos(self.volume);
+        let thumb_y = fader_pos[1] + (1.0 - vol_fader_pos_val) * fader_size[1];
+
+        // "Gain" label (above fader top, centered)
+        out.push(TextEntry {
+            text: "Gain".to_string(),
+            x: pp[0],
+            y: layout.label_y,
+            font_size: label_font,
+            line_height: label_line,
+            max_width: rw_w,
+            color: [140, 140, 150, 180],
+            weight: 400,
+            bounds: None,
+            center: true,
+        });
+
+        // Triangle indicator (▶) to the left of the track at thumb position
+        let tri_font = 10.0 * scale;
+        let tri_line = 12.0 * scale;
+        out.push(TextEntry {
+            text: "▶".to_string(),
+            x: layout.triangle_x,
+            y: thumb_y - tri_line * 0.5,
+            font_size: tri_font,
+            line_height: tri_line,
+            max_width: 16.0 * scale,
+            color: [220, 220, 230, 230],
+            weight: 400,
+            bounds: None,
+            center: false,
+        });
+
+        // Scale labels to the right of tick marks
+        let scale_font = 9.0 * scale;
+        let scale_line = 11.0 * scale;
+        let label_x = layout.scale_labels_x;
+        let label_bounds = Some([label_x, 0.0, label_x + 30.0 * scale, screen_h]);
+
+        // "+24" at fader top
+        out.push(TextEntry {
+            text: "24".to_string(),
+            x: label_x,
+            y: fader_pos[1] - scale_line * 0.5,
+            font_size: scale_font,
+            line_height: scale_line,
+            max_width: 30.0 * scale,
+            color: [140, 140, 150, 160],
+            weight: 400,
+            bounds: label_bounds,
+            center: false,
+        });
+
+        // "0" at 0 dB position
+        let y_zero = fader_pos[1] + (1.0 - VOL_FADER_P_ZERO) * fader_size[1];
+        out.push(TextEntry {
+            text: "0".to_string(),
+            x: label_x,
+            y: y_zero - scale_line * 0.5,
+            font_size: scale_font,
+            line_height: scale_line,
+            max_width: 30.0 * scale,
+            color: [140, 140, 150, 160],
+            weight: 400,
+            bounds: label_bounds,
+            center: false,
+        });
+
+        // "70" at -70 dB position (near bottom)
+        let y_70 = fader_pos[1] + (1.0 - VOL_FADER_P_BOTTOM) * fader_size[1];
+        out.push(TextEntry {
+            text: "70".to_string(),
+            x: label_x,
+            y: y_70 - scale_line * 0.5,
+            font_size: scale_font,
+            line_height: scale_line,
+            max_width: 30.0 * scale,
+            color: [140, 140, 150, 160],
+            weight: 400,
+            bounds: label_bounds,
+            center: false,
+        });
+
+        // dB value below fader — centered on the fader track
+        let vol_idle = self.vol_text();
+        let vol_display = self.vol_entry.display(&vol_idle);
+        let vol_alpha: u8 = if self.vol_entry.is_editing() { 255 } else { 220 };
+        out.push(TextEntry {
+            text: vol_display.to_string(),
+            x: pp[0],
+            y: layout.db_text_y,
+            font_size: val_font,
+            line_height: val_line,
+            max_width: rw_w,
+            color: [200, 200, 210, vol_alpha],
+            weight: 400,
+            bounds: None,
+            center: true,
+        });
+
+        // PAN label — centered at the knob center
+        out.push(TextEntry {
+            text: "Pan".to_string(),
+            x: pp[0],
+            y: pan_layout.label_y,
+            font_size: label_font,
+            line_height: label_line,
+            max_width: rw_w,
+            color: [140, 140, 150, 180],
+            weight: 400,
+            bounds: None,
+            center: true,
+        });
+
+        // PAN value — below the knob
+        let pan_text = self.pan_text();
+        out.push(TextEntry {
+            text: pan_text,
+            x: pp[0],
+            y: pan_layout.value_y,
+            font_size: val_font,
+            line_height: val_line,
+            max_width: rw_w,
+            color: [200, 200, 210, 220],
+            weight: 400,
+            bounds: None,
+            center: true,
+        });
+
+        // WARP label
+        let (btn_pos, btn_size) = Self::warp_mode_button_rect_pub(screen_w, screen_h, scale);
+        out.push(TextEntry {
+            text: "WARP".to_string(),
+            x: btn_pos[0] + btn_size[0] * 0.5 - rw_w * 0.5,
+            y: btn_pos[1] - 18.0 * scale,
+            font_size: label_font,
+            line_height: label_line,
+            max_width: rw_w,
+            color: [140, 140, 150, 180],
+            weight: 400,
+            bounds: None,
+            center: false,
+        });
+
+        // WARP toggle text (centered on button)
+        let warp_text = self.warp_button_text();
+        out.push(TextEntry {
+            text: warp_text.to_string(),
+            x: btn_pos[0],
+            y: btn_pos[1] + (btn_size[1] - val_line) * 0.5,
+            font_size: val_font,
+            line_height: val_line,
+            max_width: btn_size[0],
+            color: [220, 220, 230, 240],
+            weight: 400,
+            bounds: None,
+            center: false,
+        });
+
+        let warp_on = self.warp_mode != WarpMode::Off;
+        if warp_on {
+            // Mode selector text (centered on selector rect)
+            let (sel_pos, sel_size) = Self::warp_mode_selector_rect_pub(screen_w, screen_h, scale);
+            let mode_text = self.warp_mode_selector_text();
+            out.push(TextEntry {
+                text: mode_text.to_string(),
+                x: sel_pos[0],
+                y: sel_pos[1] + (sel_size[1] - val_line) * 0.5,
+                font_size: val_font,
+                line_height: val_line,
+                max_width: sel_size[0],
+                color: [200, 200, 210, 220],
+                weight: 400,
+                bounds: None,
+            center: false,
+            });
+
+            // Mode-specific param label + value
+            let (param_pos, _param_size) = Self::warp_param_text_rect_pub(screen_w, screen_h, scale);
+            if self.warp_mode == WarpMode::RePitch {
+                out.push(TextEntry {
+                    text: "SAMPLE BPM".to_string(),
+                    x: param_pos[0],
+                    y: param_pos[1],
+                    font_size: label_font,
+                    line_height: label_line,
+                    max_width: rw_w,
+                    color: [140, 140, 150, 180],
+                    weight: 400,
+                    bounds: None,
+                    center: true,
+                });
+
+                let sbpm_idle = self.sample_bpm_text();
+                let sbpm_display = self.sample_bpm_entry.display(&sbpm_idle);
+                let sbpm_alpha: u8 = if self.sample_bpm_entry.is_editing() { 255 } else { 220 };
+                out.push(TextEntry {
+                    text: sbpm_display.to_string(),
+                    x: param_pos[0],
+                    y: param_pos[1] + label_line,
+                    font_size: val_font,
+                    line_height: val_line,
+                    max_width: rw_w,
+                    color: [200, 200, 210, sbpm_alpha],
+                    weight: 400,
+                    bounds: None,
+                    center: true,
+                });
+            } else if self.warp_mode == WarpMode::Semitone {
+                out.push(TextEntry {
+                    text: "PITCH".to_string(),
+                    x: param_pos[0],
+                    y: param_pos[1],
+                    font_size: label_font,
+                    line_height: label_line,
+                    max_width: rw_w,
+                    color: [140, 140, 150, 180],
+                    weight: 400,
+                    bounds: None,
+                    center: true,
+                });
+
+                let pitch_idle = self.pitch_text();
+                let pitch_display = self.pitch_entry.display(&pitch_idle);
+                let pitch_alpha: u8 = if self.pitch_entry.is_editing() { 255 } else { 220 };
+                out.push(TextEntry {
+                    text: pitch_display.to_string(),
+                    x: param_pos[0],
+                    y: param_pos[1] + label_line,
+                    font_size: val_font,
+                    line_height: val_line,
+                    max_width: rw_w,
+                    color: [200, 200, 210, pitch_alpha],
+                    weight: 400,
+                    bounds: None,
+                    center: true,
+                });
+            }
+        }
+
+        out
     }
 }
