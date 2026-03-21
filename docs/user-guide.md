@@ -294,7 +294,7 @@ When the piano-keys control in the transport is **on**, you can preview the **se
 | **Z** / **X** | Octave down / up |
 | **C** / **V** | Velocity down / up (without **⌘** held) |
 
-**Space** still toggles playback (it is not a sustain pedal). Use the **Project** tab in the sample browser to pick an instrument on the canvas: the view centers on it and it becomes the keyboard target when exactly one instrument region is implied by selection.
+**Space** still toggles playback (it is not a sustain pedal). Use the **Layers** tab in the sample browser to pick an instrument on the canvas: the view centers on it and it becomes the keyboard target when exactly one instrument region is implied by selection.
 
 ### Metronome
 
@@ -378,7 +378,14 @@ Open the sample browser with `⌘B`. It appears as a sidebar on the left side of
 - Scroll through files with the mouse wheel.
 - Resize the browser by dragging its right edge (150–600px).
 
-The sidebar categories include **Project** (instrument regions already on the canvas — click a row to focus and select that instrument), **Samples**, **Instruments**, and **Effects**. The plugin categories list available VST3 instruments and effects; drag plugins onto the canvas to create plugin blocks or add them to effect regions.
+The sidebar has four categories:
+
+- **Layers** — A Figma-style hierarchical view of everything on your canvas: instruments with their nested MIDI clips, audio clips (waveforms), and effect regions with nested plugin blocks. Click any row to select the entity and center the canvas on it. Click the chevron (or the row itself for parent items) to expand or collapse children. Use `⌘[` / `⌘]` to reorder items up and down in the list. Layer order and expand/collapse state are saved with the project.
+- **Samples** — Audio file browser with expandable folders.
+- **Instruments** — Available VST3 instrument plugins.
+- **Effects** — Available VST3 effect plugins.
+
+Drag plugins from the Instruments or Effects categories onto the canvas to create instrument regions or plugin blocks.
 
 Your sample library folders are saved globally and persist between sessions.
 
@@ -458,6 +465,13 @@ Open Settings with `⌘,` (Cmd+Comma).
 | `⌘2` | Widen grid |
 | `⌘3` | Toggle triplet grid |
 | `⌘4` | Toggle snap to grid |
+
+### Layers Panel
+
+| Shortcut | Action |
+|---|---|
+| `⌘[` | Move selected layer up |
+| `⌘]` | Move selected layer down |
 
 ### Audio Clips
 

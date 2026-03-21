@@ -147,7 +147,7 @@ fn test_hit_sidebar_returns_correct_category() {
 
     // Click sidebar items (below header + section gap)
     let pos_project = [50.0, header_h + 20.0];
-    assert_eq!(browser.hit_sidebar(pos_project, scale), Some(BrowserCategory::Project));
+    assert_eq!(browser.hit_sidebar(pos_project, scale), Some(BrowserCategory::Layers));
 
     let pos_samples = [50.0, header_h + 20.0 + 26.0];
     assert_eq!(browser.hit_sidebar(pos_samples, scale), Some(BrowserCategory::Samples));

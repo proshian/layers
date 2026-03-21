@@ -1238,6 +1238,12 @@ impl App {
                             "4" => {
                                 self.execute_command(CommandAction::ToggleSnapToGrid);
                             }
+                            "[" => {
+                                self.execute_command(CommandAction::MoveLayerUp);
+                            }
+                            "]" => {
+                                self.execute_command(CommandAction::MoveLayerDown);
+                            }
                             _ => {}
                         }
                     }

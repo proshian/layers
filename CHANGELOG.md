@@ -1,3 +1,5 @@
+- 2026-03-21: feat: layers panel — hierarchical browser with instruments, MIDI, audio, effects; expand/collapse, reorder, click-to-select (35.1k loc)
+- 2026-03-21: tests: add `instrument_region_id` to `MidiClip` / `StoredMidiClip` struct literals (34.3k loc)
 - 2026-03-21: fix: computer MIDI preview now tracks/releases the right instrument, and Project browser refreshes when reopened (34.2k loc)
 - 2026-03-21: feat: computer MIDI keyboard (A–K + WETYU, Z/X octaves, C/V velocity), transport toggle, Project browser tab for instrument focus (34.2k loc)
 - 2026-03-21: feat: browser sidebar — Ableton-style category sidebar (Samples/Instruments/Effects), instrument drag creates InstrumentRegion+MidiClip (33.6k loc)

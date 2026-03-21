@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::InstanceRaw;
 use crate::entity_id::EntityId;
+use crate::layers::{FlatLayerRow, LayerNodeKind};
 
 const DEFAULT_BROWSER_WIDTH: f32 = 480.0;
 const MIN_BROWSER_WIDTH: f32 = 240.0;
@@ -25,14 +26,14 @@ use crate::theme::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BrowserCategory {
-    Project,
+    Layers,
     Samples,
     Instruments,
     Effects,
 }
 
 pub const SIDEBAR_CATEGORIES: &[BrowserCategory] = &[
-    BrowserCategory::Project,
+    BrowserCategory::Layers,
     BrowserCategory::Samples,
     BrowserCategory::Instruments,
     BrowserCategory::Effects,
@@ -41,7 +42,7 @@ pub const SIDEBAR_CATEGORIES: &[BrowserCategory] = &[
 impl BrowserCategory {
     pub fn label(self) -> &'static str {
         match self {
-            BrowserCategory::Project => "Project",
+            BrowserCategory::Layers => "Layers",
             BrowserCategory::Samples => "Samples",
             BrowserCategory::Instruments => "Instruments",
             BrowserCategory::Effects => "Effects",
@@ -56,6 +57,7 @@ pub enum EntryKind {
     PluginHeader,
     Plugin { unique_id: String, is_instrument: bool },
     ProjectInstrument { id: EntityId },
+    LayerNode { id: EntityId, kind: LayerNodeKind, has_children: bool, expanded: bool },
 }
 
 #[derive(Clone)]
@@ -104,8 +106,8 @@ pub struct SampleBrowser {
     pub instruments_expanded: bool,
     pub active_category: BrowserCategory,
     pub hovered_sidebar: Option<usize>,
-    /// Canvas instrument regions for the Project tab (id, label).
-    pub project_instruments: Vec<(EntityId, String)>,
+    /// Flattened layer tree rows for the Layers tab.
+    pub layer_rows: Vec<FlatLayerRow>,
 }
 
 impl SampleBrowser {
@@ -134,7 +136,7 @@ impl SampleBrowser {
             instruments_expanded: true,
             active_category: BrowserCategory::Samples,
             hovered_sidebar: None,
-            project_instruments: Vec::new(),
+            layer_rows: Vec::new(),
         }
     }
 
@@ -219,13 +221,18 @@ impl SampleBrowser {
     pub fn rebuild_entries(&mut self) {
         self.entries.clear();
         match self.active_category {
-            BrowserCategory::Project => {
-                for (id, name) in &self.project_instruments {
+            BrowserCategory::Layers => {
+                for row in &self.layer_rows {
                     self.entries.push(BrowserEntry {
                         path: PathBuf::new(),
-                        name: name.clone(),
-                        kind: EntryKind::ProjectInstrument { id: *id },
-                        depth: 0,
+                        name: row.label.clone(),
+                        kind: EntryKind::LayerNode {
+                            id: row.entity_id,
+                            kind: row.kind,
+                            has_children: row.has_children,
+                            expanded: row.expanded,
+                        },
+                        depth: row.depth,
                     });
                 }
             }
@@ -644,7 +651,8 @@ impl SampleBrowser {
                         border_radius: dot_sz * 0.5,
                     });
                 }
-                EntryKind::ProjectInstrument { .. } => {
+                EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } => {
+                    let indent = entry.depth as f32 * INDENT_PX * scale;
                     out.push(InstanceRaw {
                         position: [cx, y],
                         size: [content_w, item_h],
@@ -659,13 +667,66 @@ impl SampleBrowser {
                             border_radius: 0.0,
                         });
                     }
+                    // Chevron for expandable nodes
+                    if let EntryKind::LayerNode { has_children: true, expanded, .. } = &entry.kind {
+                        let chev_sz = 6.0 * scale;
+                        let chev_x = cx + indent + 8.0 * scale + chev_sz * 0.5;
+                        let cy_mid = y + item_h * 0.5;
+                        if *expanded {
+                            let bar_w = chev_sz * 0.7;
+                            let bar_h = 1.5 * scale;
+                            out.push(InstanceRaw {
+                                position: [chev_x - bar_w * 0.5, cy_mid - bar_h],
+                                size: [bar_w, bar_h],
+                                color: CHEVRON_COLOR,
+                                border_radius: 0.0,
+                            });
+                            out.push(InstanceRaw {
+                                position: [chev_x - bar_w * 0.25, cy_mid],
+                                size: [bar_w * 0.5, bar_h],
+                                color: CHEVRON_COLOR,
+                                border_radius: 0.0,
+                            });
+                        } else {
+                            let bar_w = 1.5 * scale;
+                            let bar_h = chev_sz * 0.7;
+                            out.push(InstanceRaw {
+                                position: [chev_x - bar_w, cy_mid - bar_h * 0.5],
+                                size: [bar_w, bar_h],
+                                color: CHEVRON_COLOR,
+                                border_radius: 0.0,
+                            });
+                            out.push(InstanceRaw {
+                                position: [chev_x, cy_mid - bar_h * 0.25],
+                                size: [bar_w, bar_h * 0.5],
+                                color: CHEVRON_COLOR,
+                                border_radius: 0.0,
+                            });
+                        }
+                    }
+                    // Category dot
                     let dot_sz = 5.0 * scale;
-                    let dot_x = cx + 12.0 * scale;
+                    let dot_offset = if matches!(&entry.kind, EntryKind::LayerNode { has_children: true, .. }) {
+                        indent + 20.0 * scale
+                    } else {
+                        indent + 8.0 * scale
+                    };
+                    let dot_x = cx + dot_offset;
                     let dot_y = y + (item_h - dot_sz) * 0.5;
+                    let dot_color = match &entry.kind {
+                        EntryKind::LayerNode { kind, .. } => match kind {
+                            LayerNodeKind::Instrument => settings.theme.pill_instrument,
+                            LayerNodeKind::MidiClip => [0.55, 0.45, 0.85, 1.0],
+                            LayerNodeKind::Waveform => [0.35, 0.75, 0.55, 1.0],
+                            LayerNodeKind::EffectRegion => settings.theme.pill_effect,
+                            LayerNodeKind::PluginBlock => settings.theme.pill_effect,
+                        },
+                        _ => settings.theme.pill_instrument,
+                    };
                     out.push(InstanceRaw {
                         position: [dot_x, dot_y],
                         size: [dot_sz, dot_sz],
-                        color: settings.theme.pill_instrument,
+                        color: dot_color,
                         border_radius: dot_sz * 0.5,
                     });
                 }
@@ -862,10 +923,26 @@ impl SampleBrowser {
                         center: false,
                     });
                 }
-                EntryKind::ProjectInstrument { .. } => {
-                    let text_x = cx + 22.0 * scale;
+                EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } => {
+                    let indent = entry.depth as f32 * INDENT_PX * scale;
+                    let text_offset = if matches!(&entry.kind, EntryKind::LayerNode { has_children: true, .. }) {
+                        indent + 28.0 * scale
+                    } else {
+                        indent + 16.0 * scale
+                    };
+                    let text_x = cx + text_offset;
                     let font_sz = 12.0 * scale;
                     let line_h = 16.0 * scale;
+                    let color = match &entry.kind {
+                        EntryKind::LayerNode { kind, .. } => match kind {
+                            LayerNodeKind::Instrument => [185, 180, 210, 255],
+                            LayerNodeKind::MidiClip => [170, 160, 200, 230],
+                            LayerNodeKind::Waveform => [160, 210, 180, 255],
+                            LayerNodeKind::EffectRegion => [170, 190, 220, 255],
+                            LayerNodeKind::PluginBlock => [170, 190, 220, 230],
+                        },
+                        _ => [185, 180, 210, 255],
+                    };
                     out.push(TextEntry {
                         text: entry.name.clone(),
                         x: text_x,
@@ -873,7 +950,7 @@ impl SampleBrowser {
                         font_size: font_sz,
                         line_height: line_h,
                         max_width: w - text_x - 12.0 * scale,
-                        color: [185, 180, 210, 255],
+                        color,
                         weight: 400,
                         bounds: None,
                         center: false,

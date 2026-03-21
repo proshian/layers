@@ -144,6 +144,7 @@ surreal_derive! {
         pub grid_mode_tag: String,
         pub grid_mode_value: String,
         pub triplet_grid: bool,
+        pub instrument_region_id: String,
     }
 }
 
@@ -158,6 +159,16 @@ surreal_derive! {
         pub plugin_name: String,
         pub state: Vec<u8>,
         pub params: Vec<u8>,
+    }
+}
+
+surreal_derive! {
+    #[derive(Clone)]
+    pub struct StoredLayerNode {
+        pub entity_id: String,
+        pub kind_tag: String,
+        pub parent_entity_id: String,
+        pub expanded: bool,
     }
 }
 
@@ -182,6 +193,7 @@ surreal_derive! {
         pub bpm: f32,
         pub midi_clips: Vec<StoredMidiClip>,
         pub instrument_regions: Vec<StoredInstrumentRegion>,
+        pub layer_tree: Vec<StoredLayerNode>,
     }
 }
 

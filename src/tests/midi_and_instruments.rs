@@ -261,6 +261,7 @@ fn test_sync_instrument_regions_produces_events() {
         grid_mode: GridMode::default(),
         triplet_grid: false,
         velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
+        instrument_region_id: None,
     });
 
     // No audio engine in headless, but sync_instrument_regions shouldn't panic
@@ -366,7 +367,7 @@ fn test_computer_keyboard_state_and_project_browser() {
     assert!(midi_keyboard::with_octave_offset(120, 1).is_none());
     assert_eq!(midi_keyboard::with_octave_offset(60, 3), Some(96));
 
-    app.sample_browser.active_category = BrowserCategory::Project;
+    app.sample_browser.active_category = BrowserCategory::Layers;
     app.execute_command(CommandAction::ToggleBrowser);
     assert_eq!(app.sample_browser.entries.len(), 1);
 
@@ -384,6 +385,6 @@ fn test_computer_keyboard_state_and_project_browser() {
     app.add_instrument_area();
     app.execute_command(CommandAction::ToggleBrowser);
     app.execute_command(CommandAction::ToggleBrowser);
-    assert_eq!(app.sample_browser.active_category, BrowserCategory::Project);
+    assert_eq!(app.sample_browser.active_category, BrowserCategory::Layers);
     assert_eq!(app.sample_browser.entries.len(), 2);
 }

@@ -84,6 +84,7 @@ fn test_midi_clip_survives_save_load_roundtrip() {
         grid_mode: GridMode::Fixed(FixedGrid::Eighth),
         triplet_grid: true,
         velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
+        instrument_region_id: None,
     };
 
     // Save path: MidiClip -> StoredMidiClip
@@ -104,6 +105,7 @@ fn test_midi_clip_survives_save_load_roundtrip() {
         grid_mode_tag: grid_tag,
         grid_mode_value: grid_val,
         triplet_grid: original.triplet_grid,
+        instrument_region_id: String::new(),
     };
 
     // Load path: StoredMidiClip -> MidiClip
@@ -121,6 +123,7 @@ fn test_midi_clip_survives_save_load_roundtrip() {
         grid_mode: storage::grid_mode_from_stored(&stored.grid_mode_tag, &stored.grid_mode_value),
         triplet_grid: stored.triplet_grid,
         velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
+        instrument_region_id: None,
     };
 
     assert_eq!(restored.position, original.position);

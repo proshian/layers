@@ -25,6 +25,9 @@ pub struct MidiClip {
     pub grid_mode: GridMode,
     pub triplet_grid: bool,
     pub velocity_lane_height: f32,
+    /// Parent instrument region; each MIDI clip belongs to exactly one instrument.
+    #[serde(default)]
+    pub instrument_region_id: Option<EntityId>,
 }
 
 pub const MIDI_CLIP_DEFAULT_HEIGHT: f32 = 540.0;
@@ -50,6 +53,7 @@ impl MidiClip {
             grid_mode: settings.grid_mode,
             triplet_grid: settings.triplet_grid,
             velocity_lane_height: VELOCITY_LANE_HEIGHT,
+            instrument_region_id: None,
         }
     }
 

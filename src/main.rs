@@ -9,6 +9,7 @@ mod gpu;
 mod grid;
 mod history;
 mod instruments;
+mod layers;
 mod midi;
 mod midi_keyboard;
 mod network;
@@ -487,6 +488,7 @@ struct App {
     context_menu: Option<ContextMenu>,
     browser_context_path: Option<std::path::PathBuf>,
     sample_browser: ui::browser::SampleBrowser,
+    layer_tree: Vec<layers::LayerNode>,
     storage: Option<NativeStorage>,
     has_saved_state: bool,
     project_dirty: bool,
@@ -611,6 +613,7 @@ impl App {
             context_menu: None,
             browser_context_path: None,
             sample_browser: ui::browser::SampleBrowser::new(),
+            layer_tree: Vec::new(),
             storage: None,
             has_saved_state: false,
             project_dirty: false,
@@ -723,23 +726,26 @@ impl App {
         }
     }
 
-    /// Refresh Project sidebar rows from `instrument_regions`.
+    /// Sync the layer tree with current entities and refresh the Layers browser tab.
     pub(crate) fn refresh_project_browser_entries(&mut self) {
-        self.sample_browser.project_instruments = self
-            .instrument_regions
-            .iter()
-            .map(|(id, ir)| {
-                let label = if !ir.name.is_empty() && ir.name != "instrument" {
-                    ir.name.clone()
-                } else if !ir.plugin_name.is_empty() {
-                    ir.plugin_name.clone()
-                } else {
-                    format!("Instrument {}", id)
-                };
-                (*id, label)
-            })
-            .collect();
-        if self.sample_browser.active_category == ui::browser::BrowserCategory::Project {
+        layers::sync_tree(
+            &mut self.layer_tree,
+            &self.instrument_regions,
+            &self.midi_clips,
+            &self.waveforms,
+            &self.effect_regions,
+            &self.plugin_blocks,
+        );
+        let rows = layers::flatten_tree(
+            &self.layer_tree,
+            &self.instrument_regions,
+            &self.midi_clips,
+            &self.waveforms,
+            &self.effect_regions,
+            &self.plugin_blocks,
+        );
+        self.sample_browser.layer_rows = rows;
+        if self.sample_browser.active_category == ui::browser::BrowserCategory::Layers {
             self.sample_browser.rebuild_entries();
         }
     }
@@ -951,6 +957,7 @@ impl App {
             loaded_bpm,
             stored_midi_clips,
             stored_instrument_regions,
+            stored_layer_tree,
         ) = match loaded {
             Some(state) => {
                 println!(
@@ -1081,6 +1088,7 @@ impl App {
                     if state.bpm > 0.0 { state.bpm } else { DEFAULT_BPM },
                     storage::midi_clips_from_stored(state.midi_clips),
                     storage::instrument_regions_from_stored(state.instrument_regions),
+                    state.layer_tree,
                 )
             }
             None => {
@@ -1103,6 +1111,7 @@ impl App {
                     DEFAULT_BPM,
                     Vec::new(),  // stored_midi_clips
                     Vec::new(),  // stored_instrument_regions
+                    Vec::new(),  // stored_layer_tree
                 )
             }
         };
@@ -1292,6 +1301,7 @@ impl App {
                 grid_mode: storage::grid_mode_from_stored(&smc.grid_mode_tag, &smc.grid_mode_value),
                 triplet_grid: smc.triplet_grid,
                 velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
+                instrument_region_id: if smc.instrument_region_id.is_empty() { None } else { smc.instrument_region_id.parse().ok() },
             }))
             .collect();
 
@@ -1315,6 +1325,19 @@ impl App {
                 (id, ir)
             })
             .collect();
+
+        let restored_layer_tree = {
+            let mut tree = layers::tree_from_stored(&stored_layer_tree);
+            layers::sync_tree(
+                &mut tree,
+                &restored_instrument_regions,
+                &restored_midi_clips,
+                &waveforms,
+                &restored_effect_regions,
+                &restored_plugin_blocks,
+            );
+            tree
+        };
 
         let (pending_audio_tx, pending_audio_rx) = mpsc::channel();
         let (pending_remote_audio_tx, pending_remote_audio_rx) = mpsc::channel();
@@ -1347,6 +1370,7 @@ impl App {
             context_menu: None,
             browser_context_path: None,
             sample_browser,
+            layer_tree: restored_layer_tree,
             storage,
             has_saved_state,
             project_dirty: false,
@@ -1646,6 +1670,7 @@ impl App {
                         grid_mode_tag: grid_tag,
                         grid_mode_value: grid_val,
                         triplet_grid: mc.triplet_grid,
+                        instrument_region_id: mc.instrument_region_id.map(|id| id.to_string()).unwrap_or_default(),
                     }
                 }).collect(),
                 instrument_regions: self.instrument_regions.iter().map(|(id, ir)| storage::StoredInstrumentRegion {
@@ -1665,6 +1690,7 @@ impl App {
                         vals.iter().flat_map(|v| v.to_le_bytes()).collect()
                     },
                 }).collect(),
+                layer_tree: layers::tree_to_stored(&self.layer_tree),
             };
             storage.save_project_state(state);
 
@@ -2082,6 +2108,7 @@ impl App {
                 grid_mode: storage::grid_mode_from_stored(&smc.grid_mode_tag, &smc.grid_mode_value),
                 triplet_grid: smc.triplet_grid,
                 velocity_lane_height: midi::VELOCITY_LANE_HEIGHT,
+                instrument_region_id: if smc.instrument_region_id.is_empty() { None } else { smc.instrument_region_id.parse().ok() },
             }))
             .collect();
 
@@ -2105,6 +2132,19 @@ impl App {
                 (id, ir)
             })
             .collect();
+
+        {
+            let mut tree = layers::tree_from_stored(&state.layer_tree);
+            layers::sync_tree(
+                &mut tree,
+                &self.instrument_regions,
+                &self.midi_clips,
+                &self.waveforms,
+                &self.effect_regions,
+                &self.plugin_blocks,
+            );
+            self.layer_tree = tree;
+        }
 
         self.editing_midi_clip = None;
         self.selected_midi_notes.clear();
@@ -2975,12 +3015,31 @@ impl App {
         let pos = [center[0] - width * 0.5, center[1] - height * 0.5];
         let mut clip = midi::MidiClip::new(pos, &self.settings);
         clip.size = [width, height];
+        clip.instrument_region_id = self.find_containing_instrument(pos, [width, height]);
         let id = new_id();
         self.midi_clips.insert(id, clip.clone());
         self.push_op(operations::Operation::CreateMidiClip { id, data: clip });
         self.selected.clear();
         self.selected.push(HitTarget::MidiClip(id));
         self.request_redraw();
+    }
+
+    /// Find the instrument region whose rectangle contains the given rect's center,
+    /// falling back to the first instrument if none overlap.
+    fn find_containing_instrument(&self, pos: [f32; 2], size: [f32; 2]) -> Option<EntityId> {
+        if self.instrument_regions.is_empty() {
+            return None;
+        }
+        let cx = pos[0] + size[0] * 0.5;
+        let cy = pos[1] + size[1] * 0.5;
+        for (&id, ir) in &self.instrument_regions {
+            if cx >= ir.position[0] && cx <= ir.position[0] + ir.size[0]
+                && cy >= ir.position[1] && cy <= ir.position[1] + ir.size[1]
+            {
+                return Some(id);
+            }
+        }
+        Some(*self.instrument_regions.keys().next().unwrap())
     }
 
     #[cfg(feature = "native")]
@@ -2992,9 +3051,10 @@ impl App {
                     continue;
                 }
                 let mut midi_events = Vec::new();
-                // Find MIDI clips that spatially overlap this region
                 for mc in self.midi_clips.values() {
-                    if !rects_overlap(ir.position, ir.size, mc.position, mc.size) {
+                    let belongs = mc.instrument_region_id == Some(id)
+                        || (mc.instrument_region_id.is_none() && rects_overlap(ir.position, ir.size, mc.position, mc.size));
+                    if !belongs {
                         continue;
                     }
                     for note in &mc.notes {
@@ -4581,6 +4641,38 @@ impl App {
                     }
                 }
             }
+            CommandAction::MoveLayerUp => {
+                if let Some(target) = self.selected.first() {
+                    let id = match target {
+                        HitTarget::InstrumentRegion(id) | HitTarget::Waveform(id) |
+                        HitTarget::EffectRegion(id) | HitTarget::MidiClip(id) |
+                        HitTarget::PluginBlock(id) => Some(*id),
+                        _ => None,
+                    };
+                    if let Some(id) = id {
+                        if layers::move_node_up(&mut self.layer_tree, id) {
+                            self.refresh_project_browser_entries();
+                            self.mark_dirty();
+                        }
+                    }
+                }
+            }
+            CommandAction::MoveLayerDown => {
+                if let Some(target) = self.selected.first() {
+                    let id = match target {
+                        HitTarget::InstrumentRegion(id) | HitTarget::Waveform(id) |
+                        HitTarget::EffectRegion(id) | HitTarget::MidiClip(id) |
+                        HitTarget::PluginBlock(id) => Some(*id),
+                        _ => None,
+                    };
+                    if let Some(id) = id {
+                        if layers::move_node_down(&mut self.layer_tree, id) {
+                            self.refresh_project_browser_entries();
+                            self.mark_dirty();
+                        }
+                    }
+                }
+            }
             CommandAction::SetWarpOff | CommandAction::SetWarpRePitch | CommandAction::SetWarpSemitone => {
                 let new_mode = match action {
                     CommandAction::SetWarpRePitch => ui::waveform::WarpMode::RePitch,
@@ -5457,6 +5549,18 @@ impl App {
         for &id in &lr_ids { if let Some(d) = self.loop_regions.get(&id) { del_ops.push(operations::Operation::DeleteLoopRegion { id, data: d.clone() }); } self.loop_regions.shift_remove(&id); }
         for &id in &xr_ids { if let Some(d) = self.export_regions.get(&id) { del_ops.push(operations::Operation::DeleteExportRegion { id, data: d.clone() }); } self.export_regions.shift_remove(&id); }
         for &id in &mc_ids { if let Some(d) = self.midi_clips.get(&id) { del_ops.push(operations::Operation::DeleteMidiClip { id, data: d.clone() }); } self.midi_clips.shift_remove(&id); }
+        // Cascade-delete child MIDI clips when deleting instrument regions
+        if !ir_ids.is_empty() {
+            let ir_set: std::collections::HashSet<EntityId> = ir_ids.iter().copied().collect();
+            let child_mc_ids: Vec<EntityId> = self.midi_clips.iter()
+                .filter(|(_, mc)| mc.instrument_region_id.map_or(false, |iid| ir_set.contains(&iid)))
+                .map(|(&id, _)| id)
+                .collect();
+            for id in child_mc_ids {
+                if let Some(d) = self.midi_clips.get(&id) { del_ops.push(operations::Operation::DeleteMidiClip { id, data: d.clone() }); }
+                self.midi_clips.shift_remove(&id);
+            }
+        }
         for &id in &ir_ids { if let Some(ir) = self.instrument_regions.get(&id) { let snap = instruments::InstrumentRegionSnapshot { position: ir.position, size: ir.size, name: ir.name.clone(), plugin_id: ir.plugin_id.clone(), plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone() }; del_ops.push(operations::Operation::DeleteInstrumentRegion { id, data: snap }); } self.instrument_regions.shift_remove(&id); }
         if !del_ops.is_empty() {
             self.push_op(operations::Operation::Batch(del_ops));

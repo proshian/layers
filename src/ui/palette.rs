@@ -61,6 +61,8 @@ pub enum CommandAction {
     ToggleMidiClipTripletGrid,
     NarrowMidiClipGrid,
     WidenMidiClipGrid,
+    MoveLayerUp,
+    MoveLayerDown,
     SetWarpOff,
     SetWarpRePitch,
     SetWarpSemitone,

@@ -16,3 +16,4 @@ mod recording_playback;
 mod waveform_overlap;
 mod metronome;
 mod tooltip;
+mod layers;

@@ -757,7 +757,7 @@ impl App {
                                 self.sample_browser.active_category = cat;
                                 self.sample_browser.scroll_offset = 0.0;
                                 self.sample_browser.scroll_velocity = 0.0;
-                                if cat == ui::browser::BrowserCategory::Project {
+                                if cat == ui::browser::BrowserCategory::Layers {
                                     self.refresh_project_browser_entries();
                                 } else {
                                     self.sample_browser.rebuild_entries();
@@ -799,6 +799,74 @@ impl App {
                                 }
                                 ui::browser::EntryKind::ProjectInstrument { id } => {
                                     self.focus_instrument_region(*id);
+                                }
+                                ui::browser::EntryKind::LayerNode { id, kind, has_children, .. } => {
+                                    if *has_children {
+                                        crate::layers::toggle_expanded(&mut self.layer_tree, *id);
+                                        self.refresh_project_browser_entries();
+                                    }
+                                    match kind {
+                                        crate::layers::LayerNodeKind::Instrument => {
+                                            self.focus_instrument_region(*id);
+                                        }
+                                        crate::layers::LayerNodeKind::MidiClip => {
+                                            if let Some(mc) = self.midi_clips.get(id) {
+                                                let (sw, sh, _) = self.screen_info();
+                                                let cx = mc.position[0] + mc.size[0] * 0.5;
+                                                let cy = mc.position[1] + mc.size[1] * 0.5;
+                                                self.camera.position = [
+                                                    cx - sw * 0.5 / self.camera.zoom,
+                                                    cy - sh * 0.5 / self.camera.zoom,
+                                                ];
+                                            }
+                                            self.selected.clear();
+                                            self.selected.push(HitTarget::MidiClip(*id));
+                                            self.update_right_window();
+                                        }
+                                        crate::layers::LayerNodeKind::Waveform => {
+                                            if let Some(wf) = self.waveforms.get(id) {
+                                                let (sw, sh, _) = self.screen_info();
+                                                let cx = wf.position[0] + wf.size[0] * 0.5;
+                                                let cy = wf.position[1] + wf.size[1] * 0.5;
+                                                self.camera.position = [
+                                                    cx - sw * 0.5 / self.camera.zoom,
+                                                    cy - sh * 0.5 / self.camera.zoom,
+                                                ];
+                                            }
+                                            self.selected.clear();
+                                            self.selected.push(HitTarget::Waveform(*id));
+                                            self.update_right_window();
+                                        }
+                                        crate::layers::LayerNodeKind::EffectRegion => {
+                                            if let Some(er) = self.effect_regions.get(id) {
+                                                let (sw, sh, _) = self.screen_info();
+                                                let cx = er.position[0] + er.size[0] * 0.5;
+                                                let cy = er.position[1] + er.size[1] * 0.5;
+                                                self.camera.position = [
+                                                    cx - sw * 0.5 / self.camera.zoom,
+                                                    cy - sh * 0.5 / self.camera.zoom,
+                                                ];
+                                            }
+                                            self.selected.clear();
+                                            self.selected.push(HitTarget::EffectRegion(*id));
+                                            self.update_right_window();
+                                        }
+                                        crate::layers::LayerNodeKind::PluginBlock => {
+                                            if let Some(pb) = self.plugin_blocks.get(id) {
+                                                let (sw, sh, _) = self.screen_info();
+                                                let cx = pb.position[0] + pb.size[0] * 0.5;
+                                                let cy = pb.position[1] + pb.size[1] * 0.5;
+                                                self.camera.position = [
+                                                    cx - sw * 0.5 / self.camera.zoom,
+                                                    cy - sh * 0.5 / self.camera.zoom,
+                                                ];
+                                            }
+                                            self.selected.clear();
+                                            self.selected.push(HitTarget::PluginBlock(*id));
+                                            self.update_right_window();
+                                        }
+                                    }
+                                    self.mark_dirty();
                                 }
                             }
                         }

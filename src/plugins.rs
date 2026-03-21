@@ -349,6 +349,7 @@ impl App {
 
         let mut clip = midi::MidiClip::new(clip_pos, &self.settings);
         clip.size = [clip_w, clip_h];
+        clip.instrument_region_id = Some(ir_id);
         let clip_id = new_id();
         self.midi_clips.insert(clip_id, clip.clone());
 
