@@ -736,7 +736,12 @@ impl App {
                     Key::Named(NamedKey::Backspace) => {
                         if let Some(ref mut edit) = self.editing_text_note {
                             if edit.cursor > 0 {
-                                edit.cursor -= 1;
+                                let prev = edit.text[..edit.cursor]
+                                    .char_indices()
+                                    .next_back()
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(0);
+                                edit.cursor = prev;
                                 edit.text.remove(edit.cursor);
                                 if let Some(tn) = self.text_notes.get_mut(&edit.note_id) {
                                     tn.text = edit.text.clone();
@@ -866,7 +871,7 @@ impl App {
                         if let Some(ref mut edit) = self.editing_text_note {
                             for c in ch.chars() {
                                 edit.text.insert(edit.cursor, c);
-                                edit.cursor += 1;
+                                edit.cursor += c.len_utf8();
                             }
                             if let Some(tn) = self.text_notes.get_mut(&edit.note_id) {
                                 tn.text = edit.text.clone();

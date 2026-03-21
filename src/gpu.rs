@@ -739,47 +739,6 @@ impl Gpu {
         // Build overlay instances: browser panel + drag ghost + command palette
         let mut overlay_instances: Vec<InstanceRaw> = Vec::new();
 
-        // Text note cursor (screen-space)
-        if let Some((edit_id, cursor_idx)) = editing_text_note {
-            if let Some(tn) = text_notes.get(&edit_id) {
-                let sf = self.scale_factor;
-                let pad = 8.0 / camera.zoom;
-                let text_screen_x = (tn.position[0] + pad - camera.position[0]) * camera.zoom;
-                let text_screen_y = (tn.position[1] + pad - camera.position[1]) * camera.zoom;
-                let font_size_sc = tn.font_size * sf;
-                let line_height_sc = (tn.font_size * 1.4) * sf;
-
-                // Walk text to find line and column for cursor
-                let text = &tn.text;
-                let mut line = 0usize;
-                let mut col_start = 0usize;
-                for (i, ch) in text.char_indices() {
-                    if i >= cursor_idx { break; }
-                    if ch == '\n' {
-                        line += 1;
-                        col_start = i + 1;
-                    }
-                }
-                let col_text = if cursor_idx <= text.len() {
-                    &text[col_start..cursor_idx]
-                } else { "" };
-
-                // Approximate cursor x from column text width
-                let char_w = font_size_sc * 0.55;
-                let cursor_x = text_screen_x + col_text.len() as f32 * char_w;
-                let cursor_y = text_screen_y + line as f32 * line_height_sc;
-                let cursor_w = 1.5 * sf;
-                let tc = tn.text_color;
-
-                overlay_instances.push(InstanceRaw {
-                    position: [cursor_x, cursor_y],
-                    size: [cursor_w, line_height_sc],
-                    color: [tc[0], tc[1], tc[2], 0.9],
-                    border_radius: 0.0,
-                });
-            }
-        }
-
         if let Some(br) = sample_browser {
             overlay_instances.extend(br.build_instances(settings, w, h, self.scale_factor));
         }
@@ -853,16 +812,6 @@ impl Gpu {
                 });
             }
             }
-        }
-
-        let overlay_count = overlay_instances.len().min(MAX_INSTANCES - world_count);
-        if overlay_count > 0 {
-            let offset = (world_count * std::mem::size_of::<InstanceRaw>()) as u64;
-            self.queue.write_buffer(
-                &self.instance_buffer,
-                offset,
-                bytemuck::cast_slice(&overlay_instances[..overlay_count]),
-            );
         }
 
         // --- prepare text ---
@@ -1326,6 +1275,73 @@ impl Gpu {
                     new_tn_cache.push((key, buf));
                 }
 
+                // Text note cursor using Glyphon layout
+                if let Some((edit_id, cursor_idx)) = editing_text_note {
+                    if *_tn_id == edit_id {
+                        let buf = &new_tn_cache.last().unwrap().1;
+                        let sf = self.scale_factor;
+                        let cursor_w = 1.5 * sf;
+                        let tc = tn.text_color;
+
+                        // Convert full-text cursor byte index to (line_index, offset_in_line)
+                        let text = &tn.text;
+                        let mut target_line = 0usize;
+                        let mut line_start = 0usize;
+                        for (i, ch) in text.char_indices() {
+                            if i >= cursor_idx { break; }
+                            if ch == '\n' {
+                                target_line += 1;
+                                line_start = i + 1;
+                            }
+                        }
+                        let col_byte = cursor_idx - line_start;
+
+                        // Walk layout runs to find cursor pixel position
+                        let mut cursor_x = text_screen_x;
+                        let mut cursor_y = text_screen_y;
+                        let mut found = false;
+                        let mut matched_line = false;
+                        let mut last_run_bottom = text_screen_y;
+                        for run in buf.layout_runs() {
+                            let run_bottom = text_screen_y + run.line_top + run.line_height;
+                            if run_bottom > last_run_bottom {
+                                last_run_bottom = run_bottom;
+                            }
+                            if run.line_i != target_line { continue; }
+                            matched_line = true;
+                            cursor_y = text_screen_y + run.line_top;
+                            for glyph in run.glyphs {
+                                if col_byte >= glyph.start && col_byte < glyph.end {
+                                    cursor_x = text_screen_x + glyph.x;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if found { break; }
+                            // Cursor past this run's glyphs — update x to end of run
+                            if let Some(last) = run.glyphs.last() {
+                                if col_byte >= last.end {
+                                    cursor_x = text_screen_x + last.x + last.w;
+                                }
+                            }
+                            // Don't break — text wrapping creates multiple runs
+                            // with the same line_i
+                        }
+                        // No run for target line (empty line after Enter)
+                        if !matched_line {
+                            cursor_y = last_run_bottom;
+                            cursor_x = text_screen_x;
+                        }
+
+                        overlay_instances.push(InstanceRaw {
+                            position: [cursor_x, cursor_y],
+                            size: [cursor_w, line_height],
+                            color: [tc[0], tc[1], tc[2], 0.9],
+                            border_radius: 0.0,
+                        });
+                    }
+                }
+
                 let tc = tn.text_color;
                 let alpha = if tn.text.is_empty() && editing_text_note.map(|(id, _)| id) != Some(*_tn_id) { 100 } else { 230 };
                 let text_color = TextColor::rgba(
@@ -1351,6 +1367,17 @@ impl Gpu {
             }
         }
         self.cached_text_note_bufs = new_tn_cache;
+
+        // Write overlay instances to GPU (after text note cursor is added)
+        let overlay_count = overlay_instances.len().min(MAX_INSTANCES - world_count);
+        if overlay_count > 0 {
+            let offset = (world_count * std::mem::size_of::<InstanceRaw>()) as u64;
+            self.queue.write_buffer(
+                &self.instance_buffer,
+                offset,
+                bytemuck::cast_slice(&overlay_instances[..overlay_count]),
+            );
+        }
 
         // Plugin block name labels (cached shaping, positions recomputed each frame)
         let mut old_pb_cache = std::mem::take(&mut self.cached_plugin_block_bufs);
