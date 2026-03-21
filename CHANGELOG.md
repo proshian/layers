@@ -1,3 +1,4 @@
+- 2026-03-21: feat: add color field to FlatLayerRow, populated from entity (waveform/midi/plugin) during flatten_node (35.2k loc)
 - 2026-03-21: feat: layers panel — hierarchical browser with instruments, MIDI, audio, effects; expand/collapse, reorder, click-to-select (35.1k loc)
 - 2026-03-21: tests: add `instrument_region_id` to `MidiClip` / `StoredMidiClip` struct literals (34.3k loc)
 - 2026-03-21: fix: computer MIDI preview now tracks/releases the right instrument, and Project browser refreshes when reopened (34.2k loc)

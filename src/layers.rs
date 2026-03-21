@@ -51,6 +51,7 @@ pub struct FlatLayerRow {
     pub has_children: bool,
     pub expanded: bool,
     pub label: String,
+    pub color: [f32; 4],
 }
 
 /// Build the default layer tree from current App entity maps.
@@ -188,6 +189,20 @@ fn flatten_node(
         }
     };
 
+    let color = match node.kind {
+        LayerNodeKind::Waveform => {
+            waveforms.get(&node.entity_id).map(|wf| wf.color).unwrap_or([0.5, 0.5, 0.5, 1.0])
+        }
+        LayerNodeKind::MidiClip => {
+            midi_clips.get(&node.entity_id).map(|mc| mc.color).unwrap_or([0.5, 0.5, 0.5, 1.0])
+        }
+        LayerNodeKind::PluginBlock => {
+            plugin_blocks.get(&node.entity_id).map(|pb| pb.color).unwrap_or([0.5, 0.5, 0.5, 1.0])
+        }
+        LayerNodeKind::Instrument => [0.5, 0.5, 0.5, 1.0],
+        LayerNodeKind::EffectRegion => [0.5, 0.5, 0.5, 1.0],
+    };
+
     rows.push(FlatLayerRow {
         entity_id: node.entity_id,
         kind: node.kind,
@@ -195,6 +210,7 @@ fn flatten_node(
         has_children: !node.children.is_empty(),
         expanded: node.expanded,
         label,
+        color,
     });
 
     if node.expanded {
