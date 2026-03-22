@@ -108,6 +108,7 @@ fn snap_to_vertical_grid_waveform_position() {
         disabled: false,
         sample_offset_px: 0.0,
         automation: AutomationData::new(),
+    effect_chain_id: None,
     });
     app.audio_clips.insert(id, AudioClipData {
         samples: Arc::new(Vec::new()),

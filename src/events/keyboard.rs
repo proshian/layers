@@ -937,8 +937,13 @@ impl App {
                         return;
                     }
                     Key::Named(NamedKey::Backspace) => {
+                        let cmd = self.cmd_held();
                         if let Some((_, _, ref mut text)) = self.sample_browser.editing_browser_name {
-                            text.pop();
+                            if cmd {
+                                text.clear();
+                            } else {
+                                text.pop();
+                            }
                         }
                         self.sample_browser.text_dirty = true;
                         self.request_redraw();
@@ -990,8 +995,13 @@ impl App {
                         return;
                     }
                     Key::Named(NamedKey::Backspace) => {
+                        let cmd = self.cmd_held();
                         if let Some((_, ref mut text)) = self.editing_effect_name {
-                            text.pop();
+                            if cmd {
+                                text.clear();
+                            } else {
+                                text.pop();
+                            }
                         }
                         self.request_redraw();
                         return;
@@ -1044,8 +1054,13 @@ impl App {
                         return;
                     }
                     Key::Named(NamedKey::Backspace) => {
+                        let cmd = self.cmd_held();
                         if let Some((_, ref mut text)) = self.editing_waveform_name {
-                            text.pop();
+                            if cmd {
+                                text.clear();
+                            } else {
+                                text.pop();
+                            }
                         }
                         self.request_redraw();
                         return;

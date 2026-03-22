@@ -36,6 +36,7 @@ fn make_waveform(x: f32, y: f32) -> WaveformView {
         disabled: false,
         sample_offset_px: 0.0,
         automation: AutomationData::new(),
+    effect_chain_id: None,
     }
 }
 

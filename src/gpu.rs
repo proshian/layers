@@ -719,6 +719,7 @@ impl Gpu {
         cmd_velocity_hover_note: Option<(crate::entity_id::EntityId, usize)>,
         has_remote_storage: bool,
         right_window: Option<&right_window::RightWindow>,
+        right_window_effect_chain: Option<(&effects::EffectChain, crate::entity_id::EntityId, usize)>,
         input_monitoring: bool,
         text_notes: &indexmap::IndexMap<crate::entity_id::EntityId, crate::text_note::TextNote>,
         editing_text_note: Option<(crate::entity_id::EntityId, usize)>,
@@ -770,6 +771,13 @@ impl Gpu {
 
         if let Some(rw) = right_window {
             overlay_instances.extend(rw.build_instances(settings, w, h, self.scale_factor));
+            let (chain, chain_id, ref_count) = match &right_window_effect_chain {
+                Some((c, id, rc)) => (Some(*c), Some(*id), *rc),
+                None => (None, None, 0),
+            };
+            overlay_instances.extend(rw.build_effect_chain_instances(
+                chain, chain_id, ref_count, settings, w, h, self.scale_factor, None, 0.0,
+            ));
         }
 
         if let Some((_, pos)) = browser_drag_ghost {
@@ -892,6 +900,27 @@ impl Gpu {
         // Right window text
         if let Some(rw) = right_window {
             for te in rw.get_text_entries(w, h, scale) {
+                let bounds = match te.bounds {
+                    Some([l, t, r, b]) => TextBounds {
+                        left: l as i32, top: t as i32, right: r as i32, bottom: b as i32,
+                    },
+                    None => full_bounds,
+                };
+                let buf = shape_text_entry(&mut self.font_system, &te);
+                text_buffers.push(buf);
+                text_meta.push((
+                    te.x,
+                    te.y,
+                    TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
+                    bounds,
+                ));
+            }
+            // Effect chain text entries
+            let (chain, chain_id, ref_count) = match &right_window_effect_chain {
+                Some((c, id, rc)) => (Some(*c), Some(*id), *rc),
+                None => (None, None, 0),
+            };
+            for te in rw.get_effect_chain_text_entries(chain, chain_id, ref_count, w, h, scale) {
                 let bounds = match te.bounds {
                     Some([l, t, r, b]) => TextBounds {
                         left: l as i32, top: t as i32, right: r as i32, bottom: b as i32,
@@ -1398,9 +1427,9 @@ impl Gpu {
                 let clip_right = clip_left + note_screen_w as i32;
                 let clip_bottom = clip_top + note_screen_h as i32;
                 let bounds = TextBounds {
-                    left: clip_left.max(0),
+                    left: clip_left.max(browser_right as i32),
                     top: clip_top.max(0),
-                    right: clip_right.min(w as i32),
+                    right: clip_right.min(right_panel_left as i32),
                     bottom: clip_bottom.min(h as i32),
                 };
 

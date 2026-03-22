@@ -309,6 +309,11 @@ enum DragState {
         nwse: bool,
         before: text_note::TextNote,
     },
+    DraggingEffectSlot {
+        chain_id: EntityId,
+        slot_idx: usize,
+        start_y: f32,
+    },
 }
 
 /// Captures before-state of an entity for drag operations.
@@ -520,6 +525,7 @@ struct App {
     arrow_nudge_overlap_snapshots: IndexMap<EntityId, WaveformView>,
     arrow_nudge_overlap_temp_splits: Vec<EntityId>,
     current_project_name: String,
+    effect_chains: IndexMap<EntityId, effects::EffectChain>,
     effect_regions: IndexMap<EntityId, effects::EffectRegion>,
     plugin_blocks: IndexMap<EntityId, effects::PluginBlock>,
     components: IndexMap<EntityId, component::ComponentDef>,
@@ -651,6 +657,7 @@ impl App {
             arrow_nudge_overlap_snapshots: IndexMap::new(),
             arrow_nudge_overlap_temp_splits: Vec::new(),
             current_project_name: project_name.into(),
+            effect_chains: IndexMap::new(),
             effect_regions: IndexMap::new(),
             plugin_blocks: IndexMap::new(),
             components: IndexMap::new(),
@@ -1050,6 +1057,7 @@ impl App {
                         disabled: sw.disabled,
                         sample_offset_px: sw.sample_offset_px,
                         automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
+                        effect_chain_id: None,
                     }))
                     .collect();
 
@@ -1428,6 +1436,7 @@ impl App {
             arrow_nudge_overlap_snapshots: IndexMap::new(),
             arrow_nudge_overlap_temp_splits: Vec::new(),
             current_project_name: project_name,
+            effect_chains: IndexMap::new(),
             effect_regions: restored_effect_regions,
             plugin_blocks: restored_plugin_blocks,
             components: restored_components,
@@ -1997,6 +2006,7 @@ impl App {
                 disabled: sw.disabled,
                 sample_offset_px: sw.sample_offset_px,
                 automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
+                effect_chain_id: None,
             }))
             .collect();
 
@@ -2857,6 +2867,64 @@ impl App {
         self.right_window = None;
     }
 
+    /// Open the right window inspector for a specific waveform (used when adding effects).
+    pub(crate) fn open_right_window_for(&mut self, wf_id: EntityId) {
+        if let Some(wf) = self.waveforms.get(&wf_id) {
+            self.right_window = Some(ui::right_window::RightWindow {
+                waveform_id: wf_id,
+                volume: wf.volume,
+                pan: wf.pan,
+                warp_mode: wf.warp_mode,
+                sample_bpm: wf.sample_bpm,
+                pitch_semitones: wf.pitch_semitones,
+                is_reversed: wf.is_reversed,
+                vol_dragging: false,
+                pan_dragging: false,
+                sample_bpm_dragging: false,
+                pitch_dragging: false,
+                drag_start_y: 0.0,
+                drag_start_value: 0.0,
+                vol_entry: ui::value_entry::ValueEntry::new(),
+                sample_bpm_entry: ui::value_entry::ValueEntry::new(),
+                pitch_entry: ui::value_entry::ValueEntry::new(),
+                vol_fader_focused: false,
+                pan_knob_focused: false,
+                pitch_focused: false,
+                sample_bpm_focused: false,
+            });
+        }
+    }
+
+    /// Detach a waveform's effect chain — clone the shared chain into a new independent one.
+    pub(crate) fn detach_effect_chain(&mut self, wf_id: EntityId) {
+        let chain_id = match self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id) {
+            Some(id) => id,
+            None => return,
+        };
+        let ref_count = ui::right_window::RightWindow::chain_ref_count(chain_id, &self.waveforms);
+        if ref_count <= 1 {
+            return; // Already unique
+        }
+        let Some(chain) = self.effect_chains.get(&chain_id) else { return; };
+        let mut new_chain = effects::EffectChain::new();
+        for slot in &chain.slots {
+            let mut new_slot = effects::EffectChainSlot::new(
+                slot.plugin_id.clone(),
+                slot.plugin_name.clone(),
+                slot.plugin_path.clone(),
+            );
+            new_slot.bypass = slot.bypass;
+            // Note: plugin GUI instances are not cloned — new instances would need to be opened
+            new_chain.slots.push(new_slot);
+        }
+        let new_chain_id = new_id();
+        self.effect_chains.insert(new_chain_id, new_chain);
+        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+            wf.effect_chain_id = Some(new_chain_id);
+        }
+        self.request_redraw();
+    }
+
     #[cfg(feature = "native")]
     fn sync_audio_clips(&self) {
         if let Some(engine) = &self.audio_engine {
@@ -3418,6 +3486,7 @@ impl App {
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),
+            effect_chain_id: None,
             };
             let ac_data = AudioClipData {
                 samples: Arc::new(Vec::new()),
@@ -3504,6 +3573,10 @@ impl App {
     fn save_browser_folders_to_settings(&self) {}
     #[cfg(not(feature = "native"))]
     fn add_plugin_to_selected_effect_region(&mut self, _plugin_id: &str, _plugin_name: &str) {}
+    #[cfg(not(feature = "native"))]
+    fn add_plugin_to_waveform_chain(&mut self, _wf_id: EntityId, _plugin_id: &str, _plugin_name: &str) {}
+    #[cfg(not(feature = "native"))]
+    fn open_effect_chain_slot_gui(&mut self, _chain_id: EntityId, _slot_idx: usize) {}
     #[cfg(not(feature = "native"))]
     fn add_instrument(&mut self, _plugin_id: &str, _plugin_name: &str) {}
     #[cfg(not(feature = "native"))]
@@ -5032,6 +5105,7 @@ impl App {
             disabled: false,
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
+        effect_chain_id: None,
         };
 
         let right_clip = AudioClipData {
@@ -5067,6 +5141,7 @@ impl App {
             disabled: false,
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
+        effect_chain_id: None,
         };
 
         // Replace original with left half
@@ -5866,6 +5941,7 @@ impl App {
             disabled: true, // disabled until loaded
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
+        effect_chain_id: None,
         };
         self.waveforms.insert(wf_id, placeholder);
         self.pending_audio_loads_count += 1;
@@ -5919,6 +5995,7 @@ impl App {
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),
+            effect_chain_id: None,
             };
             let ac_data = AudioClipData {
                 samples: loaded.samples.clone(),

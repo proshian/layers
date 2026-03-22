@@ -267,6 +267,75 @@ pub fn collect_plugins_for_region(
     overlapping.into_iter().map(|(id, _)| id).collect()
 }
 
+// ---------------------------------------------------------------------------
+// EffectChain — ordered list of VST3 effect plugins attached to a waveform
+// ---------------------------------------------------------------------------
+
+/// A shared, ordered effect chain that can be referenced by multiple waveforms.
+/// When a waveform is duplicated, the copy shares the same chain (by ID).
+#[derive(Clone)]
+pub struct EffectChain {
+    pub slots: Vec<EffectChainSlot>,
+}
+
+/// A single slot in an effect chain — one VST3 plugin instance.
+#[derive(Clone)]
+pub struct EffectChainSlot {
+    pub id: crate::entity_id::EntityId,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub plugin_path: PathBuf,
+    pub bypass: bool,
+    pub gui: Arc<Mutex<Option<PluginGuiHandle>>>,
+    pub pending_state: Option<Vec<u8>>,
+    pub pending_params: Option<Vec<f64>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct EffectChainSlotSnapshot {
+    pub id: crate::entity_id::EntityId,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub plugin_path: PathBuf,
+    pub bypass: bool,
+}
+
+impl EffectChainSlot {
+    pub fn new(plugin_id: String, plugin_name: String, plugin_path: PathBuf) -> Self {
+        Self {
+            id: crate::entity_id::new_id(),
+            plugin_id,
+            plugin_name,
+            plugin_path,
+            bypass: false,
+            gui: Arc::new(Mutex::new(None)),
+            pending_state: None,
+            pending_params: None,
+        }
+    }
+
+    pub fn snapshot(&self) -> EffectChainSlotSnapshot {
+        EffectChainSlotSnapshot {
+            id: self.id,
+            plugin_id: self.plugin_id.clone(),
+            plugin_name: self.plugin_name.clone(),
+            plugin_path: self.plugin_path.clone(),
+            bypass: self.bypass,
+        }
+    }
+}
+
+impl EffectChain {
+    pub fn new() -> Self {
+        Self { slots: Vec::new() }
+    }
+
+    /// How many waveforms reference this chain (computed externally).
+    pub fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+}
+
 pub fn build_plugin_block_instances(
     block: &PluginBlock,
     camera: &Camera,

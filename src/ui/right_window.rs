@@ -21,6 +21,12 @@ const PAN_KNOB_Y_OFFSET: f32 = 264.0;
 const REVERSE_BUTTON_Y_OFFSET: f32 = 326.0;
 const PITCH_KNOB_Y_OFFSET: f32 = 368.0;
 
+// Effect chain section
+const EFFECT_CHAIN_TOP_OFFSET: f32 = 460.0;
+const EFFECT_SLOT_HEIGHT: f32 = 30.0;
+const EFFECT_SLOT_GAP: f32 = 2.0;
+const EFFECT_ADD_BUTTON_H: f32 = 24.0;
+
 
 pub struct VolFaderLayout {
     pub track_pos: [f32; 2],
@@ -975,5 +981,262 @@ impl RightWindow {
         }
 
         out
+    }
+
+    // --- Effect chain section ---
+
+    /// Y position where the effect chain section starts (screen coords).
+    pub fn effect_chain_top(screen_w: f32, screen_h: f32, scale: f32) -> f32 {
+        let (pp, _) = Self::panel_rect(screen_w, screen_h, scale);
+        pp[1] + HEADER_HEIGHT * scale + EFFECT_CHAIN_TOP_OFFSET * scale
+    }
+
+    /// Rectangle for a single effect slot at the given index.
+    pub fn effect_slot_rect(idx: usize, screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
+        let top = Self::effect_chain_top(screen_w, screen_h, scale);
+        // Leave space for "EFFECTS" label (20px)
+        let slot_y = top + 20.0 * scale + idx as f32 * (EFFECT_SLOT_HEIGHT + EFFECT_SLOT_GAP) * scale;
+        let margin = 8.0 * scale;
+        ([pp[0] + margin, slot_y], [ps[0] - margin * 2.0, EFFECT_SLOT_HEIGHT * scale])
+    }
+
+    /// Rectangle for the bypass toggle within a slot.
+    pub fn effect_slot_bypass_rect(idx: usize, screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (sp, ss) = Self::effect_slot_rect(idx, screen_w, screen_h, scale);
+        let sz = 14.0 * scale;
+        let margin = 6.0 * scale;
+        ([sp[0] + margin, sp[1] + (ss[1] - sz) * 0.5], [sz, sz])
+    }
+
+    /// Rectangle for the delete button within a slot.
+    pub fn effect_slot_delete_rect(idx: usize, screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (sp, ss) = Self::effect_slot_rect(idx, screen_w, screen_h, scale);
+        let sz = 14.0 * scale;
+        let margin = 6.0 * scale;
+        ([sp[0] + ss[0] - sz - margin, sp[1] + (ss[1] - sz) * 0.5], [sz, sz])
+    }
+
+    /// Compute the shared-chain reference count for display.
+    pub fn chain_ref_count(chain_id: EntityId, waveforms: &indexmap::IndexMap<EntityId, crate::ui::waveform::WaveformView>) -> usize {
+        waveforms.values().filter(|w| w.effect_chain_id == Some(chain_id)).count()
+    }
+
+    /// Build GPU instances for the effect chain section.
+    pub fn build_effect_chain_instances(
+        &self,
+        chain: Option<&crate::effects::EffectChain>,
+        chain_id: Option<EntityId>,
+        ref_count: usize,
+        settings: &crate::settings::Settings,
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+        dragging_slot_idx: Option<usize>,
+        drag_offset_y: f32,
+    ) -> Vec<InstanceRaw> {
+        let mut out = Vec::new();
+        let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
+        let top = Self::effect_chain_top(screen_w, screen_h, scale);
+
+        // Divider line above effects section
+        out.push(InstanceRaw {
+            position: [pp[0] + 8.0 * scale, top - 6.0 * scale],
+            size: [ps[0] - 16.0 * scale, 1.0 * scale],
+            color: [1.0, 1.0, 1.0, 0.06],
+            border_radius: 0.0,
+        });
+
+        let Some(chain) = chain else { return out; };
+
+        for (i, slot) in chain.slots.iter().enumerate() {
+            let (mut sp, ss) = Self::effect_slot_rect(i, screen_w, screen_h, scale);
+
+            // If this slot is being dragged, offset its position
+            if dragging_slot_idx == Some(i) {
+                sp[1] += drag_offset_y;
+            }
+
+            // Slot background
+            let bg_color = if slot.bypass {
+                [0.14, 0.14, 0.17, 0.8]
+            } else {
+                [0.18, 0.18, 0.22, 1.0]
+            };
+            out.push(InstanceRaw {
+                position: sp,
+                size: ss,
+                color: bg_color,
+                border_radius: 4.0 * scale,
+            });
+
+            // Bypass indicator (small colored dot)
+            let (bp, bs) = Self::effect_slot_bypass_rect(i, screen_w, screen_h, scale);
+            let bypass_color = if slot.bypass {
+                [0.4, 0.4, 0.45, 0.6]
+            } else {
+                settings.theme.accent
+            };
+            // Adjust bypass position if dragging
+            let mut bp_adj = bp;
+            if dragging_slot_idx == Some(i) { bp_adj[1] += drag_offset_y; }
+            out.push(InstanceRaw {
+                position: bp_adj,
+                size: bs,
+                color: bypass_color,
+                border_radius: bs[0] * 0.5,
+            });
+
+            // Delete button (small X area)
+            let (dp, ds) = Self::effect_slot_delete_rect(i, screen_w, screen_h, scale);
+            let mut dp_adj = dp;
+            if dragging_slot_idx == Some(i) { dp_adj[1] += drag_offset_y; }
+            out.push(InstanceRaw {
+                position: dp_adj,
+                size: ds,
+                color: [0.5, 0.3, 0.3, 0.5],
+                border_radius: 2.0 * scale,
+            });
+        }
+
+        out
+    }
+
+    /// Build text entries for the effect chain section.
+    pub fn get_effect_chain_text_entries(
+        &self,
+        chain: Option<&crate::effects::EffectChain>,
+        chain_id: Option<EntityId>,
+        ref_count: usize,
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+    ) -> Vec<TextEntry> {
+        let mut out = Vec::new();
+        let (pp, _) = Self::panel_rect(screen_w, screen_h, scale);
+        let top = Self::effect_chain_top(screen_w, screen_h, scale);
+        let rw_w = RIGHT_WINDOW_WIDTH * scale;
+        let label_font = 10.0 * scale;
+        let label_line = 14.0 * scale;
+        let val_font = 11.0 * scale;
+        let val_line = 14.0 * scale;
+
+        // "EFFECTS" header with optional ref count badge
+        let header = if ref_count > 1 {
+            format!("EFFECTS  ×{}", ref_count)
+        } else {
+            "EFFECTS".to_string()
+        };
+        out.push(TextEntry {
+            text: header,
+            x: pp[0] + 12.0 * scale,
+            y: top,
+            font_size: label_font,
+            line_height: label_line,
+            max_width: rw_w,
+            color: [120, 140, 170, 200],
+            weight: 400,
+            bounds: None,
+            center: false,
+        });
+
+        // "Detach" button when shared
+        if ref_count > 1 {
+            let (dp, ds) = Self::detach_button_rect(screen_w, screen_h, scale);
+            out.push(TextEntry {
+                text: "Detach".to_string(),
+                x: dp[0],
+                y: dp[1],
+                font_size: label_font,
+                line_height: label_line,
+                max_width: ds[0],
+                color: [160, 180, 220, 200],
+                weight: 400,
+                bounds: None,
+                center: false,
+            });
+        }
+
+        let Some(chain) = chain else { return out; };
+
+        for (i, slot) in chain.slots.iter().enumerate() {
+            let (sp, ss) = Self::effect_slot_rect(i, screen_w, screen_h, scale);
+            let text_x = sp[0] + 26.0 * scale; // after bypass dot
+            let text_y = sp[1] + (ss[1] - val_line) * 0.5;
+            let alpha: u8 = if slot.bypass { 120 } else { 220 };
+            out.push(TextEntry {
+                text: slot.plugin_name.clone(),
+                x: text_x,
+                y: text_y,
+                font_size: val_font,
+                line_height: val_line,
+                max_width: ss[0] - 52.0 * scale, // leave room for delete button
+                color: [200, 200, 210, alpha],
+                weight: 400,
+                bounds: None,
+                center: false,
+            });
+
+            // "×" delete button text
+            let (dp, ds) = Self::effect_slot_delete_rect(i, screen_w, screen_h, scale);
+            out.push(TextEntry {
+                text: "×".to_string(),
+                x: dp[0],
+                y: dp[1] + (ds[1] - val_line) * 0.5,
+                font_size: val_font,
+                line_height: val_line,
+                max_width: ds[0],
+                color: [180, 140, 140, 180],
+                weight: 400,
+                bounds: None,
+                center: false,
+            });
+        }
+
+        out
+    }
+
+    /// Rectangle for the "Detach" button (shown when chain is shared).
+    pub fn detach_button_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
+        let top = Self::effect_chain_top(screen_w, screen_h, scale);
+        let w = 50.0 * scale;
+        let h = 14.0 * scale;
+        ([pp[0] + ps[0] - w - 8.0 * scale, top], [w, h])
+    }
+
+    /// Hit test: is pos on the detach button?
+    pub fn hit_test_detach_button(&self, pos: [f32; 2], ref_count: usize, screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if ref_count <= 1 { return false; }
+        let (dp, ds) = Self::detach_button_rect(screen_w, screen_h, scale);
+        pos[0] >= dp[0] && pos[0] <= dp[0] + ds[0]
+            && pos[1] >= dp[1] && pos[1] <= dp[1] + ds[1]
+    }
+
+    /// Hit test: which effect slot index is at this screen position?
+    pub fn hit_test_effect_slot(&self, pos: [f32; 2], slot_count: usize, screen_w: f32, screen_h: f32, scale: f32) -> Option<usize> {
+        for i in 0..slot_count {
+            let (sp, ss) = Self::effect_slot_rect(i, screen_w, screen_h, scale);
+            if pos[0] >= sp[0] && pos[0] <= sp[0] + ss[0]
+                && pos[1] >= sp[1] && pos[1] <= sp[1] + ss[1]
+            {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Hit test: is pos on the bypass toggle of slot at index?
+    pub fn hit_test_effect_bypass(&self, pos: [f32; 2], idx: usize, screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        let (bp, bs) = Self::effect_slot_bypass_rect(idx, screen_w, screen_h, scale);
+        pos[0] >= bp[0] && pos[0] <= bp[0] + bs[0]
+            && pos[1] >= bp[1] && pos[1] <= bp[1] + bs[1]
+    }
+
+    /// Hit test: is pos on the delete button of slot at index?
+    pub fn hit_test_effect_delete(&self, pos: [f32; 2], idx: usize, screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        let (dp, ds) = Self::effect_slot_delete_rect(idx, screen_w, screen_h, scale);
+        pos[0] >= dp[0] && pos[0] <= dp[0] + ds[0]
+            && pos[1] >= dp[1] && pos[1] <= dp[1] + ds[1]
     }
 }

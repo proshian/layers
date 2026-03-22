@@ -1,3 +1,6 @@
+- 2026-03-22: feat: cmd+delete clears text in rename mode (37.8k loc)
+- 2026-03-22: feat: per-waveform VST3 effect chains — drop plugins onto samples, shared chains with detach, bypass/delete/reorder slots in right panel (37.8k loc)
+- 2026-03-22: fix: text note text no longer bleeds through browser and right panels — clip bounds now match waveform label behavior (36.9k loc)
 - 2026-03-22: fix: sample color change now renders immediately without requiring mouse move — call mark_dirty() in SetSampleColor handler (36.9k loc)
 - 2026-03-22: fix: clicking outside canvas effect region or waveform cancels inline name editing (36.9k loc)
 - 2026-03-22: remove origin axis lines (red/green cross) from canvas center (36.9k loc)

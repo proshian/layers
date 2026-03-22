@@ -171,6 +171,73 @@ impl App {
         self.sync_audio_clips();
     }
 
+    /// Add a VST3 effect plugin to a waveform's shared effect chain.
+    /// Creates a new chain if the waveform doesn't have one yet.
+    pub(crate) fn add_plugin_to_waveform_chain(&mut self, wf_id: EntityId, plugin_id: &str, plugin_name: &str) {
+        self.ensure_plugins_scanned();
+        let _sample_rate = 48000.0;
+        let _block_size = self.settings.buffer_size;
+
+        let plugin_path = self
+            .plugin_registry
+            .plugins
+            .iter()
+            .find(|e| e.info.unique_id == plugin_id)
+            .map(|e| e.info.path.clone())
+            .unwrap_or_default();
+
+        let mut slot = effects::EffectChainSlot::new(
+            plugin_id.to_string(),
+            plugin_name.to_string(),
+            plugin_path,
+        );
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let path = slot.plugin_path.to_string_lossy().to_string();
+            if !path.is_empty() {
+                if let Some(gui) = vst3_gui::Vst3Gui::open(&path, plugin_id, plugin_name) {
+                    gui.setup_processing(_sample_rate, _block_size as i32);
+                    gui.hide();
+                    println!("  Opened effect chain plugin '{}'", plugin_name);
+                    if let Ok(mut g) = slot.gui.lock() {
+                        *g = Some(gui);
+                    }
+                }
+            }
+        }
+
+        // Get or create effect chain for this waveform
+        let chain_id = if let Some(wf) = self.waveforms.get(&wf_id) {
+            wf.effect_chain_id
+        } else {
+            return;
+        };
+
+        let chain_id = match chain_id {
+            Some(id) => id,
+            None => {
+                let id = new_id();
+                self.effect_chains.insert(id, effects::EffectChain::new());
+                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                    wf.effect_chain_id = Some(id);
+                }
+                id
+            }
+        };
+
+        if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
+            chain.slots.push(slot);
+        }
+
+        // Open the right window for this waveform
+        self.open_right_window_for(wf_id);
+        self.selected.clear();
+        self.selected.push(HitTarget::Waveform(wf_id));
+        println!("  Added '{}' to waveform effect chain", plugin_name);
+        self.request_redraw();
+    }
+
     pub(crate) fn add_plugin_to_selected_effect_region(&mut self, plugin_id: &str, plugin_name: &str) {
         let region_id = self.selected.iter().find_map(|t| {
             if let HitTarget::EffectRegion(id) = t {
@@ -202,6 +269,20 @@ impl App {
         };
 
         self.add_plugin_block(position, plugin_id, plugin_name);
+    }
+
+    /// Open the VST3 GUI for a specific slot in an effect chain.
+    pub(crate) fn open_effect_chain_slot_gui(&mut self, chain_id: EntityId, slot_idx: usize) {
+        let Some(chain) = self.effect_chains.get(&chain_id) else { return; };
+        let Some(slot) = chain.slots.get(slot_idx) else { return; };
+        let gui_arc = slot.gui.clone();
+        drop(chain);
+
+        if let Ok(guard) = gui_arc.lock() {
+            if let Some(gui) = guard.as_ref() {
+                gui.show();
+            }
+        };
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]

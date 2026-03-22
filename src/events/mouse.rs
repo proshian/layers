@@ -686,6 +686,73 @@ impl App {
                             self.request_redraw();
                             return;
                         }
+
+                        // --- Effect chain slot clicks ---
+                        {
+                            let wf_id = rw.waveform_id;
+                            let chain_id = self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id);
+                            let slot_count = chain_id
+                                .and_then(|cid| self.effect_chains.get(&cid))
+                                .map_or(0, |c| c.slots.len());
+                            let ref_count = chain_id.map_or(0, |cid| {
+                                ui::right_window::RightWindow::chain_ref_count(cid, &self.waveforms)
+                            });
+
+                            // Detach button
+                            if rw.hit_test_detach_button(self.mouse_pos, ref_count, sw, sh, scale) {
+                                self.detach_effect_chain(wf_id);
+                                self.request_redraw();
+                                return;
+                            }
+
+                            if let Some(slot_idx) = rw.hit_test_effect_slot(self.mouse_pos, slot_count, sw, sh, scale) {
+                                // Bypass toggle
+                                if rw.hit_test_effect_bypass(self.mouse_pos, slot_idx, sw, sh, scale) {
+                                    if let Some(cid) = chain_id {
+                                        if let Some(chain) = self.effect_chains.get_mut(&cid) {
+                                            if let Some(slot) = chain.slots.get_mut(slot_idx) {
+                                                slot.bypass = !slot.bypass;
+                                            }
+                                        }
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                }
+                                // Delete button
+                                if rw.hit_test_effect_delete(self.mouse_pos, slot_idx, sw, sh, scale) {
+                                    if let Some(cid) = chain_id {
+                                        if let Some(chain) = self.effect_chains.get_mut(&cid) {
+                                            if slot_idx < chain.slots.len() {
+                                                chain.slots.remove(slot_idx);
+                                            }
+                                            // If chain is now empty, remove it
+                                            if chain.slots.is_empty() {
+                                                self.effect_chains.shift_remove(&cid);
+                                                // Clear chain reference from all waveforms that used it
+                                                for wf in self.waveforms.values_mut() {
+                                                    if wf.effect_chain_id == Some(cid) {
+                                                        wf.effect_chain_id = None;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                }
+                                // Click on slot body — start potential drag for reorder
+                                if let Some(cid) = chain_id {
+                                    self.drag = DragState::DraggingEffectSlot {
+                                        chain_id: cid,
+                                        slot_idx,
+                                        start_y: self.mouse_pos[1],
+                                    };
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+
                         // Click inside panel but not on knob - don't propagate
                         self.request_redraw();
                         return;
@@ -2115,6 +2182,33 @@ impl App {
                     }
                 }
 
+                // --- finish effect slot drag (reorder or click-to-open) ---
+                if let DragState::DraggingEffectSlot { chain_id, slot_idx, start_y } = self.drag {
+                    let dy = (self.mouse_pos[1] - start_y).abs();
+                    let (sw2, sh, scale) = self.screen_info();
+                    if dy < 5.0 * scale {
+                        // Minimal movement — treat as click to open plugin GUI
+                        self.open_effect_chain_slot_gui(chain_id, slot_idx);
+                    } else {
+                        // Reorder: determine target index based on mouse position
+                        let slot_count = self.effect_chains.get(&chain_id).map_or(0, |c| c.slots.len());
+                        if let Some(rw) = &self.right_window {
+                            if let Some(target_idx) = rw.hit_test_effect_slot(self.mouse_pos, slot_count, sw2, sh, scale) {
+                                if target_idx != slot_idx {
+                                    if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
+                                        let slot = chain.slots.remove(slot_idx);
+                                        let insert_at = if target_idx > slot_idx { target_idx } else { target_idx };
+                                        chain.slots.insert(insert_at.min(chain.slots.len()), slot);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.drag = DragState::None;
+                    self.request_redraw();
+                    return;
+                }
+
                 // --- drop from browser to canvas ---
                 if let DragState::DraggingFromBrowser { ref path, .. } = self.drag {
                     let (_, sh, scale) = self.screen_info();
@@ -2146,13 +2240,25 @@ impl App {
                         if is_instrument {
                             self.add_instrument(&plugin_id, &plugin_name);
                         } else {
+                            // Check if dropped on a waveform — add to its effect chain
                             let world = self.camera.screen_to_world(self.mouse_pos);
-                            self.add_plugin_block(world, &plugin_id, &plugin_name);
-                            if let Some(&pb_id) = self.plugin_blocks.keys().last() {
-                                let snap = self.plugin_blocks[&pb_id].snapshot();
-                                self.push_op(crate::operations::Operation::CreatePluginBlock { id: pb_id, data: snap });
-                                self.selected.clear();
-                                self.selected.push(HitTarget::PluginBlock(pb_id));
+                            let mut target_wf: Option<EntityId> = None;
+                            for (&wf_id, wf) in self.waveforms.iter().rev() {
+                                if !wf.disabled && point_in_rect(world, wf.position, wf.size) {
+                                    target_wf = Some(wf_id);
+                                    break;
+                                }
+                            }
+                            if let Some(wf_id) = target_wf {
+                                self.add_plugin_to_waveform_chain(wf_id, &plugin_id, &plugin_name);
+                            } else {
+                                self.add_plugin_block(world, &plugin_id, &plugin_name);
+                                if let Some(&pb_id) = self.plugin_blocks.keys().last() {
+                                    let snap = self.plugin_blocks[&pb_id].snapshot();
+                                    self.push_op(crate::operations::Operation::CreatePluginBlock { id: pb_id, data: snap });
+                                    self.selected.clear();
+                                    self.selected.push(HitTarget::PluginBlock(pb_id));
+                                }
                             }
                         }
                     }

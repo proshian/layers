@@ -198,6 +198,22 @@ impl App {
                 },
                 self.remote_storage.is_some(),
                 self.right_window.as_ref(),
+                {
+                    if let Some(rw) = &self.right_window {
+                        let wf = self.waveforms.get(&rw.waveform_id);
+                        let chain_id = wf.and_then(|w| w.effect_chain_id);
+                        if let Some(cid) = chain_id {
+                            self.effect_chains.get(&cid).map(|c| {
+                                let ref_count = crate::ui::right_window::RightWindow::chain_ref_count(cid, &self.waveforms);
+                                (c, cid, ref_count)
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                },
                 self.input_monitoring,
                 &self.text_notes,
                 self.editing_text_note.as_ref().map(|e| (e.note_id, e.cursor)),

@@ -139,6 +139,9 @@ pub struct WaveformView {
     pub disabled: bool,
     pub sample_offset_px: f32,
     pub automation: AutomationData,
+    /// Shared effect chain — multiple waveforms can reference the same chain ID.
+    #[serde(default)]
+    pub effect_chain_id: Option<crate::entity_id::EntityId>,
 }
 
 fn default_pan() -> f32 {
