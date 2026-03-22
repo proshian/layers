@@ -1034,6 +1034,7 @@ impl RightWindow {
         scale: f32,
         dragging_slot_idx: Option<usize>,
         drag_offset_y: f32,
+        hover_slot_idx: Option<usize>,
     ) -> Vec<InstanceRaw> {
         let mut out = Vec::new();
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
@@ -1060,42 +1061,72 @@ impl RightWindow {
         let Some(chain) = chain else { return out; };
 
         for (i, slot) in chain.slots.iter().enumerate() {
-            let (mut sp, ss) = Self::effect_slot_rect(i, screen_w, screen_h, scale);
+            let (sp, ss) = Self::effect_slot_rect(i, screen_w, screen_h, scale);
 
-            // If this slot is being dragged, offset its position
             if dragging_slot_idx == Some(i) {
-                sp[1] += drag_offset_y;
+                // Dim placeholder at original position
+                out.push(InstanceRaw {
+                    position: sp,
+                    size: ss,
+                    color: [0.14, 0.14, 0.17, 0.35],
+                    border_radius: 4.0 * scale,
+                });
+
+                // Floating lifted copy follows cursor
+                let mut fp = sp;
+                fp[1] += drag_offset_y;
+                out.push(InstanceRaw {
+                    position: fp,
+                    size: ss,
+                    color: [0.26, 0.26, 0.32, 1.0],
+                    border_radius: 4.0 * scale,
+                });
+
+                // Bypass dot on floating copy
+                let (bp, bs) = Self::effect_slot_bypass_rect(i, screen_w, screen_h, scale);
+                let bypass_color = if slot.bypass {
+                    [0.4, 0.4, 0.45, 0.6]
+                } else {
+                    settings.theme.accent
+                };
+                let mut bpf = bp;
+                bpf[1] += drag_offset_y;
+                out.push(InstanceRaw {
+                    position: bpf,
+                    size: bs,
+                    color: bypass_color,
+                    border_radius: bs[0] * 0.5,
+                });
+            } else {
+                // Highlight target slot under cursor
+                let bg_color = if hover_slot_idx == Some(i) && dragging_slot_idx.is_some() {
+                    [0.22, 0.24, 0.32, 1.0]
+                } else if slot.bypass {
+                    [0.14, 0.14, 0.17, 0.8]
+                } else {
+                    [0.18, 0.18, 0.22, 1.0]
+                };
+                out.push(InstanceRaw {
+                    position: sp,
+                    size: ss,
+                    color: bg_color,
+                    border_radius: 4.0 * scale,
+                });
+
+                // Bypass indicator dot
+                let (bp, bs) = Self::effect_slot_bypass_rect(i, screen_w, screen_h, scale);
+                let bypass_color = if slot.bypass {
+                    [0.4, 0.4, 0.45, 0.6]
+                } else {
+                    settings.theme.accent
+                };
+                out.push(InstanceRaw {
+                    position: bp,
+                    size: bs,
+                    color: bypass_color,
+                    border_radius: bs[0] * 0.5,
+                });
             }
-
-            // Slot background
-            let bg_color = if slot.bypass {
-                [0.14, 0.14, 0.17, 0.8]
-            } else {
-                [0.18, 0.18, 0.22, 1.0]
-            };
-            out.push(InstanceRaw {
-                position: sp,
-                size: ss,
-                color: bg_color,
-                border_radius: 4.0 * scale,
-            });
-
-            // Bypass indicator (small colored dot)
-            let (bp, bs) = Self::effect_slot_bypass_rect(i, screen_w, screen_h, scale);
-            let bypass_color = if slot.bypass {
-                [0.4, 0.4, 0.45, 0.6]
-            } else {
-                settings.theme.accent
-            };
-            // Adjust bypass position if dragging
-            let mut bp_adj = bp;
-            if dragging_slot_idx == Some(i) { bp_adj[1] += drag_offset_y; }
-            out.push(InstanceRaw {
-                position: bp_adj,
-                size: bs,
-                color: bypass_color,
-                border_radius: bs[0] * 0.5,
-            });
 
             // Delete icon is rendered via get_effect_chain_icon_entries
         }
@@ -1112,6 +1143,8 @@ impl RightWindow {
         screen_w: f32,
         screen_h: f32,
         scale: f32,
+        dragging_slot_idx: Option<usize>,
+        drag_offset_y: f32,
     ) -> Vec<TextEntry> {
         let mut out = Vec::new();
         let (pp, _) = Self::panel_rect(screen_w, screen_h, scale);
@@ -1158,12 +1191,36 @@ impl RightWindow {
             });
         }
 
+        // "Add Effect" label next to the plus icon (shown even when no chain)
+        let slot_count_for_btn = chain.map(|c| c.slots.len()).unwrap_or(0);
+        let (bp, bs) = Self::add_effect_button_rect(slot_count_for_btn, screen_w, screen_h, scale);
+        let icon_size = 14.0 * scale;
+        let padding = 12.0 * scale;
+        let icon_x = bp[0] + padding;
+        out.push(TextEntry {
+            text: "Add Effect".to_string(),
+            x: icon_x + icon_size + 6.0 * scale,
+            y: bp[1] + (bs[1] - 12.0 * scale) * 0.5,
+            font_size: 12.0 * scale,
+            line_height: 14.0 * scale,
+            max_width: bs[0] - padding - icon_size - 6.0 * scale,
+            color: [160, 180, 220, 180],
+            weight: 400,
+            bounds: None,
+            center: false,
+        });
+
         let Some(chain) = chain else { return out; };
 
         for (i, slot) in chain.slots.iter().enumerate() {
             let (sp, ss) = Self::effect_slot_rect(i, screen_w, screen_h, scale);
             let text_x = sp[0] + 26.0 * scale; // after bypass dot
-            let text_y = sp[1] + (ss[1] - val_line) * 0.5;
+            let base_text_y = sp[1] + (ss[1] - val_line) * 0.5;
+            let text_y = if dragging_slot_idx == Some(i) {
+                base_text_y + drag_offset_y
+            } else {
+                base_text_y
+            };
             let alpha: u8 = if slot.bypass { 120 } else { 220 };
             out.push(TextEntry {
                 text: slot.plugin_name.clone(),
@@ -1208,6 +1265,8 @@ impl RightWindow {
         screen_w: f32,
         screen_h: f32,
         scale: f32,
+        dragging_slot_idx: Option<usize>,
+        drag_offset_y: f32,
     ) -> Vec<crate::gpu::IconEntry> {
         let mut out = Vec::new();
 
@@ -1217,23 +1276,31 @@ impl RightWindow {
             for (i, _slot) in chain.slots.iter().enumerate() {
                 let (dp, ds) = Self::effect_slot_delete_rect(i, screen_w, screen_h, scale);
                 let icon_size = ds[1]; // fill the delete rect height
+                let icon_y = if dragging_slot_idx == Some(i) {
+                    dp[1] + drag_offset_y
+                } else {
+                    dp[1]
+                };
                 out.push(crate::gpu::IconEntry {
                     codepoint: crate::icons::CLOSE,
                     x: dp[0],
-                    y: dp[1],
+                    y: icon_y,
                     size: icon_size,
                     color: [200, 160, 160, 220],
                 });
             }
         }
 
-        // "Add Effect" button icon
+        // "Add Effect" button icon + label
         let (bp, bs) = Self::add_effect_button_rect(slot_count, screen_w, screen_h, scale);
         let icon_size = 14.0 * scale;
+        let padding = 12.0 * scale;
+        let icon_x = bp[0] + padding;
+        let icon_y = bp[1] + (bs[1] - icon_size) * 0.5;
         out.push(crate::gpu::IconEntry {
             codepoint: crate::icons::ADD,
-            x: bp[0] + (bs[0] - icon_size) * 0.5,
-            y: bp[1] + (bs[1] - icon_size) * 0.5,
+            x: icon_x,
+            y: icon_y,
             size: icon_size,
             color: [160, 180, 220, 180],
         });

@@ -720,6 +720,7 @@ impl Gpu {
         has_remote_storage: bool,
         right_window: Option<&right_window::RightWindow>,
         right_window_effect_chain: Option<(&effects::EffectChain, crate::entity_id::EntityId, usize)>,
+        effect_chain_drag: Option<(crate::entity_id::EntityId, usize, f32, Option<usize>)>,
         input_monitoring: bool,
         text_notes: &indexmap::IndexMap<crate::entity_id::EntityId, crate::text_note::TextNote>,
         editing_text_note: Option<(crate::entity_id::EntityId, usize)>,
@@ -775,8 +776,14 @@ impl Gpu {
                 Some((c, id, rc)) => (Some(*c), Some(*id), *rc),
                 None => (None, None, 0),
             };
+            let (drag_idx, drag_offset, hover_idx) = match effect_chain_drag {
+                Some((dc_id, slot_idx, offset, hover)) if Some(dc_id) == chain_id =>
+                    (Some(slot_idx), offset, hover),
+                _ => (None, 0.0, None),
+            };
             overlay_instances.extend(rw.build_effect_chain_instances(
-                chain, chain_id, ref_count, settings, w, h, self.scale_factor, None, 0.0,
+                chain, chain_id, ref_count, settings, w, h, self.scale_factor,
+                drag_idx, drag_offset, hover_idx,
             ));
         }
 
@@ -920,7 +927,12 @@ impl Gpu {
                 Some((c, id, rc)) => (Some(*c), Some(*id), *rc),
                 None => (None, None, 0),
             };
-            for te in rw.get_effect_chain_text_entries(chain, chain_id, ref_count, w, h, scale) {
+            let (text_drag_idx, text_drag_offset) = match effect_chain_drag {
+                Some((dc_id, slot_idx, offset, _)) if Some(dc_id) == chain_id =>
+                    (Some(slot_idx), offset),
+                _ => (None, 0.0),
+            };
+            for te in rw.get_effect_chain_text_entries(chain, chain_id, ref_count, w, h, scale, text_drag_idx, text_drag_offset) {
                 let bounds = match te.bounds {
                     Some([l, t, r, b]) => TextBounds {
                         left: l as i32, top: t as i32, right: r as i32, bottom: b as i32,
@@ -941,7 +953,12 @@ impl Gpu {
                 Some((c, _, _)) => Some(*c),
                 None => None,
             };
-            for ie in rw.get_effect_chain_icon_entries(chain_for_icons, w, h, scale) {
+            let (icon_drag_idx, icon_drag_offset) = match effect_chain_drag {
+                Some((dc_id, slot_idx, offset, _)) if Some(dc_id) == chain_id =>
+                    (Some(slot_idx), offset),
+                _ => (None, 0.0),
+            };
+            for ie in rw.get_effect_chain_icon_entries(chain_for_icons, w, h, scale, icon_drag_idx, icon_drag_offset) {
                 let buf = shape_icon_entry(&mut self.font_system, &ie);
                 text_buffers.push(buf);
                 text_meta.push((

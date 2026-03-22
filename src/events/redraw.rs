@@ -111,6 +111,19 @@ impl App {
                     None
                 };
 
+            let effect_chain_drag = if let DragState::DraggingEffectSlot { chain_id, slot_idx, start_y } = self.drag {
+                let offset_y = self.mouse_pos[1] - start_y;
+                let hover = if let Some(rw) = &self.right_window {
+                    let slot_count = self.effect_chains.get(&chain_id).map_or(0, |c| c.slots.len());
+                    rw.hit_test_effect_slot(self.mouse_pos, slot_count, w, h, gpu.scale_factor)
+                } else {
+                    None
+                };
+                Some((chain_id, slot_idx, offset_y, hover))
+            } else {
+                None
+            };
+
             if let Some(p) = &mut self.command_palette {
                 if p.mode == PaletteMode::VolumeFader {
                     #[cfg(feature = "native")]
@@ -214,6 +227,7 @@ impl App {
                         None
                     }
                 },
+                effect_chain_drag,
                 self.input_monitoring,
                 &self.text_notes,
                 self.editing_text_note.as_ref().map(|e| (e.note_id, e.cursor)),

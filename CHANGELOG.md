@@ -1,3 +1,5 @@
+- 2026-03-22: feat: "Add Effect" label added next to plus icon in effects section (38.0k loc)
+- 2026-03-22: feat: Ableton-style effect slot drag — floating lifted copy, dim placeholder, hover highlight, out-of-bounds cancel (38.0k loc)
 - 2026-03-22: feat: "Add Effect" button in right panel opens browser Effects tab (37.9k loc)
 - 2026-03-22: feat: Material Icons CLOSE icon for effect chain delete buttons in right panel (37.9k loc)
 - 2026-03-22: feat: double-click effect plugin in browser adds it to selected waveform's effect chain (37.8k loc)
