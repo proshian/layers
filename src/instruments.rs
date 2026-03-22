@@ -175,7 +175,7 @@ pub fn build_instrument_region_instances(
         out.push(InstanceRaw {
             position: [x, y],
             size: [w, dash_h],
-            color: [0.60, 0.30, 0.90, 0.40],
+            color: crate::theme::with_alpha(theme.instrument_border_color, 0.40),
             border_radius: 1.0 / camera.zoom,
         });
         x += dash_w + gap;
@@ -190,14 +190,14 @@ pub fn build_instrument_region_instances(
             region.position[1] + 4.0 / camera.zoom,
         ],
         size: [badge_w, badge_h],
-        color: [0.60, 0.30, 0.90, 0.70],
+        color: crate::theme::with_alpha(theme.instrument_border_color, 0.70),
         border_radius: 3.0 / camera.zoom,
     });
 
     // Corner resize handles when selected
     if is_selected {
         let handle_sz = 8.0 / camera.zoom;
-        let handle_color = [0.60, 0.30, 0.90, 0.90];
+        let handle_color = crate::theme::with_alpha(theme.instrument_border_color, 0.90);
         for &hx in &[
             region.position[0] - handle_sz * 0.5,
             region.position[0] + region.size[0] - handle_sz * 0.5,

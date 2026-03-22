@@ -519,7 +519,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: [0.0, 0.0],
             size: [screen_w, screen_h],
-            color: [0.0, 0.0, 0.0, 0.50],
+            color: t.shadow_strong,
             border_radius: 0.0,
         });
 
@@ -528,7 +528,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: [wp[0] + so, wp[1] + so],
             size: [ws[0] + 2.0 * scale, ws[1] + 2.0 * scale],
-            color: [0.0, 0.0, 0.0, 0.45],
+            color: t.shadow,
             border_radius: br,
         });
 
@@ -559,7 +559,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: [wp[0] + SIDEBAR_WIDTH * scale, wp[1] + 8.0 * scale],
             size: [1.0 * scale, ws[1] - 16.0 * scale],
-            color: [1.0, 1.0, 1.0, 0.06],
+            color: t.divider,
             border_radius: 0.0,
         });
 
@@ -596,7 +596,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: [content_x + 16.0 * scale, header_y - 1.0 * scale],
             size: [content_w - 32.0 * scale, 1.0 * scale],
-            color: [1.0, 1.0, 1.0, 0.06],
+            color: t.divider,
             border_radius: 0.0,
         });
 
@@ -681,7 +681,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [thumb_x, thumb_cy],
                 size: [thumb_r * 2.0, thumb_r * 2.0],
-                color: [1.0, 1.0, 1.0, 0.95],
+                color: crate::theme::with_alpha(t.text_primary, 0.95),
                 border_radius: thumb_r,
             });
 
@@ -691,7 +691,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [content_x + 16.0 * scale, row_bottom - 0.5 * scale],
                     size: [content_w - 32.0 * scale, 1.0 * scale],
-                    color: [1.0, 1.0, 1.0, 0.04],
+                    color: crate::theme::with_alpha(t.divider, t.divider[3] * 0.67),
                     border_radius: 0.0,
                 });
             }
@@ -737,7 +737,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: [arrow_x, arrow_y],
             size: [arrow_size, arrow_size],
-            color: [1.0, 1.0, 1.0, 0.3],
+            color: crate::theme::with_alpha(t.text_primary, 0.3),
             border_radius: arrow_size * 0.5,
         });
 
@@ -746,7 +746,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: [content_x + 16.0 * scale, row_bottom - 0.5 * scale],
             size: [content_w - 32.0 * scale, 1.0 * scale],
-            color: [1.0, 1.0, 1.0, 0.04],
+            color: crate::theme::with_alpha(t.divider, t.divider[3] * 0.67),
             border_radius: 0.0,
         });
 
@@ -761,7 +761,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [dp[0] + 4.0 * scale, popup_y + 4.0 * scale],
                     size: [ds[0], popup_h],
-                    color: [0.0, 0.0, 0.0, 0.5],
+                    color: t.shadow_strong,
                     border_radius: popup_br,
                 });
                 out.push(InstanceRaw {
@@ -908,7 +908,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [arrow_x, arrow_y],
                 size: [arrow_size, arrow_size],
-                color: [1.0, 1.0, 1.0, 0.3],
+                color: crate::theme::with_alpha(t.text_primary, 0.3),
                 border_radius: arrow_size * 0.5,
             });
 
@@ -919,7 +919,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [content_x + 16.0 * scale, row_bottom - 0.5 * scale],
                     size: [content_w - 32.0 * scale, 1.0 * scale],
-                    color: [1.0, 1.0, 1.0, 0.04],
+                    color: crate::theme::with_alpha(t.divider, t.divider[3] * 0.67),
                     border_radius: 0.0,
                 });
             }
@@ -935,7 +935,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [content_x + 16.0 * scale, row_top - 0.5 * scale],
                 size: [content_w - 32.0 * scale, 1.0 * scale],
-                color: [1.0, 1.0, 1.0, 0.04],
+                color: crate::theme::with_alpha(t.divider, t.divider[3] * 0.67),
                 border_radius: 0.0,
             });
 
@@ -962,7 +962,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [arrow_x, arrow_y],
                 size: [arrow_size, arrow_size],
-                color: [1.0, 1.0, 1.0, 0.3],
+                color: crate::theme::with_alpha(t.text_primary, 0.3),
                 border_radius: arrow_size * 0.5,
             });
         }
@@ -976,7 +976,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [content_x + 16.0 * scale, row_top - 0.5 * scale],
                 size: [content_w - 32.0 * scale, 1.0 * scale],
-                color: [1.0, 1.0, 1.0, 0.04],
+                color: crate::theme::with_alpha(t.divider, t.divider[3] * 0.67),
                 border_radius: 0.0,
             });
 
@@ -1003,7 +1003,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [arrow_x, arrow_y],
                 size: [arrow_size, arrow_size],
-                color: [1.0, 1.0, 1.0, 0.3],
+                color: crate::theme::with_alpha(t.text_primary, 0.3),
                 border_radius: arrow_size * 0.5,
             });
         }
@@ -1022,7 +1022,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [dp[0] + 4.0 * scale, popup_y + 4.0 * scale],
                     size: [ds[0], popup_h],
-                    color: [0.0, 0.0, 0.0, 0.5],
+                    color: t.shadow_strong,
                     border_radius: popup_br,
                 });
 
@@ -1079,7 +1079,7 @@ impl SettingsWindow {
                 out.push(InstanceRaw {
                     position: [dp3[0] + 4.0 * scale, popup_y + 4.0 * scale],
                     size: [ds3[0], popup_h],
-                    color: [0.0, 0.0, 0.0, 0.5],
+                    color: t.shadow_strong,
                     border_radius: popup_br,
                 });
                 out.push(InstanceRaw {
@@ -1157,7 +1157,7 @@ impl SettingsWindow {
         out.push(InstanceRaw {
             position: [arrow_x, arrow_y],
             size: [arrow_size, arrow_size],
-            color: [1.0, 1.0, 1.0, 0.3],
+            color: crate::theme::with_alpha(t.text_primary, 0.3),
             border_radius: arrow_size * 0.5,
         });
 
@@ -1173,7 +1173,7 @@ impl SettingsWindow {
             out.push(InstanceRaw {
                 position: [dp[0] + 4.0 * scale, popup_y + 4.0 * scale],
                 size: [ds[0], popup_h],
-                color: [0.0, 0.0, 0.0, 0.5],
+                color: t.shadow_strong,
                 border_radius: popup_br,
             });
 

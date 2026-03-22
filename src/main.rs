@@ -3107,7 +3107,7 @@ impl App {
         let h = text_note::DEFAULT_SIZE[1];
         let pos = [center[0] - w * 0.5, center[1] - h * 0.5];
         let id = new_id();
-        let data = text_note::TextNote::new(pos);
+        let data = text_note::TextNote::new(pos, &self.settings.theme);
         self.text_notes.insert(id, data.clone());
         self.push_op(operations::Operation::CreateTextNote { id, data });
         self.selected.clear();

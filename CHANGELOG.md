@@ -1,3 +1,4 @@
+- 2026-03-22: refactor: replace 50+ hardcoded colors with RuntimeTheme fields across 13 files — shadows, tooltips, dividers, text, selections, and entity colors now adapt to dark/light/Ableton themes (38.6k loc)
 - 2026-03-22: feat: hover highlight on settings dropdown options (38.6k loc)
 - 2026-03-22: fix: settings dropdown popup hides text behind it, matching canvas clip pattern (38.5k loc)
 - 2026-03-22: perf: cache filesystem tree for sample browser search with 50ms debounce — eliminates recursive directory walk on every keystroke (38.5k loc)

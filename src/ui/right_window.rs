@@ -1268,6 +1268,7 @@ impl RightWindow {
         scale: f32,
         dragging_slot_idx: Option<usize>,
         drag_offset_y: f32,
+        settings: &crate::settings::Settings,
     ) -> Vec<crate::gpu::IconEntry> {
         let mut out = Vec::new();
 
@@ -1287,7 +1288,7 @@ impl RightWindow {
                     x: dp[0],
                     y: icon_y,
                     size: icon_size,
-                    color: [200, 160, 160, 220],
+                    color: crate::theme::RuntimeTheme::text_u8(settings.theme.text_secondary, 220),
                 });
             }
         }
@@ -1303,7 +1304,7 @@ impl RightWindow {
             x: icon_x,
             y: icon_y,
             size: icon_size,
-            color: [160, 180, 220, 180],
+            color: crate::theme::RuntimeTheme::text_u8(settings.theme.text_secondary, 180),
         });
 
         out

@@ -256,6 +256,10 @@ pub struct RuntimeTheme {
     pub text_primary:   [f32; 4],
     pub text_secondary: [f32; 4],
     pub text_dim:       [f32; 4],
+    pub shadow:         [f32; 4],
+    pub shadow_strong:  [f32; 4],
+    pub divider:        [f32; 4],
+    pub tooltip_bg:     [f32; 4],
 }
 
 impl RuntimeTheme {
@@ -329,6 +333,10 @@ impl RuntimeTheme {
             text_primary,
             text_secondary,
             text_dim,
+            shadow:        if is_light { [0.0, 0.0, 0.0, 0.15] } else { [0.0, 0.0, 0.0, 0.40] },
+            shadow_strong: if is_light { [0.0, 0.0, 0.0, 0.25] } else { [0.0, 0.0, 0.0, 0.50] },
+            divider:       if is_light { [0.0, 0.0, 0.0, 0.08] } else { [1.0, 1.0, 1.0, 0.06] },
+            tooltip_bg:    if is_light { c(h, 0.10, 0.880, 0.95) } else { c(h, 0.10, 0.115, 0.92) },
         }
     }
 
@@ -401,6 +409,10 @@ impl RuntimeTheme {
             text_primary:   [0.87, 0.87, 0.82, 1.0],
             text_secondary: [0.62, 0.62, 0.58, 1.0],
             text_dim:       [0.40, 0.40, 0.38, 1.0],
+            shadow:         [0.0, 0.0, 0.0, 0.40],
+            shadow_strong:  [0.0, 0.0, 0.0, 0.50],
+            divider:        [1.0, 1.0, 1.0, 0.06],
+            tooltip_bg:     [0.12, 0.12, 0.16, 0.92],
         }
     }
 
@@ -470,6 +482,10 @@ impl RuntimeTheme {
             text_primary,
             text_secondary,
             text_dim,
+            shadow:         [0.0, 0.0, 0.0, 0.15],
+            shadow_strong:  [0.0, 0.0, 0.0, 0.25],
+            divider:        [0.0, 0.0, 0.0, 0.08],
+            tooltip_bg:     c_bg(h, 0.10, 0.880, 0.95),
         }
     }
 

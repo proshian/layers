@@ -24,11 +24,6 @@ const INDENT_PX: f32 = 16.0;
 const SCROLLBAR_WIDTH: f32 = 6.0;
 const ADD_BUTTON_SIZE: f32 = 20.0;
 
-use crate::theme::{
-    HOVER as HOVER_COLOR,
-    SCROLLBAR_BG, SCROLLBAR_THUMB,
-    CHEVRON as CHEVRON_COLOR, ADD_BTN_NORMAL as ADD_BTN_COLOR, ADD_BTN_HOVER,
-};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BrowserCategory {
@@ -661,7 +656,7 @@ impl SampleBrowser {
                     1.0,
                 ]
             } else {
-                [0.0, 0.0, 0.0, 0.25]
+                crate::theme::with_alpha(settings.theme.shadow, settings.theme.shadow[3] * 0.6)
             };
             out.push(InstanceRaw {
                 position: [sb_x, sb_y],
@@ -703,9 +698,9 @@ impl SampleBrowser {
         if self.active_category == BrowserCategory::Samples {
             let (bp, bs) = self.add_button_rect(scale);
             let btn_color = if self.add_button_hovered {
-                ADD_BTN_HOVER
+                crate::theme::with_alpha(settings.theme.text_primary, 0.80)
             } else {
-                ADD_BTN_COLOR
+                crate::theme::with_alpha(settings.theme.text_primary, 0.50)
             };
             let bar_h = 2.0 * scale;
             let bar_w = bs[0] * 0.6;
@@ -768,7 +763,7 @@ impl SampleBrowser {
                 out.push(InstanceRaw {
                     position: [0.0, y],
                     size: [sb_w, sb_item_h],
-                    color: HOVER_COLOR,
+                    color: settings.theme.item_hover,
                     border_radius: 0.0,
                 });
             }
@@ -837,7 +832,7 @@ impl SampleBrowser {
                         out.push(InstanceRaw {
                             position: [cx, y],
                             size: [content_w, item_h],
-                            color: HOVER_COLOR,
+                            color: settings.theme.item_hover,
                             border_radius: 0.0,
                         });
                     }
@@ -855,7 +850,7 @@ impl SampleBrowser {
                         out.push(InstanceRaw {
                             position: [cx, y],
                             size: [content_w, item_h],
-                            color: HOVER_COLOR,
+                            color: settings.theme.item_hover,
                             border_radius: 0.0,
                         });
                     }
@@ -901,7 +896,7 @@ impl SampleBrowser {
                         out.push(InstanceRaw {
                             position: [cx, y],
                             size: [content_w, item_h],
-                            color: HOVER_COLOR,
+                            color: settings.theme.item_hover,
                             border_radius: 0.0,
                         });
                     }
@@ -916,13 +911,13 @@ impl SampleBrowser {
                             out.push(InstanceRaw {
                                 position: [chev_x - bar_w * 0.5, cy_mid - bar_h],
                                 size: [bar_w, bar_h],
-                                color: CHEVRON_COLOR,
+                                color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
                             out.push(InstanceRaw {
                                 position: [chev_x - bar_w * 0.25, cy_mid],
                                 size: [bar_w * 0.5, bar_h],
-                                color: CHEVRON_COLOR,
+                                color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
                         } else {
@@ -931,13 +926,13 @@ impl SampleBrowser {
                             out.push(InstanceRaw {
                                 position: [chev_x - bar_w, cy_mid - bar_h * 0.5],
                                 size: [bar_w, bar_h],
-                                color: CHEVRON_COLOR,
+                                color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
                             out.push(InstanceRaw {
                                 position: [chev_x, cy_mid - bar_h * 0.25],
                                 size: [bar_w, bar_h * 0.5],
-                                color: CHEVRON_COLOR,
+                                color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
                         }
@@ -956,7 +951,7 @@ impl SampleBrowser {
                             LayerNodeKind::Instrument => settings.theme.pill_instrument,
                             LayerNodeKind::EffectRegion => settings.theme.pill_effect,
                             LayerNodeKind::PluginBlock => settings.theme.pill_effect,
-                            LayerNodeKind::TextNote => [0.6, 0.6, 0.5, 1.0],
+                            LayerNodeKind::TextNote => settings.theme.category_dot,
                             _ => *color,
                         },
                         _ => settings.theme.pill_instrument,
@@ -974,7 +969,7 @@ impl SampleBrowser {
                         out.push(InstanceRaw {
                             position: [cx, y],
                             size: [content_w, item_h],
-                            color: HOVER_COLOR,
+                            color: settings.theme.item_hover,
                             border_radius: 0.0,
                         });
                     }
@@ -993,13 +988,13 @@ impl SampleBrowser {
                             out.push(InstanceRaw {
                                 position: [chev_x - bar_w * 0.5, cy - bar_h],
                                 size: [bar_w, bar_h],
-                                color: CHEVRON_COLOR,
+                                color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
                             out.push(InstanceRaw {
                                 position: [chev_x - bar_w * 0.25, cy],
                                 size: [bar_w * 0.5, bar_h],
-                                color: CHEVRON_COLOR,
+                                color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
                         } else {
@@ -1008,13 +1003,13 @@ impl SampleBrowser {
                             out.push(InstanceRaw {
                                 position: [chev_x - bar_w, cy - bar_h * 0.5],
                                 size: [bar_w, bar_h],
-                                color: CHEVRON_COLOR,
+                                color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
                             out.push(InstanceRaw {
                                 position: [chev_x, cy - bar_h * 0.25],
                                 size: [bar_w, bar_h * 0.5],
-                                color: CHEVRON_COLOR,
+                                color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
                         }
@@ -1032,7 +1027,7 @@ impl SampleBrowser {
             out.push(InstanceRaw {
                 position: [sb_x, ct],
                 size: [SCROLLBAR_WIDTH * scale, sb_track_h],
-                color: SCROLLBAR_BG,
+                color: crate::theme::with_alpha(settings.theme.text_primary, 0.08),
                 border_radius: 3.0 * scale,
             });
 
@@ -1048,7 +1043,7 @@ impl SampleBrowser {
             out.push(InstanceRaw {
                 position: [sb_x, thumb_y],
                 size: [SCROLLBAR_WIDTH * scale, thumb_h],
-                color: SCROLLBAR_THUMB,
+                color: crate::theme::with_alpha(settings.theme.text_primary, 0.20),
                 border_radius: 3.0 * scale,
             });
         }
@@ -1170,9 +1165,9 @@ impl SampleBrowser {
                     let font_sz = 12.0 * scale;
                     let line_h = 16.0 * scale;
                     let color = if *is_instrument {
-                        [185, 180, 210, 255]
+                        crate::theme::RuntimeTheme::text_u8(theme.text_primary, 230)
                     } else {
-                        [170, 190, 220, 255]
+                        crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 240)
                     };
                     out.push(TextEntry {
                         text: entry.name.clone(),
@@ -1199,14 +1194,14 @@ impl SampleBrowser {
                     let line_h = 16.0 * scale;
                     let color = match &entry.kind {
                         EntryKind::LayerNode { kind, .. } => match kind {
-                            LayerNodeKind::Instrument => [185, 180, 210, 255],
-                            LayerNodeKind::MidiClip => [170, 160, 200, 230],
-                            LayerNodeKind::Waveform => [160, 210, 180, 255],
-                            LayerNodeKind::EffectRegion => [170, 190, 220, 255],
-                            LayerNodeKind::PluginBlock => [170, 190, 220, 230],
-                            LayerNodeKind::TextNote => [200, 200, 180, 255],
+                            LayerNodeKind::Instrument => crate::theme::RuntimeTheme::text_u8(theme.text_primary, 230),
+                            LayerNodeKind::MidiClip => crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 230),
+                            LayerNodeKind::Waveform => crate::theme::RuntimeTheme::text_u8(theme.text_primary, 240),
+                            LayerNodeKind::EffectRegion => crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 240),
+                            LayerNodeKind::PluginBlock => crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 230),
+                            LayerNodeKind::TextNote => crate::theme::RuntimeTheme::text_u8(theme.text_dim, 255),
                         },
-                        _ => [185, 180, 210, 255],
+                        _ => crate::theme::RuntimeTheme::text_u8(theme.text_primary, 230),
                     };
                     let entry_id = match &entry.kind {
                         EntryKind::LayerNode { id, .. } => Some(*id),

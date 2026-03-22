@@ -18,15 +18,15 @@ pub struct TextNote {
 }
 
 impl TextNote {
-    pub fn new(position: [f32; 2]) -> Self {
+    pub fn new(position: [f32; 2], theme: &crate::theme::RuntimeTheme) -> Self {
         Self {
             position,
             size: DEFAULT_SIZE,
-            color: DEFAULT_COLOR,
+            color: theme.bg_surface,
             border_radius: DEFAULT_BORDER_RADIUS,
             text: String::new(),
             font_size: DEFAULT_FONT_SIZE,
-            text_color: DEFAULT_TEXT_COLOR,
+            text_color: crate::theme::with_alpha(theme.text_primary, 1.0),
         }
     }
 }

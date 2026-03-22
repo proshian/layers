@@ -791,7 +791,7 @@ impl Gpu {
             overlay_instances.push(InstanceRaw {
                 position: [pos[0] - 4.0, pos[1] - 4.0],
                 size: [160.0 * self.scale_factor, 24.0 * self.scale_factor],
-                color: [0.20, 0.20, 0.28, 0.90],
+                color: settings.theme.tooltip_bg,
                 border_radius: 4.0 * self.scale_factor,
             });
         }
@@ -826,7 +826,7 @@ impl Gpu {
 
 
         overlay_instances.extend(toast_manager.build_instances(w, h, self.scale_factor));
-        overlay_instances.extend(tooltip.build_instances(self.scale_factor));
+        overlay_instances.extend(tooltip.build_instances(self.scale_factor, &settings.theme));
 
         // Velocity tooltip background pill
         if let Some((mc_idx, note_idx)) = cmd_velocity_hover_note {
@@ -848,7 +848,7 @@ impl Gpu {
                 overlay_instances.push(InstanceRaw {
                     position: [pill_x, pill_y],
                     size: [pill_w, pill_h],
-                    color: [0.15, 0.15, 0.20, 0.92],
+                    color: settings.theme.tooltip_bg,
                     border_radius: 4.0 * s,
                 });
             }
@@ -959,7 +959,7 @@ impl Gpu {
                     (Some(slot_idx), offset),
                 _ => (None, 0.0),
             };
-            for ie in rw.get_effect_chain_icon_entries(chain_for_icons, w, h, scale, icon_drag_idx, icon_drag_offset) {
+            for ie in rw.get_effect_chain_icon_entries(chain_for_icons, w, h, scale, icon_drag_idx, icon_drag_offset, settings) {
                 let buf = shape_icon_entry(&mut self.font_system, &ie);
                 text_buffers.push(buf);
                 text_meta.push((
@@ -1026,7 +1026,7 @@ impl Gpu {
 
         // Plugin editor text
         if let Some(pe) = plugin_editor {
-            for te in pe.get_text_entries(w, h, scale) {
+            for te in pe.get_text_entries(settings, w, h, scale) {
                 let buf = shape_text_entry(&mut self.font_system, &te);
                 text_buffers.push(buf);
                 text_meta.push((

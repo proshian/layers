@@ -882,7 +882,7 @@ impl CommandPalette {
         out.push(InstanceRaw {
             position: [0.0, 0.0],
             size: [screen_w, screen_h],
-            color: [0.0, 0.0, 0.0, 0.45],
+            color: settings.theme.shadow,
             border_radius: 0.0,
         });
 
@@ -891,7 +891,7 @@ impl CommandPalette {
         out.push(InstanceRaw {
             position: [pos[0] + so, pos[1] + so],
             size: [size[0] + 2.0 * scale, size[1] + 2.0 * scale],
-            color: [0.0, 0.0, 0.0, 0.45],
+            color: settings.theme.shadow,
             border_radius: PALETTE_BORDER_RADIUS * scale,
         });
 
@@ -911,7 +911,7 @@ impl CommandPalette {
                 size[0] - sf_margin * 2.0,
                 PALETTE_INPUT_HEIGHT * scale - sf_margin * 2.0,
             ],
-            color: [0.20, 0.20, 0.25, 1.0],
+            color: settings.theme.bg_input,
             border_radius: 8.0 * scale,
         });
 
@@ -923,7 +923,7 @@ impl CommandPalette {
                 pos[1] + (PALETTE_INPUT_HEIGHT * scale - icon_r * 2.0) * 0.5,
             ],
             size: [icon_r * 2.0, icon_r * 2.0],
-            color: [0.45, 0.45, 0.52, 0.7],
+            color: crate::theme::with_alpha(settings.theme.text_dim, 0.7),
             border_radius: icon_r,
         });
         // Inner circle cutout
@@ -934,7 +934,7 @@ impl CommandPalette {
                 pos[1] + (PALETTE_INPUT_HEIGHT * scale - inner_r * 2.0) * 0.5,
             ],
             size: [inner_r * 2.0, inner_r * 2.0],
-            color: [0.20, 0.20, 0.25, 1.0],
+            color: settings.theme.bg_input,
             border_radius: inner_r,
         });
 
@@ -944,7 +944,7 @@ impl CommandPalette {
         out.push(InstanceRaw {
             position: [pos[0] + margin, list_top],
             size: [size[0] - margin * 2.0, 1.0 * scale],
-            color: [1.0, 1.0, 1.0, 0.06],
+            color: settings.theme.divider,
             border_radius: 0.0,
         });
 
@@ -963,7 +963,7 @@ impl CommandPalette {
                                 out.push(InstanceRaw {
                                     position: [pos[0] + margin, y],
                                     size: [size[0] - margin * 2.0, PALETTE_ITEM_HEIGHT * scale],
-                                    color: [0.26, 0.26, 0.32, 0.8],
+                                    color: settings.theme.option_highlight,
                                     border_radius: 6.0 * scale,
                                 });
                             }
@@ -976,9 +976,9 @@ impl CommandPalette {
                                 let pill_x = pos[0] + size[0] - margin - (pill_w + 10.0) * scale;
                                 let pill_y = y + (PALETTE_ITEM_HEIGHT * scale - pill_h) * 0.5;
                                 let border_color = if is_inst {
-                                    [0.39, 0.63, 1.0, 0.25]
+                                    crate::theme::with_alpha(settings.theme.pill_instrument, 0.25)
                                 } else {
-                                    [1.0, 0.67, 0.31, 0.25]
+                                    crate::theme::with_alpha(settings.theme.pill_effect, 0.25)
                                 };
                                 out.push(InstanceRaw {
                                     position: [pill_x, pill_y],
@@ -1033,7 +1033,7 @@ impl CommandPalette {
                 out.push(InstanceRaw {
                     position: tp,
                     size: ts,
-                    color: [0.25, 0.25, 0.30, 1.0],
+                    color: settings.theme.bg_surface,
                     border_radius: ts[1] * 0.5,
                 });
 
@@ -1042,7 +1042,7 @@ impl CommandPalette {
                     out.push(InstanceRaw {
                         position: tp,
                         size: [fill_w, ts[1]],
-                        color: [0.40, 0.72, 1.00, 1.0],
+                        color: settings.theme.slider_fill,
                         border_radius: ts[1] * 0.5,
                     });
                 }
@@ -1053,7 +1053,7 @@ impl CommandPalette {
                 out.push(InstanceRaw {
                     position: [thumb_x, thumb_cy],
                     size: [thumb_r * 2.0, thumb_r * 2.0],
-                    color: [1.0, 1.0, 1.0, 0.95],
+                    color: crate::theme::with_alpha(settings.theme.text_primary, 0.95),
                     border_radius: thumb_r,
                 });
 
@@ -1062,7 +1062,7 @@ impl CommandPalette {
                 out.push(InstanceRaw {
                     position: [tp[0], rms_y],
                     size: [ts[0], rms_h],
-                    color: [0.20, 0.20, 0.25, 1.0],
+                    color: settings.theme.bg_input,
                     border_radius: rms_h * 0.5,
                 });
 
@@ -1099,7 +1099,7 @@ impl CommandPalette {
                         out.push(InstanceRaw {
                             position: [pos[0] + margin, y],
                             size: [size[0] - margin * 2.0, item_h],
-                            color: [0.26, 0.26, 0.32, 0.8],
+                            color: settings.theme.option_highlight,
                             border_radius: 6.0 * scale,
                         });
                     }
@@ -1303,9 +1303,9 @@ impl CommandPalette {
                             // Type label pill: "Instrument" or "Effect"
                             let label = if entry.is_instrument { "Instrument" } else { "Effect" };
                             let color = if entry.is_instrument {
-                                [100, 160, 255, 220]
+                                crate::theme::RuntimeTheme::text_u8(theme.pill_instrument, 220)
                             } else {
-                                [255, 170, 80, 220]
+                                crate::theme::RuntimeTheme::text_u8(theme.pill_effect, 220)
                             };
                             let label_font = 10.5 * scale;
                             let label_line = 14.0 * scale;

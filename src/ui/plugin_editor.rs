@@ -140,7 +140,7 @@ impl PluginEditorWindow {
         out.push(InstanceRaw {
             position: [0.0, 0.0],
             size: [screen_w, screen_h],
-            color: [0.0, 0.0, 0.0, 0.40],
+            color: settings.theme.shadow,
             border_radius: 0.0,
         });
 
@@ -149,7 +149,7 @@ impl PluginEditorWindow {
         out.push(InstanceRaw {
             position: [wp[0] + so, wp[1] + so],
             size: [ws[0] + 2.0 * scale, ws[1] + 2.0 * scale],
-            color: [0.0, 0.0, 0.0, 0.40],
+            color: settings.theme.shadow,
             border_radius: br,
         });
 
@@ -172,7 +172,7 @@ impl PluginEditorWindow {
         out.push(InstanceRaw {
             position: [wp[0], wp[1] + HEADER_H * scale - br],
             size: [ws[0], br],
-            color: [0.14, 0.17, 0.24, 1.0],
+            color: settings.theme.bg_plugin_header,
             border_radius: 0.0,
         });
 
@@ -180,7 +180,7 @@ impl PluginEditorWindow {
         out.push(InstanceRaw {
             position: [wp[0] + PADDING * scale, wp[1] + HEADER_H * scale],
             size: [ws[0] - PADDING * 2.0 * scale, 1.0 * scale],
-            color: [1.0, 1.0, 1.0, 0.06],
+            color: settings.theme.divider,
             border_radius: 0.0,
         });
 
@@ -201,7 +201,7 @@ impl PluginEditorWindow {
                 out.push(InstanceRaw {
                     position: [wp[0], row_y],
                     size: [ws[0], ROW_H * scale],
-                    color: [1.0, 1.0, 1.0, 0.02],
+                    color: settings.theme.item_hover,
                     border_radius: 0.0,
                 });
             }
@@ -210,7 +210,7 @@ impl PluginEditorWindow {
             out.push(InstanceRaw {
                 position: tp,
                 size: ts,
-                color: [1.0, 1.0, 1.0, 0.10],
+                color: crate::theme::with_alpha(settings.theme.item_hover, 0.10),
                 border_radius: ts[1] * 0.5,
             });
 
@@ -244,6 +244,7 @@ use crate::gpu::TextEntry;
 impl PluginEditorWindow {
     pub fn get_text_entries(
         &self,
+        settings: &crate::settings::Settings,
         screen_w: f32,
         screen_h: f32,
         scale: f32,
@@ -260,7 +261,7 @@ impl PluginEditorWindow {
             y: wp[1] + (HEADER_H * scale - title_line) * 0.5,
             font_size: title_font,
             line_height: title_line,
-            color: [230, 230, 240, 255],
+            color: crate::theme::RuntimeTheme::text_u8(settings.theme.text_primary, 255),
             weight: 600,
             max_width: ws[0] - PADDING * 2.0 * scale,
             bounds: None,
@@ -288,7 +289,7 @@ impl PluginEditorWindow {
                 y: text_y,
                 font_size: label_font,
                 line_height: label_line,
-                color: [190, 190, 200, 255],
+                color: crate::theme::RuntimeTheme::text_u8(settings.theme.text_secondary, 255),
                 weight: 400,
                 max_width: LABEL_W * scale,
                 bounds: None,
@@ -309,7 +310,7 @@ impl PluginEditorWindow {
                 y: text_y,
                 font_size: label_font,
                 line_height: label_line,
-                color: [160, 160, 170, 255],
+                color: crate::theme::RuntimeTheme::text_u8(settings.theme.text_dim, 255),
                 weight: 400,
                 max_width: 40.0 * scale,
                 bounds: None,

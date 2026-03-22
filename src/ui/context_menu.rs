@@ -661,7 +661,7 @@ impl ContextMenu {
         out.push(InstanceRaw {
             position: [pos[0] + so, pos[1] + so],
             size: [size[0] + 2.0 * scale, size[1] + 2.0 * scale],
-            color: [0.0, 0.0, 0.0, 0.40],
+            color: settings.theme.shadow,
             border_radius: CTX_MENU_BORDER_RADIUS * scale,
         });
 
@@ -682,7 +682,7 @@ impl ContextMenu {
                         out.push(InstanceRaw {
                             position: [pos[0] + pad, y],
                             size: [size[0] - pad * 2.0, CTX_MENU_ITEM_HEIGHT * scale],
-                            color: [0.26, 0.26, 0.32, 0.8],
+                            color: settings.theme.option_highlight,
                             border_radius: 5.0 * scale,
                         });
                     }
@@ -693,7 +693,7 @@ impl ContextMenu {
                         out.push(InstanceRaw {
                             position: [cx, cy],
                             size: [check_sz, check_sz],
-                            color: [0.9, 0.9, 0.95, 0.9],
+                            color: crate::theme::with_alpha(settings.theme.text_primary, 0.9),
                             border_radius: check_sz * 0.5,
                         });
                     }
@@ -721,14 +721,14 @@ impl ContextMenu {
                             out.push(InstanceRaw {
                                 position: [px, pill_y],
                                 size: [pw, pill_h],
-                                color: [0.32, 0.32, 0.40, 0.95],
+                                color: crate::theme::with_alpha(settings.theme.pill_active, 0.95),
                                 border_radius: pill_r,
                             });
                         } else if is_hovered {
                             out.push(InstanceRaw {
                                 position: [px, pill_y],
                                 size: [pw, pill_h],
-                                color: [0.24, 0.24, 0.30, 0.7],
+                                color: crate::theme::with_alpha(settings.theme.pill_inactive, 0.7),
                                 border_radius: pill_r,
                             });
                         }

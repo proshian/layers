@@ -7,8 +7,6 @@ const TOOLTIP_PADDING_H: f32 = 8.0;
 const TOOLTIP_PADDING_V: f32 = 4.0;
 const TOOLTIP_GAP: f32 = 6.0;
 const TOOLTIP_BORDER_RADIUS: f32 = 6.0;
-const TOOLTIP_BG: [f32; 4] = [0.12, 0.12, 0.16, 0.92];
-const TOOLTIP_TEXT_COLOR: [u8; 4] = [220, 220, 230, 240];
 
 pub(crate) struct TooltipState {
     current_target: Option<String>,
@@ -56,7 +54,7 @@ impl TooltipState {
         self.current_target.is_some() && !self.visible
     }
 
-    pub(crate) fn build_instances(&self, scale: f32) -> Vec<InstanceRaw> {
+    pub(crate) fn build_instances(&self, scale: f32, theme: &crate::theme::RuntimeTheme) -> Vec<InstanceRaw> {
         if !self.visible || self.current_target.is_none() {
             return Vec::new();
         }
@@ -76,7 +74,7 @@ impl TooltipState {
         vec![InstanceRaw {
             position: [pill_x, pill_y],
             size: [pill_w, pill_h],
-            color: TOOLTIP_BG,
+            color: theme.tooltip_bg,
             border_radius: TOOLTIP_BORDER_RADIUS * scale,
         }]
     }
