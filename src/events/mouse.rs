@@ -896,6 +896,9 @@ impl App {
                             }
                             #[cfg(feature = "native")]
                             self.sync_computer_keyboard_to_engine();
+                        } else if TransportPanel::hit_monitor_button(self.mouse_pos, sw, sh, scale)
+                        {
+                            self.toggle_monitoring();
                         } else if TransportPanel::hit_record_button(self.mouse_pos, sw, sh, scale)
                         {
                             self.toggle_recording();

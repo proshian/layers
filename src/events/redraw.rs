@@ -188,6 +188,7 @@ impl App {
                 },
                 self.remote_storage.is_some(),
                 self.right_window.as_ref(),
+                self.input_monitoring,
             );
         }
         if self.toast_manager.has_active() {

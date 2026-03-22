@@ -694,6 +694,7 @@ impl Gpu {
         cmd_velocity_hover_note: Option<(crate::entity_id::EntityId, usize)>,
         has_remote_storage: bool,
         right_window: Option<&right_window::RightWindow>,
+        input_monitoring: bool,
     ) {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
@@ -761,6 +762,7 @@ impl Gpu {
             is_recording,
             settings.metronome_enabled,
             computer_keyboard_armed,
+            input_monitoring,
         ));
 
         if let Some(p) = command_palette {

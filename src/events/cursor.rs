@@ -841,6 +841,10 @@ impl App {
             } else if TransportPanel::hit_bpm(self.mouse_pos, sw, sh, scale) {
                 let rect = TransportPanel::bpm_rect(sw, sh, scale);
                 self.tooltip.set_target("transport:bpm", "Tempo \u{2014} double-click to edit", rect);
+            } else if TransportPanel::hit_monitor_button(self.mouse_pos, sw, sh, scale) {
+                let text = if self.input_monitoring { "Disable Input Monitor" } else { "Input Monitor" };
+                let rect = TransportPanel::monitor_button_rect(sw, sh, scale);
+                self.tooltip.set_target("transport:monitor", text, rect);
             } else if TransportPanel::hit_record_button(self.mouse_pos, sw, sh, scale) {
                 #[cfg(feature = "native")]
                 let is_recording = self.recorder.as_ref().map_or(false, |r| r.is_recording());

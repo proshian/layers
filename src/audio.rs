@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::entity_id::EntityId;
@@ -13,6 +13,65 @@ pub use crate::grid::PIXELS_PER_SECOND;
 pub use crate::ui::waveform::AudioClipData;
 
 const EFFECT_BLOCK_SIZE: usize = 512;
+
+// ---------------------------------------------------------------------------
+// Lock-free SPSC ring buffer for input monitoring
+// ---------------------------------------------------------------------------
+
+pub struct MonitorRingBuffer {
+    data: Box<[std::cell::UnsafeCell<f32>]>,
+    capacity: usize,
+    write_pos: AtomicUsize,
+    read_pos: AtomicUsize,
+}
+
+// SAFETY: Only one producer (input thread) and one consumer (output thread).
+unsafe impl Send for MonitorRingBuffer {}
+unsafe impl Sync for MonitorRingBuffer {}
+
+impl MonitorRingBuffer {
+    pub fn new(capacity: usize) -> Arc<Self> {
+        let data = (0..capacity)
+            .map(|_| std::cell::UnsafeCell::new(0.0f32))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Arc::new(Self {
+            data,
+            capacity,
+            write_pos: AtomicUsize::new(0),
+            read_pos: AtomicUsize::new(0),
+        })
+    }
+
+    /// Push samples from the input (producer) thread.
+    pub fn push(&self, samples: &[f32]) {
+        let mut wp = self.write_pos.load(Ordering::Relaxed);
+        for &s in samples {
+            // SAFETY: single producer – only the input thread calls push.
+            unsafe { *self.data[wp % self.capacity].get() = s };
+            wp = wp.wrapping_add(1);
+        }
+        self.write_pos.store(wp, Ordering::Release);
+    }
+
+    /// Pop up to `out.len()` samples sequentially from the ring buffer.
+    /// If more data is available than requested, the excess stays for the next read.
+    /// Returns the number of samples actually read.
+    pub fn pop(&self, out: &mut [f32]) -> usize {
+        let wp = self.write_pos.load(Ordering::Acquire);
+        let rp = self.read_pos.load(Ordering::Relaxed);
+        let available = wp.wrapping_sub(rp).min(self.capacity);
+        let to_read = available.min(out.len());
+        let mut rp2 = rp;
+        for item in out.iter_mut().take(to_read) {
+            // SAFETY: single consumer – only the output thread calls pop.
+            *item = unsafe { *self.data[rp2 % self.capacity].get() };
+            rp2 = rp2.wrapping_add(1);
+        }
+        self.read_pos.store(rp2, Ordering::Release);
+        to_read
+    }
+}
 
 pub struct LoadedAudio {
     pub samples: Arc<Vec<f32>>,
@@ -102,6 +161,11 @@ pub struct AudioEngine {
     metronome_enabled: Arc<AtomicBool>,
     bpm_bits: Arc<AtomicU64>,
     keyboard_preview: Arc<Mutex<KeyboardPreviewState>>,
+    monitoring_enabled: Arc<AtomicBool>,
+    monitor_ring: Arc<MonitorRingBuffer>,
+    monitor_effect_plugins: Arc<Mutex<Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>>>,
+    monitor_input_channels: Arc<AtomicUsize>,
+    monitor_input_sample_rate: Arc<AtomicU64>,
 }
 
 fn store_f64(atomic: &AtomicU64, value: f64) {
@@ -189,6 +253,12 @@ impl AudioEngine {
             target: None,
             pending: VecDeque::new(),
         }));
+        let monitoring_enabled = Arc::new(AtomicBool::new(false));
+        let monitor_ring = MonitorRingBuffer::new(8192);
+        let monitor_effect_plugins: Arc<Mutex<Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let monitor_input_channels = Arc::new(AtomicUsize::new(1));
+        let monitor_input_sample_rate = Arc::new(AtomicU64::new(sample_rate as u64));
 
         let p = playing.clone();
         let pos = position_bits.clone();
@@ -203,6 +273,11 @@ impl AudioEngine {
         let lp_e = loop_end_bits.clone();
         let met_en = metronome_enabled.clone();
         let met_bpm = bpm_bits.clone();
+        let mon_en = monitoring_enabled.clone();
+        let mon_ring_c = monitor_ring.clone();
+        let mon_fx = monitor_effect_plugins.clone();
+        let mon_in_ch = monitor_input_channels.clone();
+        let mon_in_sr = monitor_input_sample_rate.clone();
         let sr = sample_rate as f64;
 
         let mut fx_buf_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
@@ -211,6 +286,12 @@ impl AudioEngine {
         let mut fx_out_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
         let mut inst_out_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
         let mut inst_out_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
+        let mut mon_raw = vec![0.0f32; 8192];
+        let mut mon_fx_l = vec![0.0f32; 4096];
+        let mut mon_fx_r = vec![0.0f32; 4096];
+        let mut mon_fx_out_l = vec![0.0f32; EFFECT_BLOCK_SIZE];
+        let mut mon_fx_out_r = vec![0.0f32; EFFECT_BLOCK_SIZE];
+        let mut mon_debug_counter: u32 = 0;
         let mut was_playing = false;
         let mut met_phase: f64 = 0.0;
         let mut met_samples_left: u32 = 0;
@@ -249,7 +330,8 @@ impl AudioEngine {
                         .ok()
                         .map_or(false, |g| !g.is_empty());
 
-                    if !is_playing && !has_instruments {
+                    let mon_active = mon_en.load(Ordering::Relaxed);
+                    if !is_playing && !has_instruments && !mon_active {
                         data.fill(0.0);
                         store_f64(&rms, 0.0);
                         return;
@@ -580,6 +662,49 @@ impl AudioEngine {
                         }
                     }
 
+                    // Input monitoring: mix live mic input into output
+                    // Handles sample rate conversion (input may differ from output)
+                    if mon_en.load(Ordering::Relaxed) {
+                        let in_ch = mon_in_ch.load(Ordering::Relaxed).max(1);
+                        let in_sr = mon_in_sr.load(Ordering::Relaxed).max(1) as f64;
+                        let out_sr = sr;
+
+                        // How many input samples we need to produce `frames` output frames
+                        let ratio = in_sr / out_sr;
+                        let in_frames_needed = ((frames as f64) * ratio).ceil() as usize + 1;
+                        let in_samples_needed = in_frames_needed * in_ch;
+                        let pop_len = in_samples_needed.min(mon_raw.len());
+                        let got = mon_ring_c.pop(&mut mon_raw[..pop_len]);
+                        let in_frames_got = got / in_ch;
+
+                        // Deinterleave input into L/R
+                        for j in 0..in_frames_got {
+                            if in_ch >= 2 {
+                                mon_fx_l[j] = mon_raw[j * in_ch];
+                                mon_fx_r[j] = mon_raw[j * in_ch + 1];
+                            } else {
+                                mon_fx_l[j] = mon_raw[j];
+                                mon_fx_r[j] = mon_raw[j];
+                            }
+                        }
+
+                        // Resample from input rate to output rate via linear interpolation
+                        // and write into dry_mix
+                        if in_frames_got > 1 {
+                            for i in 0..frames {
+                                let src_pos = i as f64 * ratio;
+                                let idx = src_pos as usize;
+                                if idx + 1 >= in_frames_got { break; }
+                                let frac = src_pos - idx as f64;
+                                let frac = frac as f32;
+                                let l = mon_fx_l[idx] + (mon_fx_l[idx + 1] - mon_fx_l[idx]) * frac;
+                                let r = mon_fx_r[idx] + (mon_fx_r[idx + 1] - mon_fx_r[idx]) * frac;
+                                dry_mix[i][0] += l;
+                                dry_mix[i][1] += r;
+                            }
+                        }
+                    }
+
                     // Write final output (stereo)
                     for i in 0..frames {
                         let base = i * channels;
@@ -641,6 +766,11 @@ impl AudioEngine {
             metronome_enabled,
             bpm_bits,
             keyboard_preview,
+            monitoring_enabled,
+            monitor_ring,
+            monitor_effect_plugins,
+            monitor_input_channels,
+            monitor_input_sample_rate,
         })
     }
 
@@ -801,6 +931,35 @@ impl AudioEngine {
     pub fn set_bpm(&self, bpm: f32) {
         store_f64(&self.bpm_bits, bpm as f64);
     }
+
+    pub fn monitor_ring(&self) -> Arc<MonitorRingBuffer> {
+        self.monitor_ring.clone()
+    }
+
+    pub fn monitoring_enabled_flag(&self) -> Arc<AtomicBool> {
+        self.monitoring_enabled.clone()
+    }
+
+    pub fn monitor_input_channels_flag(&self) -> Arc<AtomicUsize> {
+        self.monitor_input_channels.clone()
+    }
+
+    pub fn monitor_input_sample_rate_flag(&self) -> Arc<AtomicU64> {
+        self.monitor_input_sample_rate.clone()
+    }
+
+    pub fn set_monitoring_enabled(&self, enabled: bool) {
+        self.monitoring_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn update_monitor_effects(
+        &self,
+        plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
+    ) {
+        if let Ok(mut guard) = self.monitor_effect_plugins.lock() {
+            *guard = plugins;
+        }
+    }
 }
 
 pub struct AudioRecorder {
@@ -809,6 +968,10 @@ pub struct AudioRecorder {
     sample_rate: u32,
     channels: usize,
     recording: Arc<AtomicBool>,
+    monitoring: Arc<AtomicBool>,
+    monitor_ring: Option<Arc<MonitorRingBuffer>>,
+    monitor_input_channels: Option<Arc<AtomicUsize>>,
+    monitor_input_sample_rate: Option<Arc<AtomicU64>>,
 }
 
 impl AudioRecorder {
@@ -831,6 +994,10 @@ impl AudioRecorder {
             sample_rate,
             channels,
             recording: Arc::new(AtomicBool::new(false)),
+            monitoring: Arc::new(AtomicBool::new(false)),
+            monitor_ring: None,
+            monitor_input_channels: None,
+            monitor_input_sample_rate: None,
         })
     }
 
@@ -838,9 +1005,17 @@ impl AudioRecorder {
         self.recording.load(Ordering::Relaxed)
     }
 
-    pub fn start(&mut self) -> bool {
-        if self.is_recording() {
-            return false;
+    pub fn set_monitor_ring(&mut self, ring: Arc<MonitorRingBuffer>, flag: Arc<AtomicBool>, input_channels: Arc<AtomicUsize>, input_sample_rate: Arc<AtomicU64>) {
+        self.monitor_ring = Some(ring);
+        self.monitoring = flag;
+        self.monitor_input_channels = Some(input_channels);
+        self.monitor_input_sample_rate = Some(input_sample_rate);
+    }
+
+    /// Ensure the CPAL input stream is running (needed for recording or monitoring).
+    fn ensure_stream(&mut self) -> bool {
+        if self.stream.is_some() {
+            return true;
         }
 
         let host = cpal::default_host();
@@ -856,19 +1031,34 @@ impl AudioRecorder {
         self.sample_rate = config.sample_rate.0;
         self.channels = config.channels as usize;
 
+        // Update engine's knowledge of input channel count and sample rate
+        if let Some(ref ch_flag) = self.monitor_input_channels {
+            ch_flag.store(self.channels, Ordering::Relaxed);
+        }
+        if let Some(ref sr_flag) = self.monitor_input_sample_rate {
+            sr_flag.store(self.sample_rate as u64, Ordering::Relaxed);
+        }
+
         let buf = Arc::new(Mutex::new(Vec::<f32>::new()));
         self.buffer = buf.clone();
         let rec = self.recording.clone();
+        let mon = self.monitoring.clone();
+        let mon_ring = self.monitor_ring.clone();
 
-        let channels = self.channels;
         let stream = match device.build_input_stream(
             &config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                if !rec.load(Ordering::Relaxed) {
-                    return;
+                // Push to recording buffer when recording
+                if rec.load(Ordering::Relaxed) {
+                    if let Ok(mut guard) = buf.try_lock() {
+                        guard.extend_from_slice(data);
+                    }
                 }
-                if let Ok(mut guard) = buf.try_lock() {
-                    guard.extend_from_slice(data);
+                // Push to monitoring ring buffer when monitoring
+                if mon.load(Ordering::Relaxed) {
+                    if let Some(ref ring) = mon_ring {
+                        ring.push(data);
+                    }
                 }
             },
             |err| eprintln!("Recording stream error: {}", err),
@@ -883,10 +1073,45 @@ impl AudioRecorder {
         }
 
         self.stream = Some(stream);
+        true
+    }
+
+    /// Drop the input stream if neither recording nor monitoring need it.
+    fn maybe_drop_stream(&mut self) {
+        if !self.is_recording() && !self.monitoring.load(Ordering::Relaxed) {
+            self.stream = None;
+        }
+    }
+
+    pub fn set_monitoring(&mut self, enabled: bool) {
+        println!("  set_monitoring({}) ring={} flag={}", enabled, self.monitor_ring.is_some(), self.monitoring.load(Ordering::Relaxed));
+        if enabled {
+            let ok = self.ensure_stream();
+            println!("  ensure_stream -> {} stream={}", ok, self.stream.is_some());
+            println!("  INPUT: {} Hz, {} ch", self.sample_rate, self.channels);
+        } else {
+            self.maybe_drop_stream();
+        }
+    }
+
+    pub fn start(&mut self) -> bool {
+        if self.is_recording() {
+            return false;
+        }
+
+        if !self.ensure_stream() {
+            return false;
+        }
+
+        // Reset the recording buffer
+        if let Ok(mut guard) = self.buffer.lock() {
+            guard.clear();
+        }
+
         self.recording.store(true, Ordering::Relaxed);
         println!(
             "  Recording started ({} ch, {} Hz)",
-            channels, self.sample_rate
+            self.channels, self.sample_rate
         );
         true
     }
@@ -930,7 +1155,7 @@ impl AudioRecorder {
             return None;
         }
         self.recording.store(false, Ordering::Relaxed);
-        self.stream = None;
+        self.maybe_drop_stream();
 
         let interleaved = {
             let guard = self.buffer.lock().ok()?;

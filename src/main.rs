@@ -471,6 +471,7 @@ struct App {
     audio_engine: Option<NativeAudioEngine>,
     recorder: Option<NativeAudioRecorder>,
     recording_waveform_id: Option<EntityId>,
+    input_monitoring: bool,
     last_canvas_click_world: [f32; 2],
     selected: Vec<HitTarget>,
     drag: DragState,
@@ -596,6 +597,7 @@ impl App {
             audio_engine: None,
             recorder: None,
             recording_waveform_id: None,
+            input_monitoring: false,
             last_canvas_click_world: [0.0; 2],
             selected: Vec::new(),
             drag: DragState::None,
@@ -1178,9 +1180,19 @@ impl App {
             println!("  Warning: no audio output device found");
         }
 
-        let recorder = AudioRecorder::new();
+        let mut recorder = AudioRecorder::new();
         if recorder.is_none() {
             println!("  Warning: no audio input device found");
+        }
+
+        // Wire monitoring ring buffer between recorder and engine
+        if let (Some(ref mut rec), Some(ref eng)) = (&mut recorder, &audio_engine) {
+            rec.set_monitor_ring(
+                eng.monitor_ring(),
+                eng.monitoring_enabled_flag(),
+                eng.monitor_input_channels_flag(),
+                eng.monitor_input_sample_rate_flag(),
+            );
         }
 
         let plugin_registry = effects::PluginRegistry::new();
@@ -1353,6 +1365,7 @@ impl App {
             audio_engine,
             recorder,
             recording_waveform_id: None,
+            input_monitoring: false,
             last_canvas_click_world: [0.0; 2],
             selected: Vec::new(),
             drag: DragState::None,
@@ -2897,6 +2910,7 @@ impl App {
             engine.update_effect_regions(regions);
         }
         self.sync_instrument_regions();
+        self.sync_monitor_effects();
     }
 
     fn add_loop_area(&mut self) {
@@ -3156,6 +3170,70 @@ impl App {
     }
 
     #[cfg(feature = "native")]
+    fn toggle_monitoring(&mut self) {
+        self.input_monitoring = !self.input_monitoring;
+
+        // Set engine flag first so the input callback sees it when the stream starts
+        if let Some(ref engine) = self.audio_engine {
+            engine.set_monitoring_enabled(self.input_monitoring);
+        }
+
+        if let Some(ref mut recorder) = self.recorder {
+            recorder.set_monitoring(self.input_monitoring);
+        }
+
+        self.sync_monitor_effects();
+        self.request_redraw();
+    }
+
+    #[cfg(not(feature = "native"))]
+    fn toggle_monitoring(&mut self) {}
+
+    #[cfg(feature = "native")]
+    fn sync_monitor_effects(&self) {
+        let engine = match &self.audio_engine {
+            Some(e) => e,
+            None => return,
+        };
+
+        if !self.input_monitoring {
+            engine.update_monitor_effects(vec![]);
+            return;
+        }
+
+        // Find recording waveform position to check spatial overlap with effect regions
+        let wf = match self.recording_waveform_id.and_then(|id| self.waveforms.get(&id)) {
+            Some(w) => w,
+            None => {
+                engine.update_monitor_effects(vec![]);
+                return;
+            }
+        };
+
+        let wf_y = wf.position[1];
+        let wf_y_end = wf_y + wf.size[1];
+
+        let mut plugins = Vec::new();
+        for er in self.effect_regions.values() {
+            let ey = er.position[1];
+            let ey_end = ey + er.size[1];
+            // Check vertical overlap
+            if wf_y < ey_end && wf_y_end > ey {
+                let block_ids = effects::collect_plugins_for_region(er, &self.plugin_blocks);
+                for id in &block_ids {
+                    if let Some(pb) = self.plugin_blocks.get(id) {
+                        plugins.push(pb.gui.clone());
+                    }
+                }
+            }
+        }
+        engine.update_monitor_effects(plugins);
+    }
+
+    #[cfg(not(feature = "native"))]
+    fn sync_monitor_effects(&self) {}
+
+    #[cfg(feature = "native")]
     fn toggle_recording(&mut self) {
         if self.recorder.is_none() {
             return;
@@ -3262,6 +3340,7 @@ impl App {
                     engine.toggle_playback();
                 }
             }
+            self.sync_monitor_effects();
         }
     }
 

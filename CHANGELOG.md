@@ -1,4 +1,5 @@
-- 2026-03-22: feat: shift+scroll pans canvas horizontally (Ableton-style) (35.0k loc)
+- 2026-03-22: feat: input monitoring — headphone toggle in transport routes mic to output, with effect processing when recording in effect regions (35.4k loc)
+- 2026-03-22: feat: shift+scroll pans canvas horizontally (35.0k loc)
 - 2026-03-21: feat: layer dots now render entity color — waveform, midi, plugin use stored color; instrument/effect use theme fallback (35.0k loc)
 - 2026-03-21: feat: add color field to FlatLayerRow, populated from entity (waveform/midi/plugin) during flatten_node (35.0k loc)
 - 2026-03-21: feat: replace rack dependency with built-in vst3-gui scanner — removed rack crate, unified plugin scanning cross-platform (35.0k loc)

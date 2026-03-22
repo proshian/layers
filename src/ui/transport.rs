@@ -7,7 +7,7 @@ use crate::theme::{RECORD_ACTIVE, RECORD_DIM};
 // Transport Panel (bottom-center playback status)
 // ---------------------------------------------------------------------------
 
-pub(crate) const TRANSPORT_WIDTH: f32 = 280.0;
+pub(crate) const TRANSPORT_WIDTH: f32 = 310.0;
 const TRANSPORT_HEIGHT: f32 = 36.0;
 const TRANSPORT_BOTTOM_MARGIN: f32 = 32.0;
 
@@ -25,9 +25,22 @@ impl TransportPanel {
     pub(crate) fn record_button_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let (pos, size) = Self::panel_rect(screen_w, screen_h, scale);
         let btn_size = 24.0 * scale;
+        let btn_x = pos[0] + size[0] - btn_size - 38.0 * scale;
+        let btn_y = pos[1] + (size[1] - btn_size) * 0.5;
+        ([btn_x, btn_y], [btn_size, btn_size])
+    }
+
+    pub(crate) fn monitor_button_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        let (pos, size) = Self::panel_rect(screen_w, screen_h, scale);
+        let btn_size = 20.0 * scale;
         let btn_x = pos[0] + size[0] - btn_size - 8.0 * scale;
         let btn_y = pos[1] + (size[1] - btn_size) * 0.5;
         ([btn_x, btn_y], [btn_size, btn_size])
+    }
+
+    pub(crate) fn hit_monitor_button(pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        let (rp, rs) = Self::monitor_button_rect(screen_w, screen_h, scale);
+        point_in_rect(pos, rp, rs)
     }
 
     pub(crate) fn build_instances(
@@ -39,6 +52,7 @@ impl TransportPanel {
         is_recording: bool,
         metronome_enabled: bool,
         computer_keyboard_armed: bool,
+        input_monitoring: bool,
     ) -> Vec<InstanceRaw> {
         let mut out = Vec::new();
         let (pos, size) = Self::panel_rect(screen_w, screen_h, scale);
@@ -122,6 +136,46 @@ impl TransportPanel {
                     border_radius: min_w * 0.5,
                 });
             }
+        }
+
+        // input monitor headphone icon
+        {
+            let (mon_pos, mon_size) = Self::monitor_button_rect(screen_w, screen_h, scale);
+            let mon_color = if input_monitoring {
+                [0.3, 0.85, 0.5, 0.95]
+            } else {
+                [1.0, 1.0, 1.0, 0.30]
+            };
+            let cx = mon_pos[0] + mon_size[0] * 0.5;
+            let cy = mon_pos[1] + mon_size[1] * 0.5;
+
+            // Headband (thin horizontal bar at top)
+            let band_w = 10.0 * scale;
+            let band_h = 2.0 * scale;
+            out.push(InstanceRaw {
+                position: [cx - band_w * 0.5, cy - 5.0 * scale],
+                size: [band_w, band_h],
+                color: mon_color,
+                border_radius: band_h * 0.5,
+            });
+
+            // Left ear cup
+            let cup_w = 3.5 * scale;
+            let cup_h = 7.0 * scale;
+            out.push(InstanceRaw {
+                position: [cx - band_w * 0.5 - cup_w * 0.25, cy - 3.0 * scale],
+                size: [cup_w, cup_h],
+                color: mon_color,
+                border_radius: 1.5 * scale,
+            });
+
+            // Right ear cup
+            out.push(InstanceRaw {
+                position: [cx + band_w * 0.5 - cup_w * 0.75, cy - 3.0 * scale],
+                size: [cup_w, cup_h],
+                color: mon_color,
+                border_radius: 1.5 * scale,
+            });
         }
 
         // record button: red circle (brighter when recording)
