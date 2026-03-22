@@ -9,6 +9,7 @@ pub enum LayerNodeKind {
     Waveform,
     EffectRegion,
     PluginBlock,
+    TextNote,
 }
 
 impl LayerNodeKind {
@@ -19,6 +20,7 @@ impl LayerNodeKind {
             Self::Waveform => "waveform",
             Self::EffectRegion => "effect_region",
             Self::PluginBlock => "plugin_block",
+            Self::TextNote => "text_note",
         }
     }
 
@@ -29,6 +31,7 @@ impl LayerNodeKind {
             "waveform" => Some(Self::Waveform),
             "effect_region" => Some(Self::EffectRegion),
             "plugin_block" => Some(Self::PluginBlock),
+            "text_note" => Some(Self::TextNote),
             _ => None,
         }
     }
@@ -188,6 +191,7 @@ fn flatten_node(
             plugin_blocks.get(&node.entity_id).map(|pb| pb.plugin_name.clone())
                 .unwrap_or_else(|| "Plugin".to_string())
         }
+        LayerNodeKind::TextNote => "Text Note".to_string(),
     };
 
     let color = match node.kind {
@@ -202,6 +206,7 @@ fn flatten_node(
         }
         LayerNodeKind::Instrument => [0.5, 0.5, 0.5, 1.0],
         LayerNodeKind::EffectRegion => [0.5, 0.5, 0.5, 1.0],
+        LayerNodeKind::TextNote => [0.6, 0.6, 0.5, 1.0],
     };
 
     rows.push(FlatLayerRow {
@@ -241,6 +246,7 @@ pub fn sync_tree(
             LayerNodeKind::EffectRegion => effect_regions.contains_key(&node.entity_id),
             LayerNodeKind::MidiClip => midi_clips.contains_key(&node.entity_id),
             LayerNodeKind::PluginBlock => plugin_blocks.contains_key(&node.entity_id),
+            LayerNodeKind::TextNote => true, // text notes not tracked in tree yet
         }
     });
 

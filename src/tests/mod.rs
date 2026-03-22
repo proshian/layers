@@ -18,3 +18,4 @@ mod metronome;
 mod tooltip;
 mod layers;
 mod monitoring;
+mod text_notes;

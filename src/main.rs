@@ -21,6 +21,7 @@ mod surreal_client;
 mod plugins;
 mod regions;
 mod settings;
+mod text_note;
 pub mod theme;
 mod storage;
 mod ui;
@@ -160,6 +161,7 @@ pub(crate) enum HitTarget {
     ComponentInstance(EntityId),
     MidiClip(EntityId),
     InstrumentRegion(EntityId),
+    TextNote(EntityId),
 }
 
 use automation::{AutomationData, AutomationParam};
@@ -301,6 +303,12 @@ enum DragState {
         start_world_y: f32,
         original_height: f32,
     },
+    ResizingTextNote {
+        note_id: EntityId,
+        anchor: [f32; 2],
+        nwse: bool,
+        before: text_note::TextNote,
+    },
 }
 
 /// Captures before-state of an entity for drag operations.
@@ -316,6 +324,7 @@ pub(crate) enum EntityBeforeState {
     ComponentInstance(component::ComponentInstance),
     MidiClip(midi::MidiClip),
     InstrumentRegion(instruments::InstrumentRegionSnapshot),
+    TextNote(text_note::TextNote),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -345,6 +354,15 @@ enum InstrumentRegionHover {
     CornerSE(EntityId),
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum TextNoteHover {
+    None,
+    CornerNW(EntityId),
+    CornerNE(EntityId),
+    CornerSW(EntityId),
+    CornerSE(EntityId),
+}
+
 
 #[derive(Clone)]
 enum ClipboardItem {
@@ -362,6 +380,7 @@ enum ClipboardItem {
     MidiClip(midi::MidiClip),
     MidiNotes(Vec<midi::MidiNote>),
     InstrumentRegion(instruments::InstrumentRegionSnapshot),
+    TextNote(text_note::TextNote),
 }
 
 struct Clipboard {
@@ -515,6 +534,9 @@ struct App {
     component_def_hover: ComponentDefHover,
     effect_region_hover: EffectRegionHover,
     instrument_region_hover: InstrumentRegionHover,
+    text_notes: IndexMap<EntityId, text_note::TextNote>,
+    text_note_hover: TextNoteHover,
+    editing_text_note: Option<text_note::TextNoteEditState>,
     midi_clips: IndexMap<EntityId, midi::MidiClip>,
     instrument_regions: IndexMap<EntityId, instruments::InstrumentRegion>,
     editing_midi_clip: Option<EntityId>,
@@ -641,6 +663,9 @@ impl App {
             component_def_hover: ComponentDefHover::None,
             effect_region_hover: EffectRegionHover::None,
             instrument_region_hover: InstrumentRegionHover::None,
+            text_notes: IndexMap::new(),
+            text_note_hover: TextNoteHover::None,
+            editing_text_note: None,
             midi_clips: IndexMap::new(),
             instrument_regions: IndexMap::new(),
             editing_midi_clip: None,
@@ -961,6 +986,7 @@ impl App {
             stored_midi_clips,
             stored_instrument_regions,
             stored_layer_tree,
+            restored_text_notes,
         ) = match loaded {
             Some(state) => {
                 println!(
@@ -1092,6 +1118,7 @@ impl App {
                     storage::midi_clips_from_stored(state.midi_clips),
                     storage::instrument_regions_from_stored(state.instrument_regions),
                     state.layer_tree,
+                    storage::text_notes_from_stored(state.text_notes),
                 )
             }
             None => {
@@ -1115,6 +1142,7 @@ impl App {
                     Vec::new(),  // stored_midi_clips
                     Vec::new(),  // stored_instrument_regions
                     Vec::new(),  // stored_layer_tree
+                    IndexMap::new(),  // text_notes
                 )
             }
         };
@@ -1409,6 +1437,9 @@ impl App {
             component_def_hover: ComponentDefHover::None,
             effect_region_hover: EffectRegionHover::None,
             instrument_region_hover: InstrumentRegionHover::None,
+            text_notes: restored_text_notes,
+            text_note_hover: TextNoteHover::None,
+            editing_text_note: None,
             midi_clips: restored_midi_clips,
             instrument_regions: restored_instrument_regions,
             editing_midi_clip: None,
@@ -1705,6 +1736,7 @@ impl App {
                     },
                 }).collect(),
                 layer_tree: layers::tree_to_stored(&self.layer_tree),
+                text_notes: storage::text_notes_to_stored(&self.text_notes),
             };
             storage.save_project_state(state);
 
@@ -2159,6 +2191,9 @@ impl App {
             );
             self.layer_tree = tree;
         }
+
+        self.text_notes = storage::text_notes_from_stored(state.text_notes);
+        self.editing_text_note = None;
 
         self.editing_midi_clip = None;
         self.selected_midi_notes.clear();
@@ -2988,6 +3023,57 @@ impl App {
         self.request_redraw();
     }
 
+    fn add_text_note(&mut self) {
+        let (sw, sh, _) = self.screen_info();
+        let center = self.camera.screen_to_world([sw * 0.5, sh * 0.5]);
+        let w = text_note::DEFAULT_SIZE[0];
+        let h = text_note::DEFAULT_SIZE[1];
+        let pos = [center[0] - w * 0.5, center[1] - h * 0.5];
+        let id = new_id();
+        let data = text_note::TextNote::new(pos);
+        self.text_notes.insert(id, data.clone());
+        self.push_op(operations::Operation::CreateTextNote { id, data });
+        self.selected.clear();
+        self.selected.push(HitTarget::TextNote(id));
+        self.render_generation += 1;
+        self.request_redraw();
+    }
+
+    pub(crate) fn commit_text_note_edit(&mut self) {
+        if let Some(edit) = self.editing_text_note.take() {
+            if let Some(tn) = self.text_notes.get(&edit.note_id) {
+                if tn.text != edit.before_text {
+                    let mut before = tn.clone();
+                    before.text = edit.before_text;
+                    let after = tn.clone();
+                    self.push_op(operations::Operation::UpdateTextNote {
+                        id: edit.note_id,
+                        before,
+                        after,
+                    });
+                }
+            }
+            self.render_generation += 1;
+        }
+    }
+
+    pub(crate) fn enter_text_note_edit(&mut self, note_id: EntityId) {
+        // Commit any existing edit first
+        self.commit_text_note_edit();
+        if let Some(tn) = self.text_notes.get(&note_id) {
+            let text = tn.text.clone();
+            let cursor = text.len();
+            self.editing_text_note = Some(text_note::TextNoteEditState {
+                note_id,
+                text: text.clone(),
+                before_text: text,
+                cursor,
+            });
+            self.render_generation += 1;
+            self.request_redraw();
+        }
+    }
+
     #[cfg(test)]
     fn add_instrument_area(&mut self) {
         let (pos, size) = if let Some(sa) = self.select_area.take() {
@@ -3741,6 +3827,7 @@ impl App {
             &self.component_instances,
             &self.midi_clips,
             &self.instrument_regions,
+            &self.text_notes,
             self.editing_component,
             world,
             &self.camera,
@@ -3902,6 +3989,7 @@ impl App {
             HitTarget::PluginBlock(i) => { if let Some(p) = self.plugin_blocks.get_mut(i) { p.position = pos; } }
             HitTarget::LoopRegion(i) => { if let Some(l) = self.loop_regions.get_mut(i) { l.position = pos; } }
             HitTarget::ExportRegion(i) => { if let Some(e) = self.export_regions.get_mut(i) { e.position = pos; } }
+            HitTarget::TextNote(i) => { if let Some(tn) = self.text_notes.get_mut(i) { tn.position = pos; } }
             HitTarget::ComponentDef(i) => {
                 let wf_ids_and_delta = if let Some(comp) = self.components.get(i) {
                     let dx = pos[0] - comp.position[0];
@@ -3940,6 +4028,7 @@ impl App {
             HitTarget::ComponentInstance(i) => self.component_instances.get(i).map(|c| c.position).unwrap_or([0.0; 2]),
             HitTarget::MidiClip(i) => self.midi_clips.get(i).map(|m| m.position).unwrap_or([0.0; 2]),
             HitTarget::InstrumentRegion(i) => self.instrument_regions.get(i).map(|r| r.position).unwrap_or([0.0; 2]),
+            HitTarget::TextNote(i) => self.text_notes.get(i).map(|t| t.position).unwrap_or([0.0; 2]),
         }
     }
 
@@ -3960,6 +4049,7 @@ impl App {
             }
             HitTarget::MidiClip(i) => self.midi_clips.get(i).map(|m| m.size).unwrap_or([50.0; 2]),
             HitTarget::InstrumentRegion(i) => self.instrument_regions.get(i).map(|r| r.size).unwrap_or([50.0; 2]),
+            HitTarget::TextNote(i) => self.text_notes.get(i).map(|t| t.size).unwrap_or([50.0; 2]),
         }
     }
 
@@ -4084,6 +4174,14 @@ impl App {
                             new_selected.push(HitTarget::InstrumentRegion(nid));
                         }
                     }
+                    HitTarget::TextNote(i) => {
+                        if let Some(tn) = self.text_notes.get(&i).cloned() {
+                            let nid = new_id();
+                            self.text_notes.insert(nid, tn.clone());
+                            copy_ops.push(operations::Operation::CreateTextNote { id: nid, data: tn });
+                            new_selected.push(HitTarget::TextNote(nid));
+                        }
+                    }
                     HitTarget::ComponentDef(i) => {
                         if let Some(src) = self.components.get(&i).cloned() {
                             let comp_nid = new_id();
@@ -4142,6 +4240,7 @@ impl App {
                     };
                     (*t, EntityBeforeState::InstrumentRegion(snap))
                 }),
+                HitTarget::TextNote(id) => self.text_notes.get(id).map(|tn| (*t, EntityBeforeState::TextNote(tn.clone()))),
             }
         }).collect();
 
@@ -4221,6 +4320,11 @@ impl App {
                             ops.push(crate::operations::Operation::UpdateInstrumentRegion { id, before, after });
                         }
                     }
+                    (HitTarget::TextNote(id), EntityBeforeState::TextNote(before)) => {
+                        if let Some(after) = self.text_notes.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateTextNote { id, before, after: after.clone() });
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -4289,6 +4393,7 @@ impl App {
                         };
                         (*t, EntityBeforeState::InstrumentRegion(snap))
                     }),
+                    HitTarget::TextNote(id) => self.text_notes.get(id).map(|tn| (*t, EntityBeforeState::TextNote(tn.clone()))),
                 }
             }).collect();
             self.arrow_nudge_before = Some(before_states);
@@ -4661,6 +4766,9 @@ impl App {
             CommandAction::AddMidiClip => {
                 self.add_midi_clip();
             }
+            CommandAction::AddTextNote => {
+                self.add_text_note();
+            }
             CommandAction::AddInstrument => {
                 #[cfg(feature = "native")]
                 {
@@ -4805,6 +4913,7 @@ impl App {
             &self.component_instances,
             &self.midi_clips,
             &self.instrument_regions,
+            &self.text_notes,
             self.editing_component,
             world,
             &self.camera,
@@ -5215,6 +5324,15 @@ impl App {
                         new_selected.push(HitTarget::MidiClip(nid));
                     }
                 }
+                HitTarget::TextNote(i) => {
+                    if let Some(tn) = self.text_notes.get(&i).cloned() {
+                        let mut tn = tn;
+                        tn.position[0] += tn.size[0];
+                        let nid = new_id();
+                        self.text_notes.insert(nid, tn);
+                        new_selected.push(HitTarget::TextNote(nid));
+                    }
+                }
                 HitTarget::InstrumentRegion(i) => {
                     if let Some(ir) = self.instrument_regions.get(&i).cloned() {
                         let mut ir = ir;
@@ -5240,6 +5358,7 @@ impl App {
                 HitTarget::ComponentInstance(id) => { if let Some(d) = self.component_instances.get(id) { dup_ops.push(operations::Operation::CreateComponentInstance { id: *id, data: d.clone() }); } }
                 HitTarget::MidiClip(id) => { if let Some(d) = self.midi_clips.get(id) { dup_ops.push(operations::Operation::CreateMidiClip { id: *id, data: d.clone() }); } }
                 HitTarget::InstrumentRegion(id) => { if let Some(ir) = self.instrument_regions.get(id) { let snap = instruments::InstrumentRegionSnapshot { position: ir.position, size: ir.size, name: ir.name.clone(), plugin_id: ir.plugin_id.clone(), plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone() }; dup_ops.push(operations::Operation::CreateInstrumentRegion { id: *id, data: snap }); } }
+                HitTarget::TextNote(id) => { if let Some(d) = self.text_notes.get(id) { dup_ops.push(operations::Operation::CreateTextNote { id: *id, data: d.clone() }); } }
             }
         }
         let dup_wf_ids: Vec<EntityId> = new_selected.iter()
@@ -5354,6 +5473,11 @@ impl App {
                         ));
                     }
                 }
+                HitTarget::TextNote(i) => {
+                    if let Some(tn) = self.text_notes.get(i) {
+                        self.clipboard.items.push(ClipboardItem::TextNote(tn.clone()));
+                    }
+                }
             }
         }
     }
@@ -5421,6 +5545,7 @@ impl App {
                 ClipboardItem::MidiClip(mc) => mc.position,
                 ClipboardItem::MidiNotes(_) => continue,
                 ClipboardItem::InstrumentRegion(ir) => ir.position,
+                ClipboardItem::TextNote(tn) => tn.position,
             };
             if pos[0] < min_x {
                 min_x = pos[0];
@@ -5532,6 +5657,13 @@ impl App {
                     self.instrument_regions.insert(nid, ir);
                     new_selected.push(HitTarget::InstrumentRegion(nid));
                 }
+                ClipboardItem::TextNote(mut tn) => {
+                    tn.position[0] += dx;
+                    tn.position[1] += dy;
+                    let nid = new_id();
+                    self.text_notes.insert(nid, tn);
+                    new_selected.push(HitTarget::TextNote(nid));
+                }
             }
         }
 
@@ -5549,6 +5681,7 @@ impl App {
                 HitTarget::ComponentInstance(id) => { if let Some(d) = self.component_instances.get(id) { paste_ops.push(operations::Operation::CreateComponentInstance { id: *id, data: d.clone() }); } }
                 HitTarget::MidiClip(id) => { if let Some(d) = self.midi_clips.get(id) { paste_ops.push(operations::Operation::CreateMidiClip { id: *id, data: d.clone() }); } }
                 HitTarget::InstrumentRegion(id) => { if let Some(ir) = self.instrument_regions.get(id) { let snap = instruments::InstrumentRegionSnapshot { position: ir.position, size: ir.size, name: ir.name.clone(), plugin_id: ir.plugin_id.clone(), plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone() }; paste_ops.push(operations::Operation::CreateInstrumentRegion { id: *id, data: snap }); } }
+                HitTarget::TextNote(id) => { if let Some(d) = self.text_notes.get(id) { paste_ops.push(operations::Operation::CreateTextNote { id: *id, data: d.clone() }); } }
             }
         }
         let pasted_wf_ids: Vec<EntityId> = new_selected.iter()
@@ -5580,6 +5713,7 @@ impl App {
         let inst_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ComponentInstance(i) => Some(*i), _ => None }).collect();
         let mc_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::MidiClip(i) => Some(*i), _ => None }).collect();
         let ir_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::InstrumentRegion(i) => Some(*i), _ => None }).collect();
+        let tn_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::TextNote(i) => Some(*i), _ => None }).collect();
 
         #[cfg(feature = "native")]
         if !ir_ids.is_empty() {
@@ -5642,6 +5776,7 @@ impl App {
             }
         }
         for &id in &ir_ids { if let Some(ir) = self.instrument_regions.get(&id) { let snap = instruments::InstrumentRegionSnapshot { position: ir.position, size: ir.size, name: ir.name.clone(), plugin_id: ir.plugin_id.clone(), plugin_name: ir.plugin_name.clone(), plugin_path: ir.plugin_path.clone() }; del_ops.push(operations::Operation::DeleteInstrumentRegion { id, data: snap }); } self.instrument_regions.shift_remove(&id); }
+        for &id in &tn_ids { if let Some(d) = self.text_notes.get(&id) { del_ops.push(operations::Operation::DeleteTextNote { id, data: d.clone() }); } self.text_notes.shift_remove(&id); }
         if !del_ops.is_empty() {
             self.push_op(operations::Operation::Batch(del_ops));
         }

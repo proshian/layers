@@ -718,6 +718,8 @@ impl SampleBrowser {
                         EntryKind::LayerNode { kind, color, .. } => match kind {
                             LayerNodeKind::Instrument => settings.theme.pill_instrument,
                             LayerNodeKind::EffectRegion => settings.theme.pill_effect,
+                            LayerNodeKind::PluginBlock => settings.theme.pill_effect,
+                            LayerNodeKind::TextNote => [0.6, 0.6, 0.5, 1.0],
                             _ => *color,
                         },
                         _ => settings.theme.pill_instrument,
@@ -939,6 +941,7 @@ impl SampleBrowser {
                             LayerNodeKind::Waveform => [160, 210, 180, 255],
                             LayerNodeKind::EffectRegion => [170, 190, 220, 255],
                             LayerNodeKind::PluginBlock => [170, 190, 220, 230],
+                            LayerNodeKind::TextNote => [200, 200, 180, 255],
                         },
                         _ => [185, 180, 210, 255],
                     };
