@@ -110,6 +110,10 @@ pub struct SampleBrowser {
     pub layer_rows: Vec<FlatLayerRow>,
     /// Inline rename state for a layer row: (entity_id, kind, current_text).
     pub editing_browser_name: Option<(crate::entity_id::EntityId, LayerNodeKind, String)>,
+    /// Current search query string.
+    pub search_query: String,
+    /// Whether the search bar is focused (accepting keyboard input).
+    pub search_focused: bool,
 }
 
 impl SampleBrowser {
@@ -140,6 +144,8 @@ impl SampleBrowser {
             hovered_sidebar: None,
             layer_rows: Vec::new(),
             editing_browser_name: None,
+            search_query: String::new(),
+            search_focused: false,
         }
     }
 
@@ -223,9 +229,14 @@ impl SampleBrowser {
 
     pub fn rebuild_entries(&mut self) {
         self.entries.clear();
+        let query = self.search_query.clone();
+        let searching = !query.is_empty();
         match self.active_category {
             BrowserCategory::Layers => {
                 for row in &self.layer_rows {
+                    if searching && !fuzzy_match(&row.label, &query) {
+                        continue;
+                    }
                     self.entries.push(BrowserEntry {
                         path: PathBuf::new(),
                         name: row.label.clone(),
@@ -236,17 +247,27 @@ impl SampleBrowser {
                             expanded: row.expanded,
                             color: row.color,
                         },
-                        depth: row.depth,
+                        depth: if searching { 0 } else { row.depth },
                     });
                 }
             }
             BrowserCategory::Samples => {
-                for root in &self.root_folders {
-                    walk_dir(&mut self.entries, &self.expanded, root, 0);
+                if searching {
+                    let roots = self.root_folders.clone();
+                    for root in &roots {
+                        search_walk_dir(&mut self.entries, root, &query);
+                    }
+                } else {
+                    for root in &self.root_folders {
+                        walk_dir(&mut self.entries, &self.expanded, root, 0);
+                    }
                 }
             }
             BrowserCategory::Instruments => {
                 for inst in &self.instruments {
+                    if searching && !fuzzy_match(&inst.name, &query) {
+                        continue;
+                    }
                     self.entries.push(BrowserEntry {
                         path: PathBuf::new(),
                         name: inst.name.clone(),
@@ -260,6 +281,9 @@ impl SampleBrowser {
             }
             BrowserCategory::Effects => {
                 for plug in &self.plugins {
+                    if searching && !fuzzy_match(&plug.name, &query) {
+                        continue;
+                    }
                     self.entries.push(BrowserEntry {
                         path: PathBuf::new(),
                         name: plug.name.clone(),
@@ -380,6 +404,15 @@ impl SampleBrowser {
         pos[0] >= bp[0] && pos[0] <= bp[0] + bs[0] && pos[1] >= bp[1] && pos[1] <= bp[1] + bs[1]
     }
 
+    pub fn hit_search_bar(&self, pos: [f32; 2], scale: f32) -> bool {
+        let header_h = HEADER_HEIGHT * scale;
+        pos[1] >= 0.0
+            && pos[1] < header_h
+            && pos[0] >= 0.0
+            && pos[0] < self.panel_width(scale)
+            && !self.hit_add_button(pos, scale)
+    }
+
     /// Returns which content-area entry the position is over, if any.
     /// Only considers positions in the content area (right of sidebar).
     pub fn item_at(&self, pos: [f32; 2], _screen_h: f32, scale: f32) -> Option<usize> {
@@ -479,6 +512,64 @@ impl SampleBrowser {
             color: [1.0, 1.0, 1.0, 0.07],
             border_radius: 0.0,
         });
+
+        // --- Search bar background (inside header) ---
+        {
+            let margin = 6.0 * scale;
+            let right_pad = if self.active_category == BrowserCategory::Samples {
+                (ADD_BUTTON_SIZE + 10.0) * scale
+            } else {
+                margin
+            };
+            let sb_x = margin;
+            let sb_y = margin;
+            let sb_w_inner = w - sb_x - right_pad;
+            let sb_h = header_h - 2.0 * margin;
+            let bar_color = if self.search_focused {
+                [
+                    settings.theme.accent[0] * 0.15 + 0.05,
+                    settings.theme.accent[1] * 0.15 + 0.05,
+                    settings.theme.accent[2] * 0.15 + 0.05,
+                    1.0,
+                ]
+            } else {
+                [0.0, 0.0, 0.0, 0.25]
+            };
+            out.push(InstanceRaw {
+                position: [sb_x, sb_y],
+                size: [sb_w_inner, sb_h],
+                color: bar_color,
+                border_radius: 4.0 * scale,
+            });
+            // Focused border
+            if self.search_focused {
+                let border = 1.0 * scale;
+                out.push(InstanceRaw {
+                    position: [sb_x, sb_y],
+                    size: [sb_w_inner, border],
+                    color: [settings.theme.accent[0], settings.theme.accent[1], settings.theme.accent[2], 0.5],
+                    border_radius: 0.0,
+                });
+                out.push(InstanceRaw {
+                    position: [sb_x, sb_y + sb_h - border],
+                    size: [sb_w_inner, border],
+                    color: [settings.theme.accent[0], settings.theme.accent[1], settings.theme.accent[2], 0.5],
+                    border_radius: 0.0,
+                });
+                out.push(InstanceRaw {
+                    position: [sb_x, sb_y],
+                    size: [border, sb_h],
+                    color: [settings.theme.accent[0], settings.theme.accent[1], settings.theme.accent[2], 0.5],
+                    border_radius: 0.0,
+                });
+                out.push(InstanceRaw {
+                    position: [sb_x + sb_w_inner - border, sb_y],
+                    size: [border, sb_h],
+                    color: [settings.theme.accent[0], settings.theme.accent[1], settings.theme.accent[2], 0.5],
+                    border_radius: 0.0,
+                });
+            }
+        }
 
         // "+" add folder button — only on Samples category
         if self.active_category == BrowserCategory::Samples {
@@ -858,19 +949,39 @@ impl SampleBrowser {
         let cx = self.content_x(scale);
         let item_h = ITEM_HEIGHT * scale;
 
-        // --- Header title ---
-        out.push(TextEntry {
-            text: "BROWSER".to_string(),
-            x: 12.0 * scale,
-            y: (header_h - 14.0 * scale) * 0.5,
-            font_size: 11.0 * scale,
-            line_height: 14.0 * scale,
-            max_width: w * 0.6,
-            color: [150, 150, 160, 200],
-            weight: 600,
-            bounds: Some([0.0, 0.0, 0.0, 0.0]),
-            center: false,
-        });
+        // --- Search bar text ---
+        {
+            let margin = 6.0 * scale;
+            let right_pad = if self.active_category == BrowserCategory::Samples {
+                (ADD_BUTTON_SIZE + 10.0) * scale
+            } else {
+                margin
+            };
+            let sb_x = margin;
+            let sb_w_inner = w - sb_x - right_pad;
+            let font_sz = 11.0 * scale;
+            let line_h = 14.0 * scale;
+            let text_x = sb_x + 8.0 * scale;
+            let text_y = (header_h - line_h) * 0.5;
+            let (text, color) = if self.search_focused || !self.search_query.is_empty() {
+                let display = format!("{}|", self.search_query);
+                (display, [220u8, 220, 230, 255])
+            } else {
+                ("Search...".to_string(), [120u8, 120, 130, 160])
+            };
+            out.push(TextEntry {
+                text,
+                x: text_x,
+                y: text_y,
+                font_size: font_sz,
+                line_height: line_h,
+                max_width: sb_w_inner - 16.0 * scale,
+                color,
+                weight: 400,
+                bounds: Some([sb_x, 0.0, sb_x + sb_w_inner, header_h]),
+                center: false,
+            });
+        }
 
         // --- Sidebar category labels (fixed, not scrolled) ---
         let sb_item_h = SIDEBAR_ITEM_HEIGHT * scale;
@@ -1069,6 +1180,62 @@ fn walk_dir(
                 name: fname,
                 kind: EntryKind::File,
                 depth: depth + 1,
+            });
+        }
+    }
+}
+
+/// Fuzzy match: returns true if all characters of `needle` appear in `haystack`
+/// in order (case-insensitive). Empty needle always matches.
+fn fuzzy_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mut h_chars = haystack.chars();
+    'outer: for nc in needle.chars() {
+        let nc_lo = nc.to_lowercase().next().unwrap_or(nc);
+        loop {
+            match h_chars.next() {
+                Some(hc) => {
+                    if hc.to_lowercase().next().unwrap_or(hc) == nc_lo {
+                        continue 'outer;
+                    }
+                }
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
+/// Recursively walk `dir`, adding all files matching `query` as flat entries (depth 0).
+fn search_walk_dir(entries: &mut Vec<BrowserEntry>, dir: &std::path::Path, query: &str) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut children: Vec<(bool, String, std::path::PathBuf)> = Vec::new();
+    for item in read.flatten() {
+        let path = item.path();
+        let is_dir = path.is_dir();
+        let fname = item.file_name().to_string_lossy().to_string();
+        if fname.starts_with('.') {
+            continue;
+        }
+        children.push((is_dir, fname, path));
+    }
+    children.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+    });
+    for (is_dir, fname, path) in children {
+        if is_dir {
+            search_walk_dir(entries, &path, query);
+        } else if fuzzy_match(&fname, query) {
+            entries.push(BrowserEntry {
+                path,
+                name: fname,
+                kind: EntryKind::File,
+                depth: 0,
             });
         }
     }

@@ -885,6 +885,46 @@ impl App {
                 }
             }
 
+            // --- browser search bar input ---
+            if self.sample_browser.search_focused {
+                match &event.logical_key {
+                    Key::Named(NamedKey::Escape) => {
+                        self.sample_browser.search_query.clear();
+                        self.sample_browser.search_focused = false;
+                        self.sample_browser.rebuild_entries();
+                        self.sample_browser.text_dirty = true;
+                        self.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::Backspace) => {
+                        if self.cmd_held() {
+                            self.sample_browser.search_query.clear();
+                        } else {
+                            self.sample_browser.search_query.pop();
+                        }
+                        self.sample_browser.rebuild_entries();
+                        self.sample_browser.text_dirty = true;
+                        self.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::Space) => {
+                        self.sample_browser.search_query.push(' ');
+                        self.sample_browser.rebuild_entries();
+                        self.sample_browser.text_dirty = true;
+                        self.request_redraw();
+                        return;
+                    }
+                    Key::Character(ch) if !self.cmd_held() => {
+                        self.sample_browser.search_query.push_str(ch.as_ref());
+                        self.sample_browser.rebuild_entries();
+                        self.sample_browser.text_dirty = true;
+                        self.request_redraw();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
             // --- browser inline name editing input ---
             if self.sample_browser.editing_browser_name.is_some() {
                 match &event.logical_key {
@@ -1456,6 +1496,20 @@ impl App {
                                     self.refresh_project_browser_entries();
                                     self.ensure_plugins_scanned();
                                 }
+                                self.request_redraw();
+                            }
+                            "f" => {
+                                // Cmd+F: focus the browser search bar (open browser if needed)
+                                if !self.sample_browser.visible {
+                                    self.sample_browser.visible = true;
+                                    #[cfg(feature = "native")]
+                                    {
+                                        self.refresh_project_browser_entries();
+                                        self.ensure_plugins_scanned();
+                                    }
+                                }
+                                self.sample_browser.search_focused = true;
+                                self.sample_browser.text_dirty = true;
                                 self.request_redraw();
                             }
                             "a" if self.modifiers.shift_key() => {

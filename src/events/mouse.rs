@@ -173,6 +173,21 @@ impl App {
 
         MouseButton::Left => match state {
             ElementState::Pressed => {
+                // Handle search bar focus/unfocus
+                {
+                    let (_, _, scale) = self.screen_info();
+                    if self.sample_browser.visible {
+                        let hit = self.sample_browser.hit_search_bar(self.mouse_pos, scale);
+                        if hit != self.sample_browser.search_focused {
+                            self.sample_browser.search_focused = hit;
+                            self.sample_browser.text_dirty = true;
+                            self.request_redraw();
+                        }
+                    } else if self.sample_browser.search_focused {
+                        self.sample_browser.search_focused = false;
+                        self.sample_browser.text_dirty = true;
+                    }
+                }
                 // Cancel browser inline rename if clicking outside the editing entry
                 if self.sample_browser.editing_browser_name.is_some() {
                     let (_, sh, scale) = self.screen_info();
@@ -934,6 +949,8 @@ impl App {
                                 self.sample_browser.active_category = cat;
                                 self.sample_browser.scroll_offset = 0.0;
                                 self.sample_browser.scroll_velocity = 0.0;
+                                self.sample_browser.search_query.clear();
+                                self.sample_browser.search_focused = false;
                                 if cat == ui::browser::BrowserCategory::Layers {
                                     self.refresh_project_browser_entries();
                                 } else {
