@@ -159,6 +159,14 @@ impl ApplicationHandler for App {
             self.request_redraw();
         }
 
+        // Flush debounced search rebuild when deadline has passed.
+        if self.sample_browser.tick_search_debounce() {
+            self.request_redraw();
+        }
+        if self.sample_browser.is_search_pending() {
+            self.request_redraw();
+        }
+
         if is_playing || self.is_recording() {
             self.request_redraw();
         }

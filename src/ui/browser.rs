@@ -1,6 +1,11 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant as TimeInstant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant as TimeInstant;
+
 use crate::InstanceRaw;
 use crate::entity_id::EntityId;
 use crate::layers::{FlatLayerRow, LayerNodeKind};
@@ -83,6 +88,20 @@ pub struct PluginEntry {
     pub is_instrument: bool,
 }
 
+/// Cached file entry for fast search (avoids repeated filesystem walks).
+#[derive(Clone)]
+struct CachedFile {
+    path: PathBuf,
+    name: String,
+    name_lower: String,
+}
+
+/// Maximum number of search results to display.
+const MAX_SEARCH_RESULTS: usize = 500;
+
+/// Search debounce delay in milliseconds.
+const SEARCH_DEBOUNCE_MS: u64 = 50;
+
 pub struct SampleBrowser {
     pub root_folders: Vec<PathBuf>,
     pub expanded: HashSet<PathBuf>,
@@ -116,6 +135,12 @@ pub struct SampleBrowser {
     pub search_query: String,
     /// Whether the search bar is focused (accepting keyboard input).
     pub search_focused: bool,
+    /// Cached flat file index for fast sample search.
+    file_index: Vec<CachedFile>,
+    /// Whether the file index needs rebuilding (root folders changed).
+    file_index_dirty: bool,
+    /// When set, a search rebuild is pending and should fire after this deadline.
+    search_debounce_deadline: Option<TimeInstant>,
 }
 
 impl SampleBrowser {
@@ -149,6 +174,9 @@ impl SampleBrowser {
             editing_browser_name: None,
             search_query: String::new(),
             search_focused: false,
+            file_index: Vec::new(),
+            file_index_dirty: true,
+            search_debounce_deadline: None,
         }
     }
 
@@ -184,6 +212,7 @@ impl SampleBrowser {
         }
         self.expanded.insert(path.clone());
         self.root_folders.push(path);
+        self.file_index_dirty = true;
         self.rebuild_entries();
     }
 
@@ -191,7 +220,44 @@ impl SampleBrowser {
         if index < self.root_folders.len() {
             let removed = self.root_folders.remove(index);
             self.expanded.remove(&removed);
+            self.file_index_dirty = true;
             self.rebuild_entries();
+        }
+    }
+
+    /// Rebuild the flat file index by walking all root folders once.
+    /// Called lazily when a sample search is first performed after folders change.
+    fn ensure_file_index(&mut self) {
+        if !self.file_index_dirty {
+            return;
+        }
+        self.file_index.clear();
+        for root in &self.root_folders.clone() {
+            Self::index_walk_dir(&mut self.file_index, root);
+        }
+        self.file_index_dirty = false;
+    }
+
+    fn index_walk_dir(index: &mut Vec<CachedFile>, dir: &std::path::Path) {
+        let Ok(read) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for item in read.flatten() {
+            let path = item.path();
+            let fname = item.file_name().to_string_lossy().to_string();
+            if fname.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                Self::index_walk_dir(index, &path);
+            } else {
+                let name_lower = fname.to_lowercase();
+                index.push(CachedFile {
+                    path,
+                    name: fname,
+                    name_lower,
+                });
+            }
         }
     }
 
@@ -256,9 +322,20 @@ impl SampleBrowser {
             }
             BrowserCategory::Samples => {
                 if searching {
-                    let roots = self.root_folders.clone();
-                    for root in &roots {
-                        search_walk_dir(&mut self.entries, root, &query);
+                    self.ensure_file_index();
+                    let query_lower = query.to_lowercase();
+                    for cached in &self.file_index {
+                        if fuzzy_match_lowered(&cached.name_lower, &query_lower) {
+                            self.entries.push(BrowserEntry {
+                                path: cached.path.clone(),
+                                name: cached.name.clone(),
+                                kind: EntryKind::File,
+                                depth: 0,
+                            });
+                            if self.entries.len() >= MAX_SEARCH_RESULTS {
+                                break;
+                            }
+                        }
                     }
                 } else {
                     for root in &self.root_folders {
@@ -352,6 +429,32 @@ impl SampleBrowser {
         self.scroll_velocity += -delta;
         self.last_scroll_screen_h = screen_h;
         self.last_scroll_scale = scale;
+    }
+
+    /// Schedule a debounced search rebuild. Call this instead of `rebuild_entries()`
+    /// when the search query changes from keyboard input.
+    pub fn schedule_search_rebuild(&mut self) {
+        self.search_debounce_deadline =
+            Some(TimeInstant::now() + std::time::Duration::from_millis(SEARCH_DEBOUNCE_MS));
+    }
+
+    /// Flush pending debounced search if the deadline has passed.
+    /// Returns true if a rebuild was performed (caller should request redraw).
+    pub fn tick_search_debounce(&mut self) -> bool {
+        if let Some(deadline) = self.search_debounce_deadline {
+            if TimeInstant::now() >= deadline {
+                self.search_debounce_deadline = None;
+                self.rebuild_entries();
+                self.text_dirty = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Returns true if a search rebuild is pending (debounce timer active).
+    pub fn is_search_pending(&self) -> bool {
+        self.search_debounce_deadline.is_some()
     }
 
     /// Advance smooth scroll animation. Returns true if still animating.
@@ -1240,37 +1343,26 @@ fn fuzzy_match(haystack: &str, needle: &str) -> bool {
     true
 }
 
-/// Recursively walk `dir`, adding all files matching `query` as flat entries (depth 0).
-fn search_walk_dir(entries: &mut Vec<BrowserEntry>, dir: &std::path::Path, query: &str) {
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut children: Vec<(bool, String, std::path::PathBuf)> = Vec::new();
-    for item in read.flatten() {
-        let path = item.path();
-        let is_dir = path.is_dir();
-        let fname = item.file_name().to_string_lossy().to_string();
-        if fname.starts_with('.') {
-            continue;
-        }
-        children.push((is_dir, fname, path));
+/// Fuzzy match for pre-lowercased strings (no per-char lowercase conversion).
+fn fuzzy_match_lowered(haystack_lower: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
     }
-    children.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-    });
-    for (is_dir, fname, path) in children {
-        if is_dir {
-            search_walk_dir(entries, &path, query);
-        } else if fuzzy_match(&fname, query) {
-            entries.push(BrowserEntry {
-                path,
-                name: fname,
-                kind: EntryKind::File,
-                depth: 0,
-            });
+    let mut h_chars = haystack_lower.chars();
+    'outer: for nc in needle_lower.chars() {
+        loop {
+            match h_chars.next() {
+                Some(hc) => {
+                    if hc == nc {
+                        continue 'outer;
+                    }
+                }
+                None => return false,
+            }
         }
     }
+    true
 }
+
 
 use crate::gpu::TextEntry;

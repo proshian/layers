@@ -891,6 +891,7 @@ impl App {
                     Key::Named(NamedKey::Escape) => {
                         self.sample_browser.search_query.clear();
                         self.sample_browser.search_focused = false;
+                        // Escape clears immediately (no debounce needed).
                         self.sample_browser.rebuild_entries();
                         self.sample_browser.text_dirty = true;
                         self.request_redraw();
@@ -902,22 +903,19 @@ impl App {
                         } else {
                             self.sample_browser.search_query.pop();
                         }
-                        self.sample_browser.rebuild_entries();
-                        self.sample_browser.text_dirty = true;
+                        self.sample_browser.schedule_search_rebuild();
                         self.request_redraw();
                         return;
                     }
                     Key::Named(NamedKey::Space) => {
                         self.sample_browser.search_query.push(' ');
-                        self.sample_browser.rebuild_entries();
-                        self.sample_browser.text_dirty = true;
+                        self.sample_browser.schedule_search_rebuild();
                         self.request_redraw();
                         return;
                     }
                     Key::Character(ch) if !self.cmd_held() => {
                         self.sample_browser.search_query.push_str(ch.as_ref());
-                        self.sample_browser.rebuild_entries();
-                        self.sample_browser.text_dirty = true;
+                        self.sample_browser.schedule_search_rebuild();
                         self.request_redraw();
                         return;
                     }
