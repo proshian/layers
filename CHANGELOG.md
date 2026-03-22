@@ -1,3 +1,4 @@
+- 2026-03-22: feat: double-click effect plugin in browser adds it to selected waveform's effect chain (37.8k loc)
 - 2026-03-22: feat: cmd+delete clears text in rename mode (37.8k loc)
 - 2026-03-22: feat: per-waveform VST3 effect chains — drop plugins onto samples, shared chains with detach, bypass/delete/reorder slots in right panel (37.8k loc)
 - 2026-03-22: fix: text note text no longer bleeds through browser and right panels — clip bounds now match waveform label behavior (36.9k loc)

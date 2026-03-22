@@ -39,6 +39,7 @@ Layers is a spatial digital audio workstation (DAW) where you arrange audio clip
 - [Regions](#regions)
   - [Loop Regions](#loop-regions)
   - [Export / Render Regions](#export--render-regions)
+- [Text Notes](#text-notes)
 - [Components](#components)
   - [Creating Components](#creating-components)
   - [Using Instances](#using-instances)
@@ -142,6 +143,7 @@ Fades are applied during both playback and rendering.
 ### Splitting & Reversing
 
 - **Split** — Select a clip and press `⌘E` to split it at the playhead position. This creates two separate clips from the original.
+- **Reverse** — Select a clip and click the **Reverse** button in the Properties Panel to flip playback direction. The waveform display updates to show the reversed audio. Reversing is undoable.
 
 ### Warp Modes
 
@@ -546,6 +548,7 @@ Open Settings with `⌘,` (Cmd+Comma).
 | Action | What it does |
 |---|---|
 | Middle-click drag | Pan the canvas |
-| Scroll wheel | Pan the view |
+| Scroll wheel | Pan the view vertically |
+| `Shift`+scroll | Pan the view horizontally |
 | `⌘`+scroll | Zoom in/out (centered on cursor) |
 | Trackpad pinch | Zoom in/out |

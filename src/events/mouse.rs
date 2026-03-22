@@ -959,6 +959,19 @@ impl App {
                                     }
                                 }
                                 ui::browser::EntryKind::Plugin { unique_id, is_instrument } => {
+                                    let now = TimeInstant::now();
+                                    let is_dbl = now.duration_since(self.last_browser_click_time).as_millis() < 400
+                                        && self.last_browser_click_idx == Some(idx);
+                                    self.last_browser_click_time = now;
+                                    self.last_browser_click_idx = Some(idx);
+
+                                    if is_dbl && !is_instrument {
+                                        if let Some(HitTarget::Waveform(wf_id)) = self.selected.first().copied() {
+                                            self.add_plugin_to_waveform_chain(wf_id, unique_id, &entry.name);
+                                            self.request_redraw();
+                                            return;
+                                        }
+                                    }
                                     self.drag = DragState::DraggingPlugin {
                                         plugin_id: unique_id.clone(),
                                         plugin_name: entry.name.clone(),
