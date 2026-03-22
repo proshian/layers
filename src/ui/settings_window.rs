@@ -123,7 +123,7 @@ impl SettingsWindow {
         }
     }
 
-    fn win_rect(&self, screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+    pub fn win_rect(&self, screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let w = WIN_WIDTH * scale;
         let h = WIN_HEIGHT * scale;
         let x = (screen_w - w) * 0.5;

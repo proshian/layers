@@ -11,6 +11,7 @@ const MAX_BROWSER_WIDTH: f32 = 700.0;
 const RESIZE_HANDLE_PX: f32 = 5.0;
 pub const ITEM_HEIGHT: f32 = 24.0;
 pub const HEADER_HEIGHT: f32 = 36.0;
+const SEARCH_BAR_HEIGHT: f32 = 32.0;
 const SIDEBAR_WIDTH: f32 = 110.0;
 const SIDEBAR_ITEM_HEIGHT: f32 = 26.0;
 const SIDEBAR_SECTION_GAP: f32 = 18.0;
@@ -316,8 +317,12 @@ impl SampleBrowser {
         self.entries.len() as f32 * ITEM_HEIGHT * scale
     }
 
+    fn content_top(&self, scale: f32) -> f32 {
+        (HEADER_HEIGHT + SEARCH_BAR_HEIGHT) * scale
+    }
+
     fn visible_height(&self, screen_h: f32, scale: f32) -> f32 {
-        screen_h - HEADER_HEIGHT * scale
+        screen_h - self.content_top(scale)
     }
 
     fn max_scroll(&self, screen_h: f32, scale: f32) -> f32 {
@@ -390,9 +395,10 @@ impl SampleBrowser {
     pub fn add_button_rect(&self, scale: f32) -> ([f32; 2], [f32; 2]) {
         let w = self.panel_width(scale);
         let sz = ADD_BUTTON_SIZE * scale;
-        let margin = (HEADER_HEIGHT * scale - sz) * 0.5;
+        let row_y = HEADER_HEIGHT * scale;
+        let margin = (SEARCH_BAR_HEIGHT * scale - sz) * 0.5;
         let x = w - margin - sz;
-        let y = margin;
+        let y = row_y + margin;
         ([x, y], [sz, sz])
     }
 
@@ -405,9 +411,10 @@ impl SampleBrowser {
     }
 
     pub fn hit_search_bar(&self, pos: [f32; 2], scale: f32) -> bool {
-        let header_h = HEADER_HEIGHT * scale;
-        pos[1] >= 0.0
-            && pos[1] < header_h
+        let top = HEADER_HEIGHT * scale;
+        let bottom = top + SEARCH_BAR_HEIGHT * scale;
+        pos[1] >= top
+            && pos[1] < bottom
             && pos[0] >= 0.0
             && pos[0] < self.panel_width(scale)
             && !self.hit_add_button(pos, scale)
@@ -416,12 +423,12 @@ impl SampleBrowser {
     /// Returns which content-area entry the position is over, if any.
     /// Only considers positions in the content area (right of sidebar).
     pub fn item_at(&self, pos: [f32; 2], _screen_h: f32, scale: f32) -> Option<usize> {
-        let header_h = HEADER_HEIGHT * scale;
+        let top = self.content_top(scale);
         let cx = self.content_x(scale);
-        if pos[1] < header_h || pos[0] < cx {
+        if pos[1] < top || pos[0] < cx {
             return None;
         }
-        let y = pos[1] - header_h + self.scroll_offset;
+        let y = pos[1] - top + self.scroll_offset;
         let idx = (y / (ITEM_HEIGHT * scale)) as usize;
         if idx < self.entries.len() {
             Some(idx)
@@ -432,12 +439,12 @@ impl SampleBrowser {
 
     /// Returns which sidebar category was clicked, if any.
     pub fn hit_sidebar(&self, pos: [f32; 2], scale: f32) -> Option<BrowserCategory> {
-        let header_h = HEADER_HEIGHT * scale;
+        let top = self.content_top(scale);
         let sb_w = self.sidebar_width(scale);
-        if pos[0] >= sb_w || pos[1] < header_h {
+        if pos[0] >= sb_w || pos[1] < top {
             return None;
         }
-        let y = pos[1] - header_h;
+        let y = pos[1] - top;
         // "Library" label gap
         let section_gap = SIDEBAR_SECTION_GAP * scale;
         let item_h = SIDEBAR_ITEM_HEIGHT * scale;
@@ -451,12 +458,12 @@ impl SampleBrowser {
 
     /// Returns sidebar hover index (0-based into SIDEBAR_CATEGORIES).
     pub fn sidebar_item_at(&self, pos: [f32; 2], scale: f32) -> Option<usize> {
-        let header_h = HEADER_HEIGHT * scale;
+        let top = self.content_top(scale);
         let sb_w = self.sidebar_width(scale);
-        if pos[0] >= sb_w || pos[1] < header_h {
+        if pos[0] >= sb_w || pos[1] < top {
             return None;
         }
-        let y = pos[1] - header_h;
+        let y = pos[1] - top;
         let section_gap = SIDEBAR_SECTION_GAP * scale;
         let item_h = SIDEBAR_ITEM_HEIGHT * scale;
         let content_y = y - section_gap;
@@ -513,8 +520,24 @@ impl SampleBrowser {
             border_radius: 0.0,
         });
 
-        // --- Search bar background (inside header) ---
+        // --- Search bar row (below header) ---
         {
+            let search_bar_h = SEARCH_BAR_HEIGHT * scale;
+            let row_y = header_h;
+            // Search bar row background
+            out.push(InstanceRaw {
+                position: [0.0, row_y],
+                size: [w, search_bar_h],
+                color: settings.theme.bg_surface,
+                border_radius: 0.0,
+            });
+            // Separator under search bar row
+            out.push(InstanceRaw {
+                position: [0.0, row_y + search_bar_h - 1.0 * scale],
+                size: [w, 1.0 * scale],
+                color: [1.0, 1.0, 1.0, 0.07],
+                border_radius: 0.0,
+            });
             let margin = 6.0 * scale;
             let right_pad = if self.active_category == BrowserCategory::Samples {
                 (ADD_BUTTON_SIZE + 10.0) * scale
@@ -522,9 +545,9 @@ impl SampleBrowser {
                 margin
             };
             let sb_x = margin;
-            let sb_y = margin;
+            let sb_y = row_y + margin;
             let sb_w_inner = w - sb_x - right_pad;
-            let sb_h = header_h - 2.0 * margin;
+            let sb_h = search_bar_h - 2.0 * margin;
             let bar_color = if self.search_focused {
                 [
                     settings.theme.accent[0] * 0.15 + 0.05,
@@ -596,9 +619,10 @@ impl SampleBrowser {
         }
 
         // --- Sidebar background (slightly darker) ---
+        let ct = self.content_top(scale);
         out.push(InstanceRaw {
-            position: [0.0, header_h],
-            size: [sb_w, screen_h - header_h],
+            position: [0.0, ct],
+            size: [sb_w, screen_h - ct],
             color: [
                 settings.theme.bg_base[0] * 0.9,
                 settings.theme.bg_base[1] * 0.9,
@@ -613,7 +637,7 @@ impl SampleBrowser {
         let section_gap = SIDEBAR_SECTION_GAP * scale;
 
         for (i, cat) in SIDEBAR_CATEGORIES.iter().enumerate() {
-            let y = header_h + section_gap + i as f32 * sb_item_h;
+            let y = ct + section_gap + i as f32 * sb_item_h;
 
             // Active highlight
             if *cat == self.active_category {
@@ -647,8 +671,8 @@ impl SampleBrowser {
 
         // --- Vertical separator between sidebar and content ---
         out.push(InstanceRaw {
-            position: [sb_w - 1.0 * scale, header_h],
-            size: [1.0 * scale, screen_h - header_h],
+            position: [sb_w - 1.0 * scale, ct],
+            size: [1.0 * scale, screen_h - ct],
             color: [1.0, 1.0, 1.0, 0.07],
             border_radius: 0.0,
         });
@@ -670,9 +694,9 @@ impl SampleBrowser {
 
         for i in first_visible..last_visible {
             let entry = &self.entries[i];
-            let y = header_h + i as f32 * item_h - self.scroll_offset;
+            let y = ct + i as f32 * item_h - self.scroll_offset;
 
-            if y + item_h < header_h || y > screen_h {
+            if y + item_h < ct || y > screen_h {
                 continue;
             }
 
@@ -901,7 +925,7 @@ impl SampleBrowser {
             let sb_track_h = visible_h;
 
             out.push(InstanceRaw {
-                position: [sb_x, header_h],
+                position: [sb_x, ct],
                 size: [SCROLLBAR_WIDTH * scale, sb_track_h],
                 color: SCROLLBAR_BG,
                 border_radius: 3.0 * scale,
@@ -914,7 +938,7 @@ impl SampleBrowser {
             } else {
                 0.0
             };
-            let thumb_y = header_h + scroll_ratio * (sb_track_h - thumb_h);
+            let thumb_y = ct + scroll_ratio * (sb_track_h - thumb_h);
 
             out.push(InstanceRaw {
                 position: [sb_x, thumb_y],
@@ -949,8 +973,10 @@ impl SampleBrowser {
         let cx = self.content_x(scale);
         let item_h = ITEM_HEIGHT * scale;
 
-        // --- Search bar text ---
+        // --- Search bar text (second row, below header) ---
         {
+            let search_bar_h = SEARCH_BAR_HEIGHT * scale;
+            let row_y = header_h;
             let margin = 6.0 * scale;
             let right_pad = if self.active_category == BrowserCategory::Samples {
                 (ADD_BUTTON_SIZE + 10.0) * scale
@@ -962,7 +988,7 @@ impl SampleBrowser {
             let font_sz = 11.0 * scale;
             let line_h = 14.0 * scale;
             let text_x = sb_x + 8.0 * scale;
-            let text_y = (header_h - line_h) * 0.5;
+            let text_y = row_y + (search_bar_h - line_h) * 0.5;
             let (text, color) = if self.search_focused || !self.search_query.is_empty() {
                 let display = format!("{}|", self.search_query);
                 (display, [220u8, 220, 230, 255])
@@ -978,10 +1004,12 @@ impl SampleBrowser {
                 max_width: sb_w_inner - 16.0 * scale,
                 color,
                 weight: 400,
-                bounds: Some([sb_x, 0.0, sb_x + sb_w_inner, header_h]),
+                bounds: Some([sb_x, row_y, sb_x + sb_w_inner, row_y + search_bar_h]),
                 center: false,
             });
         }
+
+        let ct = self.content_top(scale);
 
         // --- Sidebar category labels (fixed, not scrolled) ---
         let sb_item_h = SIDEBAR_ITEM_HEIGHT * scale;
@@ -990,7 +1018,7 @@ impl SampleBrowser {
         let line_h = 15.0 * scale;
 
         for (i, cat) in SIDEBAR_CATEGORIES.iter().enumerate() {
-            let y = header_h + section_gap + i as f32 * sb_item_h;
+            let y = ct + section_gap + i as f32 * sb_item_h;
             let is_active = *cat == self.active_category;
             let color = if is_active {
                 [230, 230, 240, 255]
@@ -1013,7 +1041,7 @@ impl SampleBrowser {
 
         // --- Content area entries ---
         for (i, entry) in self.entries.iter().enumerate() {
-            let base_y = header_h + i as f32 * item_h;
+            let base_y = ct + i as f32 * item_h;
 
             match &entry.kind {
                 EntryKind::PluginHeader => {

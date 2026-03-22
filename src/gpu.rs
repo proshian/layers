@@ -2010,60 +2010,79 @@ impl Gpu {
 
         let mut browser_text_areas: Vec<TextArea> = Vec::new();
         if let Some(br) = sample_browser {
-            // Skip all browser text when a full-screen overlay is open
-            if settings_window.is_none() && command_palette.is_none() {
-                let panel_w = br.panel_width(scale);
-                let header_h = browser::HEADER_HEIGHT * scale;
-                for (idx, te) in br.cached_text.iter().enumerate() {
-                    if idx >= self.browser_text_buffers.len() {
-                        break;
-                    }
-                    let is_header = te.bounds.is_some();
-                    let actual_y = if is_header {
-                        te.y
-                    } else {
-                        te.y - br.scroll_offset
-                    };
-                    if !is_header && (actual_y + te.line_height < header_h || actual_y > h) {
-                        continue;
-                    }
-                    let clip_top = if actual_y < header_h {
-                        header_h
-                    } else {
-                        actual_y
-                    };
-                    let mut clip_right = (panel_w - 8.0 * scale) as i32;
-                    if let Some((cm_pos, cm_size)) = ctx_menu_rect {
-                        let overlaps = actual_y + te.line_height > cm_pos[1]
-                            && actual_y < cm_pos[1] + cm_size[1]
-                            && te.x < cm_pos[0] + cm_size[0];
-                        if overlaps {
-                            clip_right = clip_right.min(cm_pos[0] as i32);
-                        }
-                    }
-                    if clip_right <= te.x as i32 {
-                        continue;
-                    }
-                    browser_text_areas.push(TextArea {
-                        buffer: &self.browser_text_buffers[idx],
-                        left: te.x,
-                        top: actual_y,
-                        scale: 1.0,
-                        default_color: TextColor::rgba(
-                            te.color[0],
-                            te.color[1],
-                            te.color[2],
-                            te.color[3],
-                        ),
-                        bounds: TextBounds {
-                            left: 0,
-                            top: clip_top as i32,
-                            right: clip_right,
-                            bottom: (actual_y + te.line_height) as i32,
-                        },
-                        custom_glyphs: &[],
-                    });
+            let panel_w = br.panel_width(scale);
+            let header_h = browser::HEADER_HEIGHT * scale;
+            // Overlay rects that clip browser text (settings window, command palette)
+            let sw_rect = settings_window.map(|sw| sw.win_rect(w, h, scale));
+            let cp_rect = command_palette.map(|cp| cp.palette_rect(w, h, scale));
+            // Backdrop dim factor: settings=0.5, palette=0.55
+            let backdrop_alpha = if sw_rect.is_some() {
+                0.5_f32
+            } else if cp_rect.is_some() {
+                0.55
+            } else {
+                1.0
+            };
+            for (idx, te) in br.cached_text.iter().enumerate() {
+                if idx >= self.browser_text_buffers.len() {
+                    break;
                 }
+                let is_header = te.bounds.is_some();
+                let actual_y = if is_header {
+                    te.y
+                } else {
+                    te.y - br.scroll_offset
+                };
+                if !is_header && (actual_y + te.line_height < header_h || actual_y > h) {
+                    continue;
+                }
+                let clip_top = if actual_y < header_h {
+                    header_h
+                } else {
+                    actual_y
+                };
+                let mut clip_right = (panel_w - 8.0 * scale) as i32;
+                if let Some((cm_pos, cm_size)) = ctx_menu_rect {
+                    let overlaps = actual_y + te.line_height > cm_pos[1]
+                        && actual_y < cm_pos[1] + cm_size[1]
+                        && te.x < cm_pos[0] + cm_size[0];
+                    if overlaps {
+                        clip_right = clip_right.min(cm_pos[0] as i32);
+                    }
+                }
+                // Clip browser text behind overlay windows
+                for overlay_rect in [sw_rect, cp_rect].into_iter().flatten() {
+                    let (ov_pos, ov_size) = overlay_rect;
+                    let overlaps = actual_y + te.line_height > ov_pos[1]
+                        && actual_y < ov_pos[1] + ov_size[1]
+                        && te.x < ov_pos[0] + ov_size[0];
+                    if overlaps {
+                        clip_right = clip_right.min(ov_pos[0] as i32);
+                    }
+                }
+                if clip_right <= te.x as i32 {
+                    continue;
+                }
+                let alpha = ((te.color[3] as f32) * backdrop_alpha) as u8;
+                browser_text_areas.push(TextArea {
+                    buffer: &self.browser_text_buffers[idx],
+                    left: te.x,
+                    top: actual_y,
+                    scale: 1.0,
+                    default_color: TextColor::rgba(
+                        te.color[0],
+                        te.color[1],
+                        te.color[2],
+                        alpha,
+                    ),
+                    bounds: TextBounds {
+                        left: 0,
+                        top: clip_top as i32,
+                        right: clip_right,
+                        bottom: (actual_y + te.line_height) as i32,
+                    },
+                    custom_glyphs: &[],
+                });
             }
         }
 

@@ -1,3 +1,7 @@
+- 2026-03-22: fix: browser text clips+dims behind command palette, reusing settings window overlay technique (38.3k loc)
+- 2026-03-22: feat: move browser search bar to second row below header, freeing header for logo/project name (38.3k loc)
+- 2026-03-22: fix: dim browser text alpha behind settings window backdrop overlay (38.3k loc)
+- 2026-03-22: fix: browser text clips behind settings window instead of hiding entirely (38.3k loc)
 - 2026-03-22: fix: BPM text no longer overlaps record/monitor buttons in transport panel (38.2k loc)
 - 2026-03-22: feat: browser search bar with fuzzy match — always-visible, Cmd+F focus, filters active category (38.2k loc)
 - 2026-03-22: feat: "Add Effect" label added next to plus icon in effects section (38.0k loc)

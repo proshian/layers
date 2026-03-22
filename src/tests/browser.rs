@@ -143,19 +143,20 @@ fn test_category_switching_rebuilds_entries() {
 fn test_hit_sidebar_returns_correct_category() {
     let browser = SampleBrowser::new();
     let scale = 1.0;
-    let header_h = crate::ui::browser::HEADER_HEIGHT;
+    // Sidebar starts below header + search bar row
+    let content_top = (crate::ui::browser::HEADER_HEIGHT + 32.0) as f32;
 
-    // Click sidebar items (below header + section gap)
-    let pos_project = [50.0, header_h + 20.0];
+    // Click sidebar items (below content_top + section gap)
+    let pos_project = [50.0, content_top + 20.0];
     assert_eq!(browser.hit_sidebar(pos_project, scale), Some(BrowserCategory::Layers));
 
-    let pos_samples = [50.0, header_h + 20.0 + 26.0];
+    let pos_samples = [50.0, content_top + 20.0 + 26.0];
     assert_eq!(browser.hit_sidebar(pos_samples, scale), Some(BrowserCategory::Samples));
 
-    let pos_instruments = [50.0, header_h + 20.0 + 52.0];
+    let pos_instruments = [50.0, content_top + 20.0 + 52.0];
     assert_eq!(browser.hit_sidebar(pos_instruments, scale), Some(BrowserCategory::Instruments));
 
-    let pos_effects = [50.0, header_h + 20.0 + 78.0];
+    let pos_effects = [50.0, content_top + 20.0 + 78.0];
     assert_eq!(browser.hit_sidebar(pos_effects, scale), Some(BrowserCategory::Effects));
 
     // Click in header — None
@@ -163,6 +164,6 @@ fn test_hit_sidebar_returns_correct_category() {
     assert_eq!(browser.hit_sidebar(pos_header, scale), None);
 
     // Click in content area (x > sidebar width) — None
-    let pos_content = [120.0, header_h + 20.0];
+    let pos_content = [120.0, content_top + 20.0];
     assert_eq!(browser.hit_sidebar(pos_content, scale), None);
 }
