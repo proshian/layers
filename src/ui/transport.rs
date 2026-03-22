@@ -209,9 +209,10 @@ impl TransportPanel {
     pub(crate) fn bpm_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let (tp_pos, tp_size) = Self::panel_rect(screen_w, screen_h, scale);
         let (rbtn_pos, _) = Self::record_button_rect(screen_w, screen_h, scale);
-        let x = tp_pos[0] + tp_size[0] - 80.0 * scale;
-        let w = rbtn_pos[0] - x;
-        ([x, tp_pos[1]], [w, tp_size[1]])
+        let max_w = 60.0 * scale;
+        let gap = 8.0 * scale;
+        let x = rbtn_pos[0] - gap - max_w;
+        ([x, tp_pos[1]], [max_w, tp_size[1]])
     }
 
     pub(crate) fn hit_bpm(pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
@@ -247,20 +248,23 @@ impl TransportPanel {
                 center: false,
         });
 
-        // BPM display
+        // BPM display - anchored to left of record button with a gap
         let bpm_str = if let Some(text) = editing_bpm {
             format!("{}|", text)
         } else {
             format!("{} bpm", bpm as u32)
         };
         let alpha = if editing_bpm.is_some() { 255 } else { 220 };
+        let (rbtn_pos, _) = Self::record_button_rect(screen_w, screen_h, scale);
+        let bpm_max_width = 60.0 * scale;
+        let bpm_x = rbtn_pos[0] - 8.0 * scale - bpm_max_width;
         out.push(TextEntry {
             text: bpm_str,
-            x: tp_pos[0] + tp_size[0] - 80.0 * scale,
+            x: bpm_x,
             y: tp_pos[1] + (tp_size[1] - tline) * 0.5,
             font_size: tfont,
             line_height: tline,
-            max_width: 80.0 * scale,
+            max_width: bpm_max_width,
             color: [220, 220, 230, alpha],
             weight: 400,
             bounds: None,
