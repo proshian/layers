@@ -1,3 +1,4 @@
+- 2026-03-23: feat: instrument right window panel with volume, pan, and effects chain — opens on instrument/MIDI clip click (38.2k loc)
 - 2026-03-23: feat: add "Open" to instrument right-click menu in layers browser to open plugin GUI (37.8k loc)
 - 2026-03-23: feat: mousewheel volume and pan control in right window panel (37.8k loc)
 - 2026-03-23: refactor: extract shared dropdown component into ui/dropdown.rs, reuse in settings_window (37.7k loc)

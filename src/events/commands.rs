@@ -423,7 +423,7 @@ impl App {
                     _ => ui::waveform::WarpMode::Off,
                 };
                 if let Some(rw) = &self.right_window {
-                    let wf_id = rw.waveform_id;
+                    let wf_id = rw.target_id();
                     if let Some(before) = self.waveforms.get(&wf_id).cloned() {
                         if let Some(wf) = self.waveforms.get_mut(&wf_id) {
                             wf.warp_mode = new_mode;

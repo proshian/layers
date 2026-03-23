@@ -6,6 +6,12 @@ use crate::ui::palette::{gain_to_db, gain_to_vol_fader_pos, vol_fader_pos_to_gai
 use crate::ui::value_entry::ValueEntry;
 use crate::ui::waveform::WarpMode;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RightWindowTarget {
+    Waveform(EntityId),
+    Instrument(EntityId),
+}
+
 pub const RIGHT_WINDOW_WIDTH: f32 = 200.0;
 const HEADER_HEIGHT: f32 = 36.0;
 const KNOB_R: f32 = 22.0;
@@ -83,7 +89,7 @@ pub struct SampleBpmTextLayout {
 }
 
 pub struct RightWindow {
-    pub waveform_id: EntityId,
+    pub target: RightWindowTarget,
     pub volume: f32,
     pub pan: f32,
     pub warp_mode: WarpMode,
@@ -107,6 +113,20 @@ pub struct RightWindow {
 }
 
 impl RightWindow {
+    pub fn target_id(&self) -> EntityId {
+        match self.target {
+            RightWindowTarget::Waveform(id) | RightWindowTarget::Instrument(id) => id,
+        }
+    }
+
+    pub fn is_waveform(&self) -> bool {
+        matches!(self.target, RightWindowTarget::Waveform(_))
+    }
+
+    pub fn is_instrument(&self) -> bool {
+        matches!(self.target, RightWindowTarget::Instrument(_))
+    }
+
     pub fn panel_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let w = RIGHT_WINDOW_WIDTH * scale;
         let h = screen_h;
@@ -205,18 +225,21 @@ impl RightWindow {
     }
 
     pub fn hit_test_reverse_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_instrument() { return false; }
         let (rp, rs) = Self::reverse_button_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     pub fn hit_test_warp_mode_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_instrument() { return false; }
         let (rp, rs) = Self::warp_mode_button_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     pub fn hit_test_warp_mode_selector(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_instrument() { return false; }
         if self.warp_mode == WarpMode::Off { return false; }
         let (rp, rs) = Self::warp_mode_selector_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -224,6 +247,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_sample_bpm_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_instrument() { return false; }
         if self.warp_mode != WarpMode::RePitch { return false; }
         let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -231,6 +255,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_pitch_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_instrument() { return false; }
         if self.warp_mode != WarpMode::Semitone { return false; }
         let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -527,6 +552,9 @@ impl RightWindow {
             out.push(InstanceRaw { position: [x1 - thick, y1 - bracket_len], size: [thick, bracket_len], color, border_radius: 0.0 });
         }
 
+        // Reverse / Warp / Pitch — waveform-only controls
+        if self.is_waveform() {
+
         // Reverse button
         let (rev_pos, rev_size) = Self::reverse_button_rect(screen_w, screen_h, scale);
         let rev_color = if self.is_reversed { settings.theme.accent } else { settings.theme.bg_elevated };
@@ -606,6 +634,8 @@ impl RightWindow {
             out.push(InstanceRaw { position: [x1 - bracket_len, y1 - thick], size: [bracket_len, thick], color, border_radius: 0.0 });
             out.push(InstanceRaw { position: [x1 - thick, y1 - bracket_len], size: [thick, bracket_len], color, border_radius: 0.0 });
         }
+
+        } // end waveform-only controls
 
         out
     }
@@ -855,7 +885,8 @@ impl RightWindow {
             center: true,
         });
 
-        // Reverse button text
+        // Reverse / Warp / Pitch text — waveform-only
+        if self.is_waveform() {
         let (rev_pos, rev_size) = Self::reverse_button_rect(screen_w, screen_h, scale);
         out.push(TextEntry {
             text: "Reverse".to_string(),
@@ -980,6 +1011,7 @@ impl RightWindow {
                 });
             }
         }
+        } // end waveform-only text
 
         out
     }
@@ -988,8 +1020,14 @@ impl RightWindow {
 
     /// Y position where the effect chain section starts (screen coords).
     pub fn effect_chain_top(screen_w: f32, screen_h: f32, scale: f32) -> f32 {
+        Self::effect_chain_top_offset(false, screen_w, screen_h, scale)
+    }
+
+    /// Y position where the effect chain section starts, with instrument awareness.
+    pub fn effect_chain_top_offset(is_instrument: bool, screen_w: f32, screen_h: f32, scale: f32) -> f32 {
         let (pp, _) = Self::panel_rect(screen_w, screen_h, scale);
-        pp[1] + HEADER_HEIGHT * scale + EFFECT_CHAIN_TOP_OFFSET * scale
+        let offset = if is_instrument { REVERSE_BUTTON_Y_OFFSET } else { EFFECT_CHAIN_TOP_OFFSET };
+        pp[1] + HEADER_HEIGHT * scale + offset * scale
     }
 
     /// Rectangle for a single effect slot at the given index.
@@ -1021,6 +1059,17 @@ impl RightWindow {
     /// Compute the shared-chain reference count for display.
     pub fn chain_ref_count(chain_id: EntityId, waveforms: &indexmap::IndexMap<EntityId, crate::ui::waveform::WaveformView>) -> usize {
         waveforms.values().filter(|w| w.effect_chain_id == Some(chain_id)).count()
+    }
+
+    /// Compute the shared-chain reference count including both waveforms and instruments.
+    pub fn chain_ref_count_all(
+        chain_id: EntityId,
+        waveforms: &indexmap::IndexMap<EntityId, crate::ui::waveform::WaveformView>,
+        instruments: &indexmap::IndexMap<EntityId, crate::instruments::Instrument>,
+    ) -> usize {
+        let wf_count = waveforms.values().filter(|w| w.effect_chain_id == Some(chain_id)).count();
+        let inst_count = instruments.values().filter(|i| i.effect_chain_id == Some(chain_id)).count();
+        wf_count + inst_count
     }
 
     /// Build GPU instances for the effect chain section.

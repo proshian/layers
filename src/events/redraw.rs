@@ -213,11 +213,17 @@ impl App {
                 self.right_window.as_ref(),
                 {
                     if let Some(rw) = &self.right_window {
-                        let wf = self.waveforms.get(&rw.waveform_id);
-                        let chain_id = wf.and_then(|w| w.effect_chain_id);
+                        let chain_id = match rw.target {
+                            crate::ui::right_window::RightWindowTarget::Waveform(wf_id) => {
+                                self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id)
+                            }
+                            crate::ui::right_window::RightWindowTarget::Instrument(inst_id) => {
+                                self.instruments.get(&inst_id).and_then(|i| i.effect_chain_id)
+                            }
+                        };
                         if let Some(cid) = chain_id {
                             self.effect_chains.get(&cid).map(|c| {
-                                let ref_count = crate::ui::right_window::RightWindow::chain_ref_count(cid, &self.waveforms);
+                                let ref_count = crate::ui::right_window::RightWindow::chain_ref_count_all(cid, &self.waveforms, &self.instruments);
                                 (c, cid, ref_count)
                             })
                         } else {

@@ -57,7 +57,7 @@ impl App {
         // Right window volume/pan mousewheel
         if let Some(rw) = &self.right_window {
             let (sw, sh, scale) = self.screen_info();
-            let wf_id = rw.waveform_id;
+            let target = rw.target;
             // Trackpad (PixelDelta): natural scrolling is inverted, reduce sensitivity
             // Mouse wheel (LineDelta): direct mapping, normal sensitivity
             let rw_step = if is_pixel_delta {
@@ -69,41 +69,75 @@ impl App {
                 let current_pos = ui::palette::gain_to_vol_fader_pos(rw.volume);
                 let new_pos = (current_pos + rw_step).clamp(0.0, 1.0);
                 let new_vol = ui::palette::vol_fader_pos_to_gain(new_pos);
-                let before = self.waveforms.get(&wf_id).cloned();
                 if let Some(rw) = &mut self.right_window {
                     rw.volume = new_vol;
                 }
-                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                    wf.volume = new_vol;
-                }
-                if let Some(before) = before {
-                    if let Some(after) = self.waveforms.get(&wf_id).cloned() {
-                        self.push_op(crate::operations::Operation::UpdateWaveform {
-                            id: wf_id, before, after,
-                        });
+                match target {
+                    ui::right_window::RightWindowTarget::Waveform(wf_id) => {
+                        let before = self.waveforms.get(&wf_id).cloned();
+                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                            wf.volume = new_vol;
+                        }
+                        if let Some(before) = before {
+                            if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                self.push_op(crate::operations::Operation::UpdateWaveform {
+                                    id: wf_id, before, after,
+                                });
+                            }
+                        }
+                        self.sync_audio_clips();
+                    }
+                    ui::right_window::RightWindowTarget::Instrument(inst_id) => {
+                        if let Some(inst) = self.instruments.get_mut(&inst_id) {
+                            let before = crate::instruments::InstrumentSnapshot {
+                                name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
+                                plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
+                                volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+                            };
+                            inst.volume = new_vol;
+                            let after = crate::instruments::InstrumentSnapshot { volume: new_vol, ..before.clone() };
+                            self.push_op(crate::operations::Operation::UpdateInstrument { id: inst_id, before, after });
+                        }
+                        self.sync_instrument_regions();
                     }
                 }
-                self.sync_audio_clips();
                 self.request_redraw();
                 return;
             }
             if rw.hit_test_pan_knob(self.mouse_pos, sw, sh, scale) {
                 let new_pan = (rw.pan + rw_step).clamp(0.0, 1.0);
-                let before = self.waveforms.get(&wf_id).cloned();
                 if let Some(rw) = &mut self.right_window {
                     rw.pan = new_pan;
                 }
-                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                    wf.pan = new_pan;
-                }
-                if let Some(before) = before {
-                    if let Some(after) = self.waveforms.get(&wf_id).cloned() {
-                        self.push_op(crate::operations::Operation::UpdateWaveform {
-                            id: wf_id, before, after,
-                        });
+                match target {
+                    ui::right_window::RightWindowTarget::Waveform(wf_id) => {
+                        let before = self.waveforms.get(&wf_id).cloned();
+                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                            wf.pan = new_pan;
+                        }
+                        if let Some(before) = before {
+                            if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                self.push_op(crate::operations::Operation::UpdateWaveform {
+                                    id: wf_id, before, after,
+                                });
+                            }
+                        }
+                        self.sync_audio_clips();
+                    }
+                    ui::right_window::RightWindowTarget::Instrument(inst_id) => {
+                        if let Some(inst) = self.instruments.get_mut(&inst_id) {
+                            let before = crate::instruments::InstrumentSnapshot {
+                                name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
+                                plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
+                                volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+                            };
+                            inst.pan = new_pan;
+                            let after = crate::instruments::InstrumentSnapshot { pan: new_pan, ..before.clone() };
+                            self.push_op(crate::operations::Operation::UpdateInstrument { id: inst_id, before, after });
+                        }
+                        self.sync_instrument_regions();
                     }
                 }
-                self.sync_audio_clips();
                 self.request_redraw();
                 return;
             }

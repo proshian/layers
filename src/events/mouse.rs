@@ -512,7 +512,7 @@ impl App {
                     let (pp, ps) = ui::right_window::RightWindow::panel_rect(sw, sh, scale);
                     let in_panel = self.mouse_pos[0] >= pp[0] && self.mouse_pos[0] <= pp[0] + ps[0];
                     if in_panel {
-                        let wf_id = rw.waveform_id;
+                        let wf_id = rw.target_id();
                         let hit_vol_text = rw.hit_test_vol_text(self.mouse_pos, sw, sh, scale);
                         let hit_vol = rw.hit_test_vol_knob(self.mouse_pos, sw, sh, scale);
                         let hit_vol_track = rw.hit_test_vol_track(self.mouse_pos, sw, sh, scale);
@@ -529,7 +529,7 @@ impl App {
                             return;
                         } else if hit_warp_btn {
                             // Toggle warp on/off (default to Semitone when enabling)
-                            let wf_id = rw.waveform_id;
+                            let wf_id = rw.target_id();
                             let current = rw.warp_mode;
                             let new_mode = if current == ui::waveform::WarpMode::Off {
                                 ui::waveform::WarpMode::Semitone
@@ -719,18 +719,24 @@ impl App {
 
                         // --- Effect chain slot clicks ---
                         {
-                            let wf_id = rw.waveform_id;
-                            let chain_id = self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id);
+                            let target = rw.target;
+                            let chain_id = match target {
+                                ui::right_window::RightWindowTarget::Waveform(wf_id) => self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id),
+                                ui::right_window::RightWindowTarget::Instrument(inst_id) => self.instruments.get(&inst_id).and_then(|i| i.effect_chain_id),
+                            };
                             let slot_count = chain_id
                                 .and_then(|cid| self.effect_chains.get(&cid))
                                 .map_or(0, |c| c.slots.len());
                             let ref_count = chain_id.map_or(0, |cid| {
-                                ui::right_window::RightWindow::chain_ref_count(cid, &self.waveforms)
+                                ui::right_window::RightWindow::chain_ref_count_all(cid, &self.waveforms, &self.instruments)
                             });
 
                             // Detach button
                             if rw.hit_test_detach_button(self.mouse_pos, ref_count, sw, sh, scale) {
-                                self.detach_effect_chain(wf_id);
+                                match target {
+                                    ui::right_window::RightWindowTarget::Waveform(wf_id) => self.detach_effect_chain(wf_id),
+                                    ui::right_window::RightWindowTarget::Instrument(inst_id) => self.detach_instrument_effect_chain(inst_id),
+                                }
                                 self.request_redraw();
                                 return;
                             }
@@ -758,10 +764,15 @@ impl App {
                                             // If chain is now empty, remove it
                                             if chain.slots.is_empty() {
                                                 self.effect_chains.shift_remove(&cid);
-                                                // Clear chain reference from all waveforms that used it
+                                                // Clear chain reference from all waveforms and instruments that used it
                                                 for wf in self.waveforms.values_mut() {
                                                     if wf.effect_chain_id == Some(cid) {
                                                         wf.effect_chain_id = None;
+                                                    }
+                                                }
+                                                for inst in self.instruments.values_mut() {
+                                                    if inst.effect_chain_id == Some(cid) {
+                                                        inst.effect_chain_id = None;
                                                     }
                                                 }
                                             }
@@ -1012,6 +1023,14 @@ impl App {
                                             self.request_redraw();
                                             return;
                                         }
+                                        // Add effect to instrument if instrument right window is open
+                                        if let Some(rw) = &self.right_window {
+                                            if let ui::right_window::RightWindowTarget::Instrument(inst_id) = rw.target {
+                                                self.add_plugin_to_instrument_chain(inst_id, unique_id, &entry.name);
+                                                self.request_redraw();
+                                                return;
+                                            }
+                                        }
                                     }
                                     self.drag = DragState::DraggingPlugin {
                                         plugin_id: unique_id.clone(),
@@ -1058,6 +1077,7 @@ impl App {
                                             self.keyboard_instrument_id = Some(*id);
                                             #[cfg(feature = "native")]
                                             self.sync_computer_keyboard_to_engine();
+                                            self.update_right_window_for_instrument(*id);
                                         }
                                         crate::layers::LayerNodeKind::MidiClip => {
                                             if let Some(mc) = self.midi_clips.get(id) {
@@ -1847,26 +1867,53 @@ impl App {
                             rw.sample_bpm_dragging = false;
                             rw.pitch_dragging = false;
                         }
-                        let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
-                        if let Some(wf_id) = wf_id {
-                            if let Some(after) = self.waveforms.get(&wf_id).cloned() {
-                                let mut before = after.clone();
-                                if let Some(rw) = &self.right_window {
-                                    if is_vol_drag {
-                                        before.volume = ui::palette::vol_fader_pos_to_gain(rw.drag_start_value);
-                                    } else if is_pan_drag {
-                                        before.pan = rw.drag_start_value;
-                                    } else if is_sbpm_drag {
-                                        before.sample_bpm = rw.drag_start_value;
-                                    } else {
-                                        before.pitch_semitones = rw.drag_start_value;
+                        if let Some(rw) = &self.right_window {
+                            let target = rw.target;
+                            let drag_start_value = rw.drag_start_value;
+                            match target {
+                                ui::right_window::RightWindowTarget::Waveform(wf_id) => {
+                                    if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                        let mut before = after.clone();
+                                        if is_vol_drag {
+                                            before.volume = ui::palette::vol_fader_pos_to_gain(drag_start_value);
+                                        } else if is_pan_drag {
+                                            before.pan = drag_start_value;
+                                        } else if is_sbpm_drag {
+                                            before.sample_bpm = drag_start_value;
+                                        } else {
+                                            before.pitch_semitones = drag_start_value;
+                                        }
+                                        self.push_op(crate::operations::Operation::UpdateWaveform {
+                                            id: wf_id,
+                                            before,
+                                            after,
+                                        });
                                     }
                                 }
-                                self.push_op(crate::operations::Operation::UpdateWaveform {
-                                    id: wf_id,
-                                    before,
-                                    after,
-                                });
+                                ui::right_window::RightWindowTarget::Instrument(inst_id) => {
+                                    if let Some(inst) = self.instruments.get(&inst_id) {
+                                        let mut before_snap = crate::instruments::InstrumentSnapshot {
+                                            name: inst.name.clone(),
+                                            plugin_id: inst.plugin_id.clone(),
+                                            plugin_name: inst.plugin_name.clone(),
+                                            plugin_path: inst.plugin_path.clone(),
+                                            volume: inst.volume,
+                                            pan: inst.pan,
+                                            effect_chain_id: inst.effect_chain_id,
+                                        };
+                                        let after_snap = before_snap.clone();
+                                        if is_vol_drag {
+                                            before_snap.volume = ui::palette::vol_fader_pos_to_gain(drag_start_value);
+                                        } else if is_pan_drag {
+                                            before_snap.pan = drag_start_value;
+                                        }
+                                        self.push_op(crate::operations::Operation::UpdateInstrument {
+                                            id: inst_id,
+                                            before: before_snap,
+                                            after: after_snap,
+                                        });
+                                    }
+                                }
                             }
                         }
                         self.request_redraw();

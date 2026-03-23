@@ -238,6 +238,66 @@ impl App {
         self.request_redraw();
     }
 
+    pub(crate) fn add_plugin_to_instrument_chain(&mut self, inst_id: EntityId, plugin_id: &str, plugin_name: &str) {
+        self.ensure_plugins_scanned();
+        let _sample_rate = 48000.0;
+        let _block_size = self.settings.buffer_size;
+
+        let plugin_path = self
+            .plugin_registry
+            .plugins
+            .iter()
+            .find(|e| e.info.unique_id == plugin_id)
+            .map(|e| e.info.path.clone())
+            .unwrap_or_default();
+
+        let mut slot = effects::EffectChainSlot::new(
+            plugin_id.to_string(),
+            plugin_name.to_string(),
+            plugin_path,
+        );
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let path = slot.plugin_path.to_string_lossy().to_string();
+            if !path.is_empty() {
+                if let Some(gui) = vst3_gui::Vst3Gui::open(&path, plugin_id, plugin_name) {
+                    gui.setup_processing(_sample_rate, _block_size as i32);
+                    gui.hide();
+                    if let Ok(mut g) = slot.gui.lock() {
+                        *g = Some(gui);
+                    }
+                }
+            }
+        }
+
+        // Get or create effect chain for this instrument
+        let chain_id = if let Some(inst) = self.instruments.get(&inst_id) {
+            inst.effect_chain_id
+        } else {
+            return;
+        };
+
+        let chain_id = match chain_id {
+            Some(id) => id,
+            None => {
+                let id = new_id();
+                self.effect_chains.insert(id, effects::EffectChain::new());
+                if let Some(inst) = self.instruments.get_mut(&inst_id) {
+                    inst.effect_chain_id = Some(id);
+                }
+                id
+            }
+        };
+
+        if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
+            chain.slots.push(slot);
+        }
+
+        self.update_right_window_for_instrument(inst_id);
+        self.request_redraw();
+    }
+
     pub(crate) fn add_plugin_to_selected_effect_region(&mut self, plugin_id: &str, plugin_name: &str) {
         let region_id = self.selected.iter().find_map(|t| {
             if let HitTarget::EffectRegion(id) = t {
@@ -420,6 +480,9 @@ impl App {
             plugin_id: inst.plugin_id.clone(),
             plugin_name: inst.plugin_name.clone(),
             plugin_path: inst.plugin_path.clone(),
+            volume: inst.volume,
+            pan: inst.pan,
+            effect_chain_id: inst.effect_chain_id,
         };
         self.instruments.insert(inst_id, inst);
 

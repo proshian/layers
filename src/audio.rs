@@ -117,6 +117,8 @@ pub struct AudioInstrument {
     pub y_end: f32,
     pub gui: Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>,
     pub midi_events: Vec<TimedMidiEvent>,
+    pub volume: f32,
+    pub pan: f32,
 }
 
 /// Live computer-keyboard preview MIDI (drained once per output callback).

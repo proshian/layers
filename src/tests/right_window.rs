@@ -67,7 +67,7 @@ fn test_update_right_window_shows_on_waveform_selection() {
 
     assert!(app.right_window.is_some(), "right_window should appear on waveform selection");
     let rw = app.right_window.as_ref().unwrap();
-    assert_eq!(rw.waveform_id, id);
+    assert_eq!(rw.target_id(), id);
     assert_eq!(rw.volume, 1.0);
     assert_eq!(rw.pan, 0.5);
 }
@@ -293,7 +293,7 @@ fn test_keyboard_volume_up() {
     let current_db = gain_to_db(rw.volume);
     let new_db = (current_db + 1.0).clamp(-70.0, 24.0);
     let new_gain = db_to_gain(new_db);
-    let wf_id = rw.waveform_id;
+    let wf_id = rw.target_id();
 
     let before = app.waveforms[&wf_id].clone();
     app.waveforms.get_mut(&wf_id).unwrap().volume = new_gain;
@@ -394,7 +394,7 @@ fn test_pan_keyboard_adjust() {
     // Simulate Up arrow: +0.01
     let rw = app.right_window.as_ref().unwrap();
     let new_pan = (rw.pan + 0.01).clamp(0.0, 1.0);
-    let wf_id = rw.waveform_id;
+    let wf_id = rw.target_id();
 
     let before = app.waveforms[&wf_id].clone();
     app.waveforms.get_mut(&wf_id).unwrap().pan = new_pan;
@@ -504,7 +504,7 @@ fn test_pitch_keyboard_adjust() {
     // Simulate Up arrow: +1 semitone
     let rw = app.right_window.as_ref().unwrap();
     let new_pitch = (rw.pitch_semitones + 1.0).clamp(-24.0, 24.0);
-    let wf_id = rw.waveform_id;
+    let wf_id = rw.target_id();
 
     let before = app.waveforms[&wf_id].clone();
     app.waveforms.get_mut(&wf_id).unwrap().pitch_semitones = new_pitch;
@@ -592,7 +592,7 @@ fn test_sample_bpm_keyboard_adjust() {
     // Simulate Up arrow: +1 BPM
     let rw = app.right_window.as_ref().unwrap();
     let new_bpm = (rw.sample_bpm + 1.0).clamp(20.0, 999.0);
-    let wf_id = rw.waveform_id;
+    let wf_id = rw.target_id();
 
     let before = app.waveforms[&wf_id].clone();
     app.waveforms.get_mut(&wf_id).unwrap().sample_bpm = new_bpm;

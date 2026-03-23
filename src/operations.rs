@@ -407,6 +407,9 @@ impl Operation {
                 inst.plugin_id = data.plugin_id.clone();
                 inst.plugin_name = data.plugin_name.clone();
                 inst.plugin_path = data.plugin_path.clone();
+                inst.volume = data.volume;
+                inst.pan = data.pan;
+                inst.effect_chain_id = data.effect_chain_id;
                 app.instruments.insert(*id, inst);
             }
             Operation::DeleteInstrument { id, .. } => {
@@ -418,6 +421,9 @@ impl Operation {
                     inst.plugin_id = after.plugin_id.clone();
                     inst.plugin_name = after.plugin_name.clone();
                     inst.plugin_path = after.plugin_path.clone();
+                    inst.volume = after.volume;
+                    inst.pan = after.pan;
+                    inst.effect_chain_id = after.effect_chain_id;
                 }
             }
 

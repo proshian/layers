@@ -662,6 +662,9 @@ fn test_serde_roundtrip_instrument() {
             plugin_id: "com.example.piano".to_string(),
             plugin_name: "Piano VST".to_string(),
             plugin_path: std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3/Piano.vst3"),
+            volume: 1.0,
+            pan: 0.5,
+            effect_chain_id: None,
         },
     });
 }

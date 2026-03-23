@@ -272,27 +272,40 @@ impl App {
                         Key::Named(NamedKey::ArrowUp) => if shift { 0.1 } else { 1.0 },
                         _ => if shift { -0.1 } else { -1.0 },
                     };
-                    let wf_id = rw.waveform_id;
+                    let target = rw.target;
                     let current_db = ui::palette::gain_to_db(rw.volume);
                     let new_db = (current_db + delta_db).clamp(ui::palette::VOL_FADER_DB_BOTTOM, ui::palette::VOL_FADER_DB_MAX);
                     let new_gain = if new_db <= ui::palette::VOL_FADER_DB_BOTTOM { 0.0 } else { ui::palette::db_to_gain(new_db) };
-                    if let Some(before) = self.waveforms.get(&wf_id).cloned() {
-                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                            wf.volume = new_gain;
-                        }
-                        if let Some(rw) = &mut self.right_window {
-                            rw.volume = new_gain;
-                        }
-                        if let Some(after) = self.waveforms.get(&wf_id).cloned() {
-                            self.push_op(crate::operations::Operation::UpdateWaveform {
-                                id: wf_id,
-                                before,
-                                after,
-                            });
-                        }
-                        self.sync_audio_clips();
-                        self.mark_dirty();
+                    if let Some(rw) = &mut self.right_window {
+                        rw.volume = new_gain;
                     }
+                    match target {
+                        ui::right_window::RightWindowTarget::Waveform(wf_id) => {
+                            if let Some(before) = self.waveforms.get(&wf_id).cloned() {
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.volume = new_gain;
+                                }
+                                if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                    self.push_op(crate::operations::Operation::UpdateWaveform { id: wf_id, before, after });
+                                }
+                                self.sync_audio_clips();
+                            }
+                        }
+                        ui::right_window::RightWindowTarget::Instrument(inst_id) => {
+                            if let Some(inst) = self.instruments.get_mut(&inst_id) {
+                                let before = crate::instruments::InstrumentSnapshot {
+                                    name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
+                                    plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
+                                    volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+                                };
+                                inst.volume = new_gain;
+                                let after = crate::instruments::InstrumentSnapshot { volume: new_gain, ..before.clone() };
+                                self.push_op(crate::operations::Operation::UpdateInstrument { id: inst_id, before, after });
+                            }
+                            self.sync_instrument_regions();
+                        }
+                    }
+                    self.mark_dirty();
                     self.request_redraw();
                     return;
                 }
@@ -308,25 +321,38 @@ impl App {
                         Key::Named(NamedKey::ArrowUp) => if shift { 0.001 } else { 0.01 },
                         _ => if shift { -0.001 } else { -0.01 },
                     };
-                    let wf_id = rw.waveform_id;
+                    let target = rw.target;
                     let new_pan = (rw.pan + delta).clamp(0.0, 1.0);
-                    if let Some(before) = self.waveforms.get(&wf_id).cloned() {
-                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                            wf.pan = new_pan;
-                        }
-                        if let Some(rw) = &mut self.right_window {
-                            rw.pan = new_pan;
-                        }
-                        if let Some(after) = self.waveforms.get(&wf_id).cloned() {
-                            self.push_op(crate::operations::Operation::UpdateWaveform {
-                                id: wf_id,
-                                before,
-                                after,
-                            });
-                        }
-                        self.sync_audio_clips();
-                        self.mark_dirty();
+                    if let Some(rw) = &mut self.right_window {
+                        rw.pan = new_pan;
                     }
+                    match target {
+                        ui::right_window::RightWindowTarget::Waveform(wf_id) => {
+                            if let Some(before) = self.waveforms.get(&wf_id).cloned() {
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.pan = new_pan;
+                                }
+                                if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                    self.push_op(crate::operations::Operation::UpdateWaveform { id: wf_id, before, after });
+                                }
+                                self.sync_audio_clips();
+                            }
+                        }
+                        ui::right_window::RightWindowTarget::Instrument(inst_id) => {
+                            if let Some(inst) = self.instruments.get_mut(&inst_id) {
+                                let before = crate::instruments::InstrumentSnapshot {
+                                    name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
+                                    plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
+                                    volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+                                };
+                                inst.pan = new_pan;
+                                let after = crate::instruments::InstrumentSnapshot { pan: new_pan, ..before.clone() };
+                                self.push_op(crate::operations::Operation::UpdateInstrument { id: inst_id, before, after });
+                            }
+                            self.sync_instrument_regions();
+                        }
+                    }
+                    self.mark_dirty();
                     self.request_redraw();
                     return;
                 }
@@ -342,7 +368,7 @@ impl App {
                         Key::Named(NamedKey::ArrowUp) => if shift { 0.1 } else { 1.0 },
                         _ => if shift { -0.1 } else { -1.0 },
                     };
-                    let wf_id = rw.waveform_id;
+                    let wf_id = rw.target_id();
                     let new_bpm = (rw.sample_bpm + delta).clamp(20.0, 999.0);
                     if let Some(before) = self.waveforms.get(&wf_id).cloned() {
                         if let Some(wf) = self.waveforms.get_mut(&wf_id) {
@@ -377,7 +403,7 @@ impl App {
                         Key::Named(NamedKey::ArrowUp) => if shift { 0.1 } else { 1.0 },
                         _ => if shift { -0.1 } else { -1.0 },
                     };
-                    let wf_id = rw.waveform_id;
+                    let wf_id = rw.target_id();
                     let new_pitch = (rw.pitch_semitones + delta).clamp(-24.0, 24.0);
                     if let Some(before) = self.waveforms.get(&wf_id).cloned() {
                         if let Some(wf) = self.waveforms.get_mut(&wf_id) {
@@ -522,7 +548,7 @@ impl App {
                                 } else {
                                     ui::palette::db_to_gain(db.clamp(ui::palette::VOL_FADER_DB_BOTTOM, ui::palette::VOL_FADER_DB_MAX))
                                 };
-                                let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
+                                let wf_id = self.right_window.as_ref().map(|rw| rw.target_id());
                                 if let Some(wf_id) = wf_id {
                                     if let Some(before) = self.waveforms.get(&wf_id).cloned() {
                                         if let Some(wf) = self.waveforms.get_mut(&wf_id) {
@@ -584,7 +610,7 @@ impl App {
                         if let Some(text) = commit {
                             if let Ok(val) = text.parse::<f32>() {
                                 let new_bpm = val.clamp(20.0, 999.0);
-                                let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
+                                let wf_id = self.right_window.as_ref().map(|rw| rw.target_id());
                                 if let Some(wf_id) = wf_id {
                                     if let Some(before) = self.waveforms.get(&wf_id).cloned() {
                                         if let Some(wf) = self.waveforms.get_mut(&wf_id) {
@@ -653,7 +679,7 @@ impl App {
                         if let Some(text) = commit {
                             if let Ok(semitones) = text.parse::<f32>() {
                                 let new_pitch = semitones.clamp(-24.0, 24.0);
-                                let wf_id = self.right_window.as_ref().map(|rw| rw.waveform_id);
+                                let wf_id = self.right_window.as_ref().map(|rw| rw.target_id());
                                 if let Some(wf_id) = wf_id {
                                     if let Some(before) = self.waveforms.get(&wf_id).cloned() {
                                         if let Some(wf) = self.waveforms.get_mut(&wf_id) {

@@ -1278,14 +1278,14 @@ impl App {
                 // Preserve vol_entry when updating the same waveform so that
                 // click-to-edit isn't reset by the unconditional update_right_window
                 // call at the end of the mouse-released handler.
-                let (vol_entry, sample_bpm_entry, pitch_entry, vol_fader_focused, pan_knob_focused, pitch_focused, sample_bpm_focused) = if self.right_window.as_ref().map_or(false, |rw| rw.waveform_id == id) {
+                let (vol_entry, sample_bpm_entry, pitch_entry, vol_fader_focused, pan_knob_focused, pitch_focused, sample_bpm_focused) = if self.right_window.as_ref().map_or(false, |rw| rw.target_id() == id) {
                     let rw = self.right_window.take().unwrap();
                     (rw.vol_entry, rw.sample_bpm_entry, rw.pitch_entry, rw.vol_fader_focused, rw.pan_knob_focused, rw.pitch_focused, rw.sample_bpm_focused)
                 } else {
                     (ui::value_entry::ValueEntry::new(), ui::value_entry::ValueEntry::new(), ui::value_entry::ValueEntry::new(), false, false, false, false)
                 };
                 self.right_window = Some(ui::right_window::RightWindow {
-                    waveform_id: id,
+                    target: ui::right_window::RightWindowTarget::Waveform(id),
                     volume: wf.volume,
                     pan: wf.pan,
                     warp_mode: wf.warp_mode,
@@ -1310,6 +1310,15 @@ impl App {
                 return;
             }
         }
+        // If a MIDI clip is selected, open the right window for its parent instrument
+        if let Some(HitTarget::MidiClip(mc_id)) = self.selected.first().copied() {
+            if let Some(mc) = self.midi_clips.get(&mc_id) {
+                if let Some(inst_id) = mc.instrument_id {
+                    self.update_right_window_for_instrument(inst_id);
+                    return;
+                }
+            }
+        }
         self.right_window = None;
     }
 
@@ -1317,7 +1326,7 @@ impl App {
     pub(crate) fn open_right_window_for(&mut self, wf_id: EntityId) {
         if let Some(wf) = self.waveforms.get(&wf_id) {
             self.right_window = Some(ui::right_window::RightWindow {
-                waveform_id: wf_id,
+                target: ui::right_window::RightWindowTarget::Waveform(wf_id),
                 volume: wf.volume,
                 pan: wf.pan,
                 warp_mode: wf.warp_mode,
@@ -1335,6 +1344,42 @@ impl App {
                 pitch_entry: ui::value_entry::ValueEntry::new(),
                 vol_fader_focused: false,
                 pan_knob_focused: false,
+                pitch_focused: false,
+                sample_bpm_focused: false,
+                add_effect_hovered: false,
+            });
+        }
+    }
+
+    /// Open the right window inspector for an instrument.
+    pub(crate) fn update_right_window_for_instrument(&mut self, inst_id: EntityId) {
+        if let Some(inst) = self.instruments.get(&inst_id) {
+            let (vol_entry, vol_fader_focused, pan_knob_focused) =
+                if self.right_window.as_ref().map_or(false, |rw| rw.target_id() == inst_id && rw.is_instrument()) {
+                    let rw = self.right_window.take().unwrap();
+                    (rw.vol_entry, rw.vol_fader_focused, rw.pan_knob_focused)
+                } else {
+                    (ui::value_entry::ValueEntry::new(), false, false)
+                };
+            self.right_window = Some(ui::right_window::RightWindow {
+                target: ui::right_window::RightWindowTarget::Instrument(inst_id),
+                volume: inst.volume,
+                pan: inst.pan,
+                warp_mode: ui::waveform::WarpMode::Off,
+                sample_bpm: 120.0,
+                pitch_semitones: 0.0,
+                is_reversed: false,
+                vol_dragging: false,
+                pan_dragging: false,
+                sample_bpm_dragging: false,
+                pitch_dragging: false,
+                drag_start_y: 0.0,
+                drag_start_value: 0.0,
+                vol_entry,
+                sample_bpm_entry: ui::value_entry::ValueEntry::new(),
+                pitch_entry: ui::value_entry::ValueEntry::new(),
+                vol_fader_focused,
+                pan_knob_focused,
                 pitch_focused: false,
                 sample_bpm_focused: false,
                 add_effect_hovered: false,
@@ -1368,6 +1413,35 @@ impl App {
         self.effect_chains.insert(new_chain_id, new_chain);
         if let Some(wf) = self.waveforms.get_mut(&wf_id) {
             wf.effect_chain_id = Some(new_chain_id);
+        }
+        self.request_redraw();
+    }
+
+    /// Detach an instrument's effect chain — clone the shared chain into a new independent one.
+    pub(crate) fn detach_instrument_effect_chain(&mut self, inst_id: EntityId) {
+        let chain_id = match self.instruments.get(&inst_id).and_then(|i| i.effect_chain_id) {
+            Some(id) => id,
+            None => return,
+        };
+        let ref_count = ui::right_window::RightWindow::chain_ref_count_all(chain_id, &self.waveforms, &self.instruments);
+        if ref_count <= 1 {
+            return;
+        }
+        let Some(chain) = self.effect_chains.get(&chain_id) else { return; };
+        let mut new_chain = effects::EffectChain::new();
+        for slot in &chain.slots {
+            let mut new_slot = effects::EffectChainSlot::new(
+                slot.plugin_id.clone(),
+                slot.plugin_name.clone(),
+                slot.plugin_path.clone(),
+            );
+            new_slot.bypass = slot.bypass;
+            new_chain.slots.push(new_slot);
+        }
+        let new_chain_id = new_id();
+        self.effect_chains.insert(new_chain_id, new_chain);
+        if let Some(inst) = self.instruments.get_mut(&inst_id) {
+            inst.effect_chain_id = Some(new_chain_id);
         }
         self.request_redraw();
     }
@@ -1674,6 +1748,8 @@ impl App {
                     y_end: 0.0,
                     gui: inst.gui.clone(),
                     midi_events,
+                    volume: inst.volume,
+                    pan: inst.pan,
                 });
             }
 
@@ -1987,6 +2063,8 @@ impl App {
     fn add_plugin_to_selected_effect_region(&mut self, _plugin_id: &str, _plugin_name: &str) {}
     #[cfg(not(feature = "native"))]
     fn add_plugin_to_waveform_chain(&mut self, _wf_id: EntityId, _plugin_id: &str, _plugin_name: &str) {}
+    #[cfg(not(feature = "native"))]
+    fn add_plugin_to_instrument_chain(&mut self, _inst_id: EntityId, _plugin_id: &str, _plugin_name: &str) {}
     #[cfg(not(feature = "native"))]
     fn open_effect_chain_slot_gui(&mut self, _chain_id: EntityId, _slot_idx: usize) {}
     #[cfg(not(feature = "native"))]

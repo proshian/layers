@@ -105,41 +105,57 @@ impl App {
             let is_sbpm_drag = self.right_window.as_ref().map_or(false, |rw| rw.sample_bpm_dragging);
             let is_pitch_drag = self.right_window.as_ref().map_or(false, |rw| rw.pitch_dragging);
             if is_vol_drag || is_pan_drag || is_sbpm_drag || is_pitch_drag {
-                let (before, wf_id) = if let Some(rw) = &self.right_window {
-                    let wf_id = rw.waveform_id;
-                    let before = self.waveforms.get(&wf_id).cloned();
-                    (before, wf_id)
-                } else {
-                    (None, crate::entity_id::EntityId::default())
-                };
-                if let (Some(before_wf), Some(rw)) = (before, self.right_window.as_mut()) {
+                let target = self.right_window.as_ref().map(|rw| rw.target);
+                if let Some(rw) = self.right_window.as_mut() {
                     if is_vol_drag {
                         let new_vol = ui::right_window::RightWindow::drag_vol_delta(
                             rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
                         );
                         rw.volume = new_vol;
-                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                            wf.volume = new_vol;
+                        match target {
+                            Some(ui::right_window::RightWindowTarget::Waveform(wf_id)) => {
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.volume = new_vol;
+                                }
+                            }
+                            Some(ui::right_window::RightWindowTarget::Instrument(inst_id)) => {
+                                if let Some(inst) = self.instruments.get_mut(&inst_id) {
+                                    inst.volume = new_vol;
+                                }
+                            }
+                            None => {}
                         }
                     } else if is_pan_drag {
                         let new_pan = ui::right_window::RightWindow::drag_pan_delta(
                             rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
                         );
                         rw.pan = new_pan;
-                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                            wf.pan = new_pan;
+                        match target {
+                            Some(ui::right_window::RightWindowTarget::Waveform(wf_id)) => {
+                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                    wf.pan = new_pan;
+                                }
+                            }
+                            Some(ui::right_window::RightWindowTarget::Instrument(inst_id)) => {
+                                if let Some(inst) = self.instruments.get_mut(&inst_id) {
+                                    inst.pan = new_pan;
+                                }
+                            }
+                            None => {}
                         }
                     } else if is_sbpm_drag {
                         let new_bpm = ui::right_window::RightWindow::drag_sample_bpm_delta(
                             rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
                         );
                         rw.sample_bpm = new_bpm;
-                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                            wf.sample_bpm = new_bpm;
-                            if wf.warp_mode == ui::waveform::WarpMode::RePitch {
-                                if let Some(clip) = self.audio_clips.get(&wf_id) {
-                                    let original_duration_px = clip.duration_secs * PIXELS_PER_SECOND;
-                                    wf.size[0] = original_duration_px * (self.bpm / wf.sample_bpm);
+                        if let Some(ui::right_window::RightWindowTarget::Waveform(wf_id)) = target {
+                            if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                wf.sample_bpm = new_bpm;
+                                if wf.warp_mode == ui::waveform::WarpMode::RePitch {
+                                    if let Some(clip) = self.audio_clips.get(&wf_id) {
+                                        let original_duration_px = clip.duration_secs * PIXELS_PER_SECOND;
+                                        wf.size[0] = original_duration_px * (self.bpm / wf.sample_bpm);
+                                    }
                                 }
                             }
                         }
@@ -148,16 +164,20 @@ impl App {
                             rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
                         );
                         rw.pitch_semitones = new_pitch;
-                        if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                            wf.pitch_semitones = new_pitch;
+                        if let Some(ui::right_window::RightWindowTarget::Waveform(wf_id)) = target {
+                            if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                                wf.pitch_semitones = new_pitch;
+                            }
+                            self.resize_warped_clips();
                         }
-                        self.resize_warped_clips();
                     }
-                    let _ = before_wf;
                 }
                 self.mark_dirty();
                 #[cfg(feature = "native")]
-                self.sync_audio_clips();
+                match target {
+                    Some(ui::right_window::RightWindowTarget::Instrument(_)) => self.sync_instrument_regions(),
+                    _ => self.sync_audio_clips(),
+                }
                 self.request_redraw();
                 return;
             }
@@ -166,8 +186,10 @@ impl App {
         // Right window "Add Effect" button hover
         if let Some(rw) = &self.right_window {
             let (sw, sh, scale) = self.screen_info();
-            let wf_id = rw.waveform_id;
-            let chain_id = self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id);
+            let chain_id = match rw.target {
+                ui::right_window::RightWindowTarget::Waveform(wf_id) => self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id),
+                ui::right_window::RightWindowTarget::Instrument(inst_id) => self.instruments.get(&inst_id).and_then(|i| i.effect_chain_id),
+            };
             let slot_count = chain_id
                 .and_then(|cid| self.effect_chains.get(&cid))
                 .map_or(0, |c| c.slots.len());

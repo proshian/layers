@@ -239,3 +239,80 @@ fn test_computer_keyboard_state_and_project_browser() {
     // 2 instruments with clips
     assert!(app.sample_browser.entries.len() >= 2);
 }
+
+// ---------------------------------------------------------------------------
+// Instrument volume/pan defaults
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_instrument_default_volume_pan() {
+    let mut app = App::new_headless();
+    app.add_instrument("test-synth", "TestSynth");
+    assert_eq!(app.instruments.len(), 1);
+    let inst = app.instruments.values().next().unwrap();
+    assert!((inst.volume - 1.0).abs() < f32::EPSILON, "default volume should be 1.0");
+    assert!((inst.pan - 0.5).abs() < f32::EPSILON, "default pan should be 0.5");
+    assert!(inst.effect_chain_id.is_none(), "default effect_chain_id should be None");
+}
+
+#[test]
+fn test_instrument_right_window_opens_on_instrument_click() {
+    use crate::ui::right_window::RightWindowTarget;
+    let mut app = App::new_headless();
+    app.add_instrument("test-synth", "TestSynth");
+    let inst_id = *app.instruments.keys().next().unwrap();
+
+    // Open right window for instrument
+    app.update_right_window_for_instrument(inst_id);
+    let rw = app.right_window.as_ref().expect("right window should open for instrument");
+    assert!(rw.is_instrument());
+    assert_eq!(rw.target_id(), inst_id);
+    assert!((rw.volume - 1.0).abs() < f32::EPSILON);
+    assert!((rw.pan - 0.5).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_midi_clip_selection_opens_instrument_right_window() {
+    use crate::ui::right_window::RightWindowTarget;
+    let mut app = App::new_headless();
+    app.add_instrument("test-synth", "TestSynth");
+    let inst_id = *app.instruments.keys().next().unwrap();
+    let mc_id = *app.midi_clips.keys().next().unwrap();
+
+    // Select MIDI clip → should open instrument right window
+    app.selected.clear();
+    app.selected.push(HitTarget::MidiClip(mc_id));
+    app.update_right_window();
+    let rw = app.right_window.as_ref().expect("right window should open via midi clip");
+    assert!(rw.is_instrument());
+    assert_eq!(rw.target_id(), inst_id);
+}
+
+#[test]
+fn test_instrument_volume_undo_redo() {
+    use crate::instruments::InstrumentSnapshot;
+    let mut app = App::new_headless();
+    app.add_instrument("test-synth", "TestSynth");
+    let inst_id = *app.instruments.keys().next().unwrap();
+
+    // Change volume via operation
+    let inst = app.instruments.get(&inst_id).unwrap();
+    let before = InstrumentSnapshot {
+        name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
+        plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
+        volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+    };
+    let after = InstrumentSnapshot { volume: 0.5, ..before.clone() };
+    app.instruments.get_mut(&inst_id).unwrap().volume = 0.5;
+    app.push_op(crate::operations::Operation::UpdateInstrument { id: inst_id, before: before.clone(), after });
+
+    assert!((app.instruments.get(&inst_id).unwrap().volume - 0.5).abs() < f32::EPSILON);
+
+    // Undo
+    app.undo_op();
+    assert!((app.instruments.get(&inst_id).unwrap().volume - 1.0).abs() < f32::EPSILON, "undo should restore volume");
+
+    // Redo
+    app.redo_op();
+    assert!((app.instruments.get(&inst_id).unwrap().volume - 0.5).abs() < f32::EPSILON, "redo should reapply volume");
+}
