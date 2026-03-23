@@ -54,6 +54,56 @@ impl App {
             }
         }
 
+        // Right window volume/pan mousewheel
+        if let Some(rw) = &self.right_window {
+            let (sw, sh, scale) = self.screen_info();
+            let wf_id = rw.waveform_id;
+            if rw.hit_test_vol_track(self.mouse_pos, sw, sh, scale) {
+                let step = dy / (200.0 * scale);
+                let current_pos = ui::palette::gain_to_vol_fader_pos(rw.volume);
+                let new_pos = (current_pos + step).clamp(0.0, 1.0);
+                let new_vol = ui::palette::vol_fader_pos_to_gain(new_pos);
+                let before = self.waveforms.get(&wf_id).cloned();
+                if let Some(rw) = &mut self.right_window {
+                    rw.volume = new_vol;
+                }
+                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                    wf.volume = new_vol;
+                }
+                if let Some(before) = before {
+                    if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                        self.push_op(crate::operations::Operation::UpdateWaveform {
+                            id: wf_id, before, after,
+                        });
+                    }
+                }
+                self.sync_audio_clips();
+                self.request_redraw();
+                return;
+            }
+            if rw.hit_test_pan_knob(self.mouse_pos, sw, sh, scale) {
+                let step = dy / (200.0 * scale);
+                let new_pan = (rw.pan + step).clamp(0.0, 1.0);
+                let before = self.waveforms.get(&wf_id).cloned();
+                if let Some(rw) = &mut self.right_window {
+                    rw.pan = new_pan;
+                }
+                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
+                    wf.pan = new_pan;
+                }
+                if let Some(before) = before {
+                    if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                        self.push_op(crate::operations::Operation::UpdateWaveform {
+                            id: wf_id, before, after,
+                        });
+                    }
+                }
+                self.sync_audio_clips();
+                self.request_redraw();
+                return;
+            }
+        }
+
         let zoom_modifier = if cfg!(target_arch = "wasm32") {
             // In browsers, trackpad pinch-to-zoom is reported as ctrl+wheel
             self.cmd_held() || self.modifiers.control_key()
