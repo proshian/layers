@@ -68,6 +68,7 @@ pub enum CommandAction {
     SetWarpRePitch,
     SetWarpSemitone,
     OpenInstrumentGui,
+    SetMidiClipColor(usize),
 }
 
 #[derive(Clone, Copy, PartialEq)]

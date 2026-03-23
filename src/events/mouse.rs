@@ -151,6 +151,10 @@ impl App {
                             .selected
                             .iter()
                             .any(|t| matches!(t, HitTarget::EffectRegion(_)));
+                        let has_midi_clips = self
+                            .selected
+                            .iter()
+                            .any(|t| matches!(t, HitTarget::MidiClip(_)));
                         let current_waveform_color = self
                             .selected
                             .iter()
@@ -158,10 +162,19 @@ impl App {
                                 HitTarget::Waveform(i) => self.waveforms.get(i).map(|wf| wf.color),
                                 _ => None,
                             });
+                        let current_midi_color = self
+                            .selected
+                            .iter()
+                            .find_map(|t| match t {
+                                HitTarget::MidiClip(i) => self.midi_clips.get(i).map(|mc| mc.color),
+                                _ => None,
+                            });
                         MenuContext::Selection {
                             has_waveforms,
                             has_effect_region,
+                            has_midi_clips,
                             current_waveform_color,
+                            current_midi_color,
                         }
                     }
                     None => {

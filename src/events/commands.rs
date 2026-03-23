@@ -384,6 +384,16 @@ impl App {
                     self.mark_dirty();
                 }
             }
+            CommandAction::SetMidiClipColor(idx) => {
+                if let Some(&color) = WAVEFORM_COLORS.get(idx) {
+                    for target in self.selected.clone() {
+                        if let HitTarget::MidiClip(i) = target {
+                            if let Some(mc) = self.midi_clips.get_mut(&i) { mc.color = color; }
+                        }
+                    }
+                    self.mark_dirty();
+                }
+            }
             CommandAction::MoveLayerUp => {
                 if let Some(target) = self.selected.first() {
                     let id = match target {

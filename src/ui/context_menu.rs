@@ -27,7 +27,9 @@ pub enum MenuContext {
     Selection {
         has_waveforms: bool,
         has_effect_region: bool,
+        has_midi_clips: bool,
         current_waveform_color: Option<[f32; 4]>,
+        current_midi_color: Option<[f32; 4]>,
     },
     ComponentDef,
     ComponentInstance,
@@ -345,7 +347,9 @@ impl ContextMenu {
             MenuContext::Selection {
                 has_waveforms,
                 has_effect_region,
+                has_midi_clips,
                 current_waveform_color,
+                current_midi_color,
             } => {
                 let mut entries = vec![];
                 if has_effect_region {
@@ -379,6 +383,32 @@ impl ContextMenu {
                             action: CommandAction::SetSampleColor(i),
                             active: current_waveform_color
                                 .map_or(false, |cur| colors_match(cur, c)),
+                        })
+                        .collect();
+                    entries.push(ContextMenuEntry::SectionHeader("Color:"));
+                    for row in 0..WAVEFORM_COLOR_ROWS {
+                        let start = row * WAVEFORM_COLOR_COLS;
+                        let end = (start + WAVEFORM_COLOR_COLS).min(all_swatches.len());
+                        entries.push(ContextMenuEntry::ColorSwatchGroup(
+                            all_swatches[start..end].to_vec(),
+                        ));
+                    }
+                    entries.push(ContextMenuEntry::Separator);
+                }
+                if has_midi_clips {
+                    fn colors_match_midi(a: [f32; 4], b: [f32; 4]) -> bool {
+                        (a[0] - b[0]).abs() < 0.01
+                            && (a[1] - b[1]).abs() < 0.01
+                            && (a[2] - b[2]).abs() < 0.01
+                    }
+                    let all_swatches: Vec<ColorSwatch> = WAVEFORM_COLORS
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &c)| ColorSwatch {
+                            color: c,
+                            action: CommandAction::SetMidiClipColor(i),
+                            active: current_midi_color
+                                .map_or(false, |cur| colors_match_midi(cur, c)),
                         })
                         .collect();
                     entries.push(ContextMenuEntry::SectionHeader("Color:"));
