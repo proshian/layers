@@ -103,6 +103,7 @@ pub struct RightWindow {
     pub pan_knob_focused: bool,
     pub pitch_focused: bool,
     pub sample_bpm_focused: bool,
+    pub add_effect_hovered: bool,
 }
 
 impl RightWindow {
@@ -168,7 +169,7 @@ impl RightWindow {
         let (pp, _ps) = Self::panel_rect(screen_w, screen_h, scale);
         let (sel_pos, sel_size) = Self::warp_mode_selector_rect(screen_w, screen_h, scale);
         let rw_w = RIGHT_WINDOW_WIDTH * scale;
-        let text_y = sel_pos[1] + sel_size[1] + 4.0 * scale;
+        let text_y = sel_pos[1] + sel_size[1] + 10.0 * scale;
         ([pp[0], text_y], [rw_w, 40.0 * scale])
     }
 
@@ -1054,7 +1055,11 @@ impl RightWindow {
         out.push(InstanceRaw {
             position: abp,
             size: abs,
-            color: crate::theme::with_alpha(settings.theme.bg_elevated, 0.85),
+            color: if self.add_effect_hovered {
+                settings.theme.bg_elevated
+            } else {
+                crate::theme::with_alpha(settings.theme.bg_elevated, 0.85)
+            },
             border_radius: 4.0 * scale,
         });
 
@@ -1205,7 +1210,11 @@ impl RightWindow {
             font_size: 12.0 * scale,
             line_height: 14.0 * scale,
             max_width: bs[0] - padding - icon_size - 6.0 * scale,
-            color: crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 180),
+            color: if self.add_effect_hovered {
+                crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255)
+            } else {
+                crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 180)
+            },
             weight: 400,
             bounds: None,
             center: false,
@@ -1304,7 +1313,11 @@ impl RightWindow {
             x: icon_x,
             y: icon_y,
             size: icon_size,
-            color: crate::theme::RuntimeTheme::text_u8(settings.theme.text_secondary, 180),
+            color: if self.add_effect_hovered {
+                crate::theme::RuntimeTheme::text_u8(settings.theme.text_primary, 255)
+            } else {
+                crate::theme::RuntimeTheme::text_u8(settings.theme.text_secondary, 180)
+            },
         });
 
         out

@@ -1,3 +1,5 @@
+- 2026-03-23: fix: increase gap between warp mode selector and pitch text in right window to prevent overlap (38.4k loc)
+- 2026-03-23: feat: add hover effect to "Add Effect" button in right window — brighter text and background on hover (38.4k loc)
 - 2026-03-23: feat: add X clear icon to browser search bar — appears when query is non-empty, clears and unfocuses on click (38.4k loc)
 - 2026-03-23: refactor: consolidate settings dropdown code into shared helpers — render_dropdown_button, render_dropdown_popup, build_popup_text_entries, push_row_label, push_dropdown_value (38.3k loc)
 - 2026-03-23: feat: add "Reset to Defaults" button in Developer settings tab to restore factory theme (38.7k loc)

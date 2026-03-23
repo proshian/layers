@@ -2860,6 +2860,7 @@ impl App {
                     pan_knob_focused,
                     pitch_focused,
                     sample_bpm_focused,
+                    add_effect_hovered: false,
                 });
                 return;
             }
@@ -2891,6 +2892,7 @@ impl App {
                 pan_knob_focused: false,
                 pitch_focused: false,
                 sample_bpm_focused: false,
+                add_effect_hovered: false,
             });
         }
     }

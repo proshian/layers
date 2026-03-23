@@ -163,6 +163,23 @@ impl App {
             }
         }
 
+        // Right window "Add Effect" button hover
+        if let Some(rw) = &self.right_window {
+            let (sw, sh, scale) = self.screen_info();
+            let wf_id = rw.waveform_id;
+            let chain_id = self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id);
+            let slot_count = chain_id
+                .and_then(|cid| self.effect_chains.get(&cid))
+                .map_or(0, |c| c.slots.len());
+            let hovered = rw.hit_test_add_effect_button(self.mouse_pos, slot_count, sw, sh, scale);
+            if hovered != rw.add_effect_hovered {
+                if let Some(rw) = &mut self.right_window {
+                    rw.add_effect_hovered = hovered;
+                }
+                self.request_redraw();
+            }
+        }
+
         {
             let is_dragging_fader = self
                 .command_palette
