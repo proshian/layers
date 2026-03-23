@@ -556,10 +556,9 @@ impl AudioEngine {
                                 let block_len = (frames - offset).min(effect_block_size);
                                 let t_start = current_time + offset as f64 / sr;
                                 let t_end = t_start + block_len as f64 / sr;
-                                let mid_t = (t_start + t_end) * 0.5;
                                 let in_region = is_playing
-                                    && mid_t >= region_start_secs
-                                    && mid_t <= region_end_secs;
+                                    && t_end > region_start_secs
+                                    && t_start < region_end_secs;
 
                                 if let Ok(gui_guard) = region.gui.try_lock() {
                                     if let Some(ref gui) = *gui_guard {
