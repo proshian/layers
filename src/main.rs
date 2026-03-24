@@ -498,6 +498,23 @@ impl App {
         false
     }
 
+    /// If `target` is a member of a non-entered group, return the group's HitTarget instead.
+    fn redirect_to_group(&self, target: HitTarget) -> HitTarget {
+        let entity_id = match target {
+            HitTarget::Waveform(id) | HitTarget::MidiClip(id) | HitTarget::EffectRegion(id)
+            | HitTarget::TextNote(id) | HitTarget::Object(id) | HitTarget::LoopRegion(id)
+            | HitTarget::ExportRegion(id) | HitTarget::ComponentDef(id)
+            | HitTarget::ComponentInstance(id) | HitTarget::PluginBlock(id) => id,
+            HitTarget::Group(_) => return target,
+        };
+        for (gid, group) in &self.groups {
+            if group.member_ids.contains(&entity_id) && self.editing_group != Some(*gid) {
+                return HitTarget::Group(*gid);
+            }
+        }
+        target
+    }
+
     fn mark_dirty(&mut self) {
         self.render_generation = self.render_generation.wrapping_add(1);
         self.project_dirty = true;

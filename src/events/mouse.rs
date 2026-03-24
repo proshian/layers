@@ -1968,7 +1968,8 @@ impl App {
                                 &self.camera,
                                 self.editing_group,
                             );
-                            if let Some(target) = hit2 {
+                            if let Some(raw_target) = hit2 {
+                                let target = self.redirect_to_group(raw_target);
                                 self.selected.push(target);
                                 self.begin_move_selection(world, self.modifiers.alt_key(), Some(target));
                             } else {
@@ -1982,7 +1983,8 @@ impl App {
                 }
 
                 match hit {
-                    Some(target) => {
+                    Some(raw_target) => {
+                        let target = self.redirect_to_group(raw_target);
                         self.select_area = None;
                         if self.selected.contains(&target) {
                             // Already selected -> drag whole selection
