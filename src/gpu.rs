@@ -791,10 +791,12 @@ impl Gpu {
                     (Some(slot_idx), offset, hover),
                 _ => (None, 0.0, None),
             };
-            overlay_instances.extend(rw.build_effect_chain_instances(
-                chain, chain_id, ref_count, settings, w, h, self.scale_factor,
-                drag_idx, drag_offset, hover_idx,
-            ));
+            if !rw.is_multi() {
+                overlay_instances.extend(rw.build_effect_chain_instances(
+                    chain, chain_id, ref_count, settings, w, h, self.scale_factor,
+                    drag_idx, drag_offset, hover_idx,
+                ));
+            }
         }
 
         if let Some((_, pos)) = browser_drag_ghost {
@@ -943,7 +945,8 @@ impl Gpu {
                     (Some(slot_idx), offset),
                 _ => (None, 0.0),
             };
-            for te in rw.get_effect_chain_text_entries(&settings.theme, chain, chain_id, ref_count, w, h, scale, text_drag_idx, text_drag_offset) {
+            let effect_text_entries = if rw.is_multi() { Vec::new() } else { rw.get_effect_chain_text_entries(&settings.theme, chain, chain_id, ref_count, w, h, scale, text_drag_idx, text_drag_offset) };
+            for te in effect_text_entries {
                 let bounds = match te.bounds {
                     Some([l, t, r, b]) => TextBounds {
                         left: l as i32, top: t as i32, right: r as i32, bottom: b as i32,

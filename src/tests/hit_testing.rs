@@ -173,6 +173,7 @@ fn test_hit_test_priority_order() {
         None,
         [50.0, 30.0],
         &camera,
+        None,
     );
     assert_eq!(result, Some(HitTarget::ComponentInstance(inst_id)));
 
@@ -193,6 +194,7 @@ fn test_hit_test_priority_order() {
         None,
         [50.0, 30.0],
         &camera,
+        None,
     );
     assert_eq!(result, Some(HitTarget::Waveform(wf_id)));
 
@@ -213,6 +215,7 @@ fn test_hit_test_priority_order() {
         None,
         [50.0, 30.0],
         &camera,
+        None,
     );
     assert_eq!(result, Some(HitTarget::Object(obj_id)));
 }

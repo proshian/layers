@@ -203,6 +203,7 @@ pub(crate) fn hit_test(
     editing_component: Option<EntityId>,
     world_pos: [f32; 2],
     camera: &Camera,
+    editing_group: Option<EntityId>,
 ) -> Option<HitTarget> {
     // When editing a component, only its waveforms are hittable
     if let Some(ec_id) = editing_component {
@@ -281,25 +282,28 @@ pub(crate) fn hit_test(
         }
     }
     // Groups: hit border (~5px) or the name badge area
-    let border_margin = 5.0 / camera.zoom;
-    for (&id, group) in groups.iter().rev() {
-        let p = group.position;
-        let s = group.size;
-        // Check name badge area (above the group)
-        let badge_h = 16.0 / camera.zoom;
-        let badge_w = (group.name.len() as f32 * 7.0 + 16.0) / camera.zoom;
-        let badge_w = badge_w.min(s[0]);
-        let badge_pos = [p[0], p[1] - badge_h - 2.0 / camera.zoom];
-        if point_in_rect(world_pos, badge_pos, [badge_w, badge_h]) {
-            return Some(HitTarget::Group(id));
-        }
-        // Check border edges (within border_margin of the border)
-        if point_in_rect(world_pos, [p[0] - border_margin, p[1] - border_margin],
-                         [s[0] + border_margin * 2.0, s[1] + border_margin * 2.0])
-            && !point_in_rect(world_pos, [p[0] + border_margin, p[1] + border_margin],
-                              [s[0] - border_margin * 2.0, s[1] - border_margin * 2.0])
-        {
-            return Some(HitTarget::Group(id));
+    // When editing a group, skip group border hit test so members can be selected
+    if editing_group.is_none() {
+        let border_margin = 5.0 / camera.zoom;
+        for (&id, group) in groups.iter().rev() {
+            let p = group.position;
+            let s = group.size;
+            // Check name badge area (above the group)
+            let badge_h = 16.0 / camera.zoom;
+            let badge_w = (group.name.len() as f32 * 7.0 + 16.0) / camera.zoom;
+            let badge_w = badge_w.min(s[0]);
+            let badge_pos = [p[0], p[1] - badge_h - 2.0 / camera.zoom];
+            if point_in_rect(world_pos, badge_pos, [badge_w, badge_h]) {
+                return Some(HitTarget::Group(id));
+            }
+            // Check border edges (within border_margin of the border)
+            if point_in_rect(world_pos, [p[0] - border_margin, p[1] - border_margin],
+                             [s[0] + border_margin * 2.0, s[1] + border_margin * 2.0])
+                && !point_in_rect(world_pos, [p[0] + border_margin, p[1] + border_margin],
+                                  [s[0] - border_margin * 2.0, s[1] - border_margin * 2.0])
+            {
+                return Some(HitTarget::Group(id));
+            }
         }
     }
     None

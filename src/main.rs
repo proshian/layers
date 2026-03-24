@@ -277,6 +277,7 @@ struct App {
     midi_note_select_rect: Option<[f32; 4]>,
     cmd_velocity_hover_note: Option<(EntityId, usize)>,
     editing_component: Option<EntityId>,
+    editing_group: Option<EntityId>,
     editing_effect_name: Option<(EntityId, String)>,
     editing_waveform_name: Option<(EntityId, String)>,
     bpm: f32,
@@ -412,6 +413,7 @@ impl App {
             midi_note_select_rect: None,
             cmd_velocity_hover_note: None,
             editing_component: None,
+            editing_group: None,
             editing_effect_name: None,
             editing_waveform_name: None,
             bpm: 120.0,
@@ -1142,6 +1144,7 @@ impl App {
             midi_note_select_rect: None,
             cmd_velocity_hover_note: None,
             editing_component: None,
+            editing_group: None,
             editing_effect_name: None,
             editing_waveform_name: None,
             bpm: loaded_bpm,
@@ -2258,7 +2261,26 @@ impl App {
             }
             HitTarget::ComponentInstance(i) => { if let Some(c) = self.component_instances.get_mut(i) { c.position = pos; } }
             HitTarget::MidiClip(i) => { if let Some(m) = self.midi_clips.get_mut(i) { m.position = pos; } }
-            HitTarget::Group(i) => { if let Some(g) = self.groups.get_mut(i) { g.position = pos; } }
+            HitTarget::Group(i) => {
+                let (member_ids, dx, dy) = {
+                    if let Some(g) = self.groups.get_mut(i) {
+                        let dx = pos[0] - g.position[0];
+                        let dy = pos[1] - g.position[1];
+                        g.position = pos;
+                        (g.member_ids.clone(), dx, dy)
+                    } else { return; }
+                };
+                for mid in &member_ids {
+                    if let Some(wf) = self.waveforms.get_mut(mid) { wf.position[0] += dx; wf.position[1] += dy; }
+                    else if let Some(mc) = self.midi_clips.get_mut(mid) { mc.position[0] += dx; mc.position[1] += dy; }
+                    else if let Some(er) = self.effect_regions.get_mut(mid) { er.position[0] += dx; er.position[1] += dy; }
+                    else if let Some(tn) = self.text_notes.get_mut(mid) { tn.position[0] += dx; tn.position[1] += dy; }
+                    else if let Some(obj) = self.objects.get_mut(mid) { obj.position[0] += dx; obj.position[1] += dy; }
+                    else if let Some(lr) = self.loop_regions.get_mut(mid) { lr.position[0] += dx; lr.position[1] += dy; }
+                    else if let Some(xr) = self.export_regions.get_mut(mid) { xr.position[0] += dx; xr.position[1] += dy; }
+                    else if let Some(c) = self.components.get_mut(mid) { c.position[0] += dx; c.position[1] += dy; }
+                }
+            }
         }
     }
 
@@ -2462,7 +2484,7 @@ impl App {
         }
 
         // Capture before states for all selected entities
-        let before_states: Vec<(HitTarget, EntityBeforeState)> = self.selected.iter().filter_map(|t| {
+        let mut before_states: Vec<(HitTarget, EntityBeforeState)> = self.selected.iter().filter_map(|t| {
             match t {
                 HitTarget::Object(id) => self.objects.get(id).map(|o| (*t, EntityBeforeState::Object(o.clone()))),
                 HitTarget::Waveform(id) => self.waveforms.get(id).map(|w| (*t, EntityBeforeState::Waveform(w.clone()))),
@@ -2477,6 +2499,43 @@ impl App {
                 HitTarget::Group(id) => self.groups.get(id).map(|g| (*t, EntityBeforeState::Group(g.clone()))),
             }
         }).collect();
+
+        // Also capture before-states for group members so undo/redo works
+        let member_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| {
+            if let HitTarget::Group(id) = t {
+                self.groups.get(id).map(|g| g.member_ids.clone())
+            } else {
+                None
+            }
+        }).flatten().collect();
+        let existing_ids: HashSet<HitTarget> = before_states.iter().map(|(t, _)| *t).collect();
+        for mid in &member_ids {
+            if let Some(wf) = self.waveforms.get(mid) {
+                let t = HitTarget::Waveform(*mid);
+                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::Waveform(wf.clone()))); }
+            } else if let Some(mc) = self.midi_clips.get(mid) {
+                let t = HitTarget::MidiClip(*mid);
+                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::MidiClip(mc.clone()))); }
+            } else if let Some(er) = self.effect_regions.get(mid) {
+                let t = HitTarget::EffectRegion(*mid);
+                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::EffectRegion(er.clone()))); }
+            } else if let Some(tn) = self.text_notes.get(mid) {
+                let t = HitTarget::TextNote(*mid);
+                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::TextNote(tn.clone()))); }
+            } else if let Some(obj) = self.objects.get(mid) {
+                let t = HitTarget::Object(*mid);
+                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::Object(obj.clone()))); }
+            } else if let Some(lr) = self.loop_regions.get(mid) {
+                let t = HitTarget::LoopRegion(*mid);
+                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::LoopRegion(lr.clone()))); }
+            } else if let Some(xr) = self.export_regions.get(mid) {
+                let t = HitTarget::ExportRegion(*mid);
+                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::ExportRegion(xr.clone()))); }
+            } else if let Some(c) = self.components.get(mid) {
+                let t = HitTarget::ComponentDef(*mid);
+                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::ComponentDef(c.clone()))); }
+            }
+        }
 
         let offsets: Vec<(HitTarget, [f32; 2])> = self
             .selected

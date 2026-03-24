@@ -43,6 +43,7 @@ impl App {
             self.editing_component,
             world,
             &self.camera,
+            self.editing_group,
         );
         let wf_id = match hit {
             Some(HitTarget::Waveform(i)) => i,

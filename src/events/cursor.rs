@@ -112,10 +112,35 @@ impl App {
                             rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
                         );
                         rw.volume = new_vol;
+                        let snapshots = rw.drag_start_snapshots.clone();
                         match target {
-                            Some(ui::right_window::RightWindowTarget::Waveform(wf_id)) => {
-                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                                    wf.volume = new_vol;
+                            Some(ui::right_window::RightWindowTarget::Waveform(_)) => {
+                                if snapshots.len() > 1 {
+                                    // Relative: compute dB delta from first clip, apply to each clip's original
+                                    let first_original_db = ui::palette::gain_to_db(snapshots[0].1.volume);
+                                    let new_db = ui::palette::gain_to_db(new_vol);
+                                    let db_delta = new_db - first_original_db;
+                                    for (id, orig) in &snapshots {
+                                        if let Some(wf) = self.waveforms.get_mut(id) {
+                                            let orig_db = ui::palette::gain_to_db(orig.volume);
+                                            let target_db = (orig_db + db_delta).clamp(
+                                                ui::palette::VOL_FADER_DB_BOTTOM,
+                                                ui::palette::VOL_FADER_DB_MAX,
+                                            );
+                                            wf.volume = if target_db <= ui::palette::VOL_FADER_DB_BOTTOM {
+                                                0.0
+                                            } else {
+                                                ui::palette::db_to_gain(target_db)
+                                            };
+                                        }
+                                    }
+                                } else {
+                                    // Single clip: absolute
+                                    for (id, _) in &snapshots {
+                                        if let Some(wf) = self.waveforms.get_mut(id) {
+                                            wf.volume = new_vol;
+                                        }
+                                    }
                                 }
                             }
                             Some(ui::right_window::RightWindowTarget::Instrument(inst_id)) => {
@@ -130,10 +155,24 @@ impl App {
                             rw.drag_start_y, self.mouse_pos[1], rw.drag_start_value, scale
                         );
                         rw.pan = new_pan;
+                        let snapshots = rw.drag_start_snapshots.clone();
                         match target {
-                            Some(ui::right_window::RightWindowTarget::Waveform(wf_id)) => {
-                                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                                    wf.pan = new_pan;
+                            Some(ui::right_window::RightWindowTarget::Waveform(_)) => {
+                                if snapshots.len() > 1 {
+                                    // Relative: compute pan delta from first clip, apply to each
+                                    let pan_delta = new_pan - snapshots[0].1.pan;
+                                    for (id, orig) in &snapshots {
+                                        if let Some(wf) = self.waveforms.get_mut(id) {
+                                            wf.pan = (orig.pan + pan_delta).clamp(0.0, 1.0);
+                                        }
+                                    }
+                                } else {
+                                    // Single clip: absolute
+                                    for (id, _) in &snapshots {
+                                        if let Some(wf) = self.waveforms.get_mut(id) {
+                                            wf.pan = new_pan;
+                                        }
+                                    }
                                 }
                             }
                             Some(ui::right_window::RightWindowTarget::Instrument(inst_id)) => {
@@ -1211,6 +1250,7 @@ impl App {
             self.editing_component,
             world,
             &self.camera,
+            self.editing_group,
         );
 
         self.component_def_hover = ComponentDefHover::None;

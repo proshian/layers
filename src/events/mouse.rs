@@ -124,6 +124,7 @@ impl App {
                     self.editing_component,
                     world,
                     &self.camera,
+                    self.editing_group,
                 );
                 let menu_ctx = match hit {
                     Some(HitTarget::ComponentInstance(_)) => {
@@ -720,9 +721,20 @@ impl App {
                             let is_dbl = now.duration_since(self.last_pan_knob_click_time).as_millis() < 400;
                             self.last_pan_knob_click_time = now;
                             if is_dbl {
-                                // Double-click resets pan to center (0.5)
-                                let before = self.waveforms[&wf_id].clone();
-                                self.waveforms.get_mut(&wf_id).unwrap().pan = 0.5;
+                                // Double-click resets pan to center (all multi-selected clips)
+                                let multi_ids = self.right_window.as_ref()
+                                    .map(|rw| rw.multi_target_ids.clone()).unwrap_or_default();
+                                let mut ops = Vec::new();
+                                for &mid in &multi_ids {
+                                    if let Some(before) = self.waveforms.get(&mid).cloned() {
+                                        if let Some(wf) = self.waveforms.get_mut(&mid) {
+                                            wf.pan = 0.5;
+                                        }
+                                        if let Some(after) = self.waveforms.get(&mid).cloned() {
+                                            ops.push(crate::operations::Operation::UpdateWaveform { id: mid, before, after });
+                                        }
+                                    }
+                                }
                                 if let Some(rw) = &mut self.right_window {
                                     rw.pan = 0.5;
                                     rw.pan_dragging = false;
@@ -731,13 +743,20 @@ impl App {
                                     rw.pitch_focused = false;
                                     rw.sample_bpm_focused = false;
                                 }
-                                let after = self.waveforms[&wf_id].clone();
-                                self.push_op(crate::operations::Operation::UpdateWaveform { id: wf_id, before, after });
+                                if ops.len() == 1 {
+                                    self.push_op(ops.into_iter().next().unwrap());
+                                } else if ops.len() > 1 {
+                                    self.push_op(crate::operations::Operation::Batch(ops));
+                                }
                                 self.sync_audio_clips();
                                 self.request_redraw();
                                 return;
                             }
                             let start_value = rw.pan;
+                            let multi_ids = rw.multi_target_ids.clone();
+                            let snapshots: Vec<_> = multi_ids.iter()
+                                .filter_map(|id| self.waveforms.get(id).map(|wf| (*id, wf.clone())))
+                                .collect();
                             if let Some(rw) = &mut self.right_window {
                                 rw.pan_dragging = true;
                                 rw.drag_start_y = self.mouse_pos[1];
@@ -746,6 +765,7 @@ impl App {
                                 rw.vol_fader_focused = false;
                                 rw.pitch_focused = false;
                                 rw.sample_bpm_focused = false;
+                                rw.drag_start_snapshots = snapshots;
                             }
                             let _ = wf_id;
                             self.request_redraw();
@@ -1605,6 +1625,7 @@ impl App {
                     self.editing_component,
                     world,
                     &self.camera,
+                    self.editing_group,
                 );
 
                 // Double-click detection: enter component edit mode
@@ -1619,6 +1640,12 @@ impl App {
                 self.last_click_world = world;
 
                 if is_double_click {
+                    if let Some(HitTarget::Group(group_id)) = hit {
+                        self.editing_group = Some(group_id);
+                        self.selected.clear();
+                        self.request_redraw();
+                        return;
+                    }
                     if let Some(HitTarget::ComponentDef(ci)) = hit {
                         self.editing_component = Some(ci);
                         self.selected.clear();
@@ -1895,6 +1922,23 @@ impl App {
                     }
                 }
 
+                // Click outside the editing group exits group edit mode
+                if let Some(group_id) = self.editing_group {
+                    if let Some(group) = self.groups.get(&group_id) {
+                        let gx = group.position[0];
+                        let gy = group.position[1];
+                        let gw = group.size[0];
+                        let gh = group.size[1];
+                        if world[0] < gx || world[0] > gx + gw || world[1] < gy || world[1] > gy + gh {
+                            self.editing_group = None;
+                            self.selected.clear();
+                            // Fall through to normal hit testing
+                        }
+                    } else {
+                        self.editing_group = None;
+                    }
+                }
+
                 // Click outside the editing component exits edit mode
                 if let Some(ec_idx) = self.editing_component {
                     if let Some(def) = self.components.get(&ec_idx) {
@@ -1918,6 +1962,7 @@ impl App {
                                 None,
                                 world,
                                 &self.camera,
+                                self.editing_group,
                             );
                             if let Some(target) = hit2 {
                                 self.selected.push(target);
@@ -1970,9 +2015,24 @@ impl App {
                         if let Some(rw) = &self.right_window {
                             let target = rw.target;
                             let drag_start_value = rw.drag_start_value;
+                            let snapshots = rw.drag_start_snapshots.clone();
+                            let multi_ids = rw.multi_target_ids.clone();
                             match target {
-                                ui::right_window::RightWindowTarget::Waveform(wf_id) => {
-                                    if let Some(after) = self.waveforms.get(&wf_id).cloned() {
+                                ui::right_window::RightWindowTarget::Waveform(_wf_id) => {
+                                    if (is_vol_drag || is_pan_drag) && multi_ids.len() > 1 {
+                                        // Batch undo for multi-selection vol/pan drag
+                                        let mut ops = Vec::new();
+                                        for (id, before) in &snapshots {
+                                            if let Some(after) = self.waveforms.get(id).cloned() {
+                                                ops.push(crate::operations::Operation::UpdateWaveform {
+                                                    id: *id, before: before.clone(), after,
+                                                });
+                                            }
+                                        }
+                                        if !ops.is_empty() {
+                                            self.push_op(crate::operations::Operation::Batch(ops));
+                                        }
+                                    } else if let Some(after) = self.waveforms.get(&_wf_id).cloned() {
                                         let mut before = after.clone();
                                         if is_vol_drag {
                                             before.volume = ui::palette::vol_fader_pos_to_gain(drag_start_value);
@@ -1984,7 +2044,7 @@ impl App {
                                             before.pitch_semitones = drag_start_value;
                                         }
                                         self.push_op(crate::operations::Operation::UpdateWaveform {
-                                            id: wf_id,
+                                            id: _wf_id,
                                             before,
                                             after,
                                         });

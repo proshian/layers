@@ -730,3 +730,133 @@ fn test_reverse_reflects_in_right_window() {
     app.update_right_window();
     assert!(app.right_window.as_ref().unwrap().is_reversed, "right window should reflect reversed state");
 }
+
+#[test]
+fn test_multi_select_updates_right_window() {
+    let mut app = App::new_headless();
+    let id1 = new_id();
+    let id2 = new_id();
+    let id3 = new_id();
+
+    let mut wf1 = make_waveform();
+    wf1.volume = 0.8;
+    wf1.pan = 0.3;
+    let mut wf2 = make_waveform();
+    wf2.volume = 1.2;
+    wf2.pan = 0.7;
+    let wf3 = make_waveform();
+
+    app.waveforms.insert(id1, wf1);
+    app.waveforms.insert(id2, wf2);
+    app.waveforms.insert(id3, wf3);
+
+    // Select all three
+    app.selected.push(HitTarget::Waveform(id1));
+    app.selected.push(HitTarget::Waveform(id2));
+    app.selected.push(HitTarget::Waveform(id3));
+    app.update_right_window();
+
+    let rw = app.right_window.as_ref().unwrap();
+    assert_eq!(rw.multi_target_ids.len(), 3, "should have 3 multi target ids");
+    assert!(rw.is_multi(), "should be multi-selection");
+    // Volume/pan should come from first selected waveform
+    assert!((rw.volume - 0.8).abs() < 1e-4, "volume should be from first waveform");
+    assert!((rw.pan - 0.3).abs() < 1e-4, "pan should be from first waveform");
+}
+
+#[test]
+fn test_multi_select_volume_relative_batch_undo() {
+    use crate::ui::palette::gain_to_db;
+
+    let mut app = App::new_headless();
+    let id1 = new_id();
+    let id2 = new_id();
+
+    // wf1 at -3 dB, wf2 at 0 dB
+    let mut wf1 = make_waveform();
+    wf1.volume = db_to_gain(-3.0);
+    let mut wf2 = make_waveform();
+    wf2.volume = 1.0; // 0 dB
+
+    app.waveforms.insert(id1, wf1.clone());
+    app.waveforms.insert(id2, wf2.clone());
+
+    // Simulate relative +2 dB change: wf1 → -1 dB, wf2 → +2 dB
+    let db_delta = 2.0;
+    let before1 = app.waveforms[&id1].clone();
+    let before2 = app.waveforms[&id2].clone();
+    let wf1_new_db = gain_to_db(before1.volume) + db_delta; // -3 + 2 = -1
+    let wf2_new_db = gain_to_db(before2.volume) + db_delta; // 0 + 2 = 2
+    app.waveforms.get_mut(&id1).unwrap().volume = db_to_gain(wf1_new_db);
+    app.waveforms.get_mut(&id2).unwrap().volume = db_to_gain(wf2_new_db);
+    let after1 = app.waveforms[&id1].clone();
+    let after2 = app.waveforms[&id2].clone();
+
+    app.push_op(Operation::Batch(vec![
+        Operation::UpdateWaveform { id: id1, before: before1, after: after1 },
+        Operation::UpdateWaveform { id: id2, before: before2, after: after2 },
+    ]));
+
+    // Verify relative values maintained
+    assert!((gain_to_db(app.waveforms[&id1].volume) - (-1.0)).abs() < 0.1, "wf1 should be -1 dB");
+    assert!((gain_to_db(app.waveforms[&id2].volume) - 2.0).abs() < 0.1, "wf2 should be +2 dB");
+
+    // Undo should restore both to original
+    app.undo_op();
+    assert!((gain_to_db(app.waveforms[&id1].volume) - (-3.0)).abs() < 0.1, "undo should restore wf1 to -3 dB");
+    assert!((gain_to_db(app.waveforms[&id2].volume) - 0.0).abs() < 0.1, "undo should restore wf2 to 0 dB");
+}
+
+#[test]
+fn test_multi_select_pan_relative_batch_undo() {
+    let mut app = App::new_headless();
+    let id1 = new_id();
+    let id2 = new_id();
+
+    // wf1 panned left (0.3), wf2 panned right (0.7)
+    let mut wf1 = make_waveform();
+    wf1.pan = 0.3;
+    let mut wf2 = make_waveform();
+    wf2.pan = 0.7;
+
+    app.waveforms.insert(id1, wf1);
+    app.waveforms.insert(id2, wf2);
+
+    // Simulate relative pan shift of +0.1: wf1 → 0.4, wf2 → 0.8
+    let pan_delta = 0.1;
+    let before1 = app.waveforms[&id1].clone();
+    let before2 = app.waveforms[&id2].clone();
+    app.waveforms.get_mut(&id1).unwrap().pan = (before1.pan + pan_delta).clamp(0.0, 1.0);
+    app.waveforms.get_mut(&id2).unwrap().pan = (before2.pan + pan_delta).clamp(0.0, 1.0);
+    let after1 = app.waveforms[&id1].clone();
+    let after2 = app.waveforms[&id2].clone();
+
+    app.push_op(Operation::Batch(vec![
+        Operation::UpdateWaveform { id: id1, before: before1, after: after1 },
+        Operation::UpdateWaveform { id: id2, before: before2, after: after2 },
+    ]));
+
+    // Verify relative values maintained
+    assert!((app.waveforms[&id1].pan - 0.4).abs() < 1e-4, "wf1 should be 0.4");
+    assert!((app.waveforms[&id2].pan - 0.8).abs() < 1e-4, "wf2 should be 0.8");
+
+    // Undo should restore both
+    app.undo_op();
+    assert!((app.waveforms[&id1].pan - 0.3).abs() < 1e-4, "undo should restore wf1 pan to 0.3");
+    assert!((app.waveforms[&id2].pan - 0.7).abs() < 1e-4, "undo should restore wf2 pan to 0.7");
+}
+
+#[test]
+fn test_single_select_still_works() {
+    let mut app = App::new_headless();
+    let id = new_id();
+    app.waveforms.insert(id, make_waveform());
+
+    app.selected.push(HitTarget::Waveform(id));
+    app.update_right_window();
+
+    let rw = app.right_window.as_ref().unwrap();
+    assert_eq!(rw.multi_target_ids.len(), 1);
+    assert!(!rw.is_multi(), "single selection should not be multi");
+    assert_eq!(rw.target_id(), id);
+}

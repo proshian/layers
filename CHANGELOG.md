@@ -1,3 +1,5 @@
+- 2026-03-24: feat: Figma-style group move (moves all members) and double-click to enter/exit group editing mode (39.9k loc)
+- 2026-03-24: feat: multi-selection volume and pan editing in right panel with relative adjustments and batch undo/redo (39.7k loc)
 - 2026-03-24: feat: show Groups in layers panel with expandable member children (39.5k loc)
 - 2026-03-24: feat: group rendering, hit testing, Cmd+G creation, and Cmd+Shift+G ungroup (39.4k loc)
 - 2026-03-24: fix: non-exhaustive pattern errors from Group(EntityId) added to HitTarget, ClipboardItem, EntityBeforeState enums (39.0k loc)

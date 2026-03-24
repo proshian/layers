@@ -333,6 +333,7 @@ impl App {
         self.export_regions.clear();
         self.loop_regions.clear();
         self.editing_component = None;
+        self.editing_group = None;
         self.editing_effect_name = None;
         self.editing_waveform_name = None;
         self.editing_bpm.cancel();
@@ -620,6 +621,7 @@ impl App {
         self.editing_midi_clip = None;
         self.selected_midi_notes.clear();
         self.editing_component = None;
+        self.editing_group = None;
         self.editing_effect_name = None;
         self.editing_waveform_name = None;
         self.editing_bpm.cancel();
