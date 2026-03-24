@@ -7,7 +7,7 @@ impl App {
         match button {
         MouseButton::Middle => match state {
             ElementState::Pressed => {
-                if self.context_menu.is_some() || self.settings_window.is_some() {
+                if self.context_menu.is_some() || self.settings_window.is_some() || self.export_window.is_some() {
                     return;
                 }
                 self.command_palette = None;
@@ -320,6 +320,46 @@ impl App {
                         }
                     } else {
                         self.plugin_editor = None;
+                    }
+                    self.request_redraw();
+                    return;
+                }
+
+                // Export window click
+                if self.export_window.is_some() {
+                    let (scr_w, scr_h, scale) = self.screen_info();
+                    let inside = self.export_window.as_ref().map_or(false, |ew| {
+                        ew.contains(self.mouse_pos, scr_w, scr_h, scale)
+                    });
+                    if inside {
+                        // Format button clicks
+                        if let Some(fmt) = self.export_window.as_ref().and_then(|ew| {
+                            ew.hit_test_format(self.mouse_pos, scr_w, scr_h, scale)
+                        }) {
+                            if let Some(ew) = &mut self.export_window {
+                                ew.format = fmt;
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // Export button click
+                        let export_clicked = self.export_window.as_ref().map_or(false, |ew| {
+                            ew.hit_test_export_button(self.mouse_pos, scr_w, scr_h, scale)
+                        });
+                        if export_clicked {
+                            self.start_export();
+                            self.request_redraw();
+                            return;
+                        }
+                    } else {
+                        // Click outside closes export window (only if idle)
+                        let is_idle = self.export_window.as_ref().map_or(false, |ew| {
+                            ew.state == ui::export_window::ExportState::Idle
+                        });
+                        if is_idle {
+                            self.export_window = None;
+                        }
                     }
                     self.request_redraw();
                     return;
@@ -772,35 +812,15 @@ impl App {
                             return;
                         }
 
-                        // --- Group export button click ---
+                        // --- Group export button click → open export window ---
                         if rw.hit_test_export_button(self.mouse_pos, sw, sh, scale) {
                             if let ui::right_window::RightWindowTarget::Group(group_id) = rw.target {
-                                #[cfg(feature = "native")]
-                                {
-                                    let default_name = self.groups.get(&group_id)
-                                        .map(|g| format!("{}.wav", g.name))
-                                        .unwrap_or_else(|| "export.wav".to_string());
-                                    if let Some(path) = rfd::FileDialog::new()
-                                        .set_title("Export WAV")
-                                        .set_file_name(&default_name)
-                                        .save_file()
-                                    {
-                                        match crate::export::export_group_wav(self, group_id, &path) {
-                                            Ok(()) => {
-                                                self.toast_manager.push(
-                                                    format!("Exported to {}", path.display()),
-                                                    crate::ui::toast::ToastKind::Success,
-                                                );
-                                            }
-                                            Err(e) => {
-                                                self.toast_manager.push(
-                                                    format!("Export failed: {}", e),
-                                                    crate::ui::toast::ToastKind::Error,
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
+                                let group_name = self.groups.get(&group_id)
+                                    .map(|g| g.name.clone())
+                                    .unwrap_or_else(|| "export".to_string());
+                                self.export_window = Some(
+                                    ui::export_window::ExportWindow::new(group_id, group_name)
+                                );
                             }
                             self.request_redraw();
                             return;
@@ -1273,6 +1293,19 @@ impl App {
                                             self.selected.push(HitTarget::Group(*id));
                                             self.update_right_window();
                                         }
+                                    }
+                                    // Initiate layer reorder drag (not for MidiClip/PluginBlock)
+                                    if !matches!(kind, crate::layers::LayerNodeKind::MidiClip | crate::layers::LayerNodeKind::PluginBlock) && !is_dbl {
+                                        self.drag = DragState::ReorderingLayerNode {
+                                            entity_id: *id,
+                                            kind: *kind,
+                                            start_y: self.mouse_pos[1],
+                                            start_flat_index: idx,
+                                            drag_active: false,
+                                            drop_target: None,
+                                            source_group_before: None,
+                                            hover_expand_target: None,
+                                        };
                                     }
                                     self.mark_dirty();
                                 }
@@ -2582,6 +2615,76 @@ impl App {
                     return;
                 }
 
+                // --- finish layer node reorder drag ---
+                if let DragState::ReorderingLayerNode { drag_active, drop_target, source_group_before, entity_id, .. } = &self.drag {
+                    let drag_active = *drag_active;
+                    let drop_target = drop_target.clone();
+                    let source_group_before = source_group_before.clone();
+                    let entity_id = *entity_id;
+                    self.drag = DragState::None;
+                    self.sample_browser.layer_drop_indicator = None;
+
+                    if drag_active {
+                        if let Some(target) = drop_target {
+                            // Snapshot destination group before-state (if dropping into a group)
+                            let dest_group_before = if let crate::layers::DropTarget::InsideGroup { group_id, .. } = &target {
+                                self.groups.get(group_id).map(|g| (*group_id, g.clone()))
+                            } else {
+                                None
+                            };
+
+                            // Execute the tree move
+                            if crate::layers::execute_drop(&mut self.layer_tree, &target, entity_id) {
+                                let mut ops = Vec::new();
+
+                                // If removed from a source group, update the group's member_ids
+                                if let Some((src_id, src_before)) = &source_group_before {
+                                    if let Some(g) = self.groups.get_mut(src_id) {
+                                        g.member_ids.retain(|mid| *mid != entity_id);
+                                        let src_after = g.clone();
+                                        ops.push(crate::operations::Operation::UpdateGroup {
+                                            id: *src_id,
+                                            before: src_before.clone(),
+                                            after: src_after,
+                                        });
+                                    }
+                                }
+
+                                // If dropped into a destination group, update its member_ids
+                                if let crate::layers::DropTarget::InsideGroup { group_id, child_index } = &target {
+                                    if let Some(g) = self.groups.get_mut(group_id) {
+                                        // Don't double-add if source == dest
+                                        if !g.member_ids.contains(&entity_id) {
+                                            let insert_at = (*child_index).min(g.member_ids.len());
+                                            g.member_ids.insert(insert_at, entity_id);
+                                        }
+                                        if let Some((_, dest_before)) = &dest_group_before {
+                                            let dest_after = g.clone();
+                                            ops.push(crate::operations::Operation::UpdateGroup {
+                                                id: *group_id,
+                                                before: dest_before.clone(),
+                                                after: dest_after,
+                                            });
+                                        }
+                                    }
+                                }
+
+                                if !ops.is_empty() {
+                                    if ops.len() == 1 {
+                                        self.push_op(ops.remove(0));
+                                    } else {
+                                        self.push_op(crate::operations::Operation::Batch(ops));
+                                    }
+                                }
+
+                                self.refresh_project_browser_entries();
+                            }
+                        }
+                    }
+                    self.request_redraw();
+                    return;
+                }
+
                 // --- drop from browser to canvas ---
                 if let DragState::DraggingFromBrowser { ref path, .. } = self.drag {
                     let (_, sh, scale) = self.screen_info();
@@ -2839,6 +2942,48 @@ impl App {
             }
         },
         _ => {}
+        }
+    }
+
+    /// Open file picker and start background export from the export window.
+    pub(crate) fn start_export(&mut self) {
+        let ew = match &self.export_window {
+            Some(ew) if ew.state == ui::export_window::ExportState::Idle => ew,
+            _ => return,
+        };
+
+        let group_id = ew.group_id;
+        let format = ew.format;
+        let ext = format.extension();
+        let default_name = format!("{}.{}", ew.group_name, ext);
+
+        #[cfg(feature = "native")]
+        {
+            let path = match rfd::FileDialog::new()
+                .set_title("Export")
+                .set_file_name(&default_name)
+                .save_file()
+            {
+                Some(p) => p,
+                None => return, // user cancelled
+            };
+
+            match crate::export::start_export(self, group_id, path, format) {
+                Ok(rx) => {
+                    if let Some(ew) = &mut self.export_window {
+                        ew.state = ui::export_window::ExportState::Exporting;
+                        ew.progress = 0.0;
+                        ew.progress_rx = Some(rx);
+                    }
+                }
+                Err(e) => {
+                    self.export_window = None;
+                    self.toast_manager.push(
+                        format!("Export failed: {}", e),
+                        crate::ui::toast::ToastKind::Error,
+                    );
+                }
+            }
         }
     }
 }

@@ -196,6 +196,19 @@ pub(crate) enum DragState {
         slot_idx: usize,
         start_y: f32,
     },
+    ReorderingLayerNode {
+        entity_id: EntityId,
+        kind: crate::layers::LayerNodeKind,
+        start_y: f32,
+        start_flat_index: usize,
+        drag_active: bool,
+        drop_target: Option<crate::layers::DropTarget>,
+        source_group_before: Option<(EntityId, crate::group::Group)>,
+        #[cfg(not(target_arch = "wasm32"))]
+        hover_expand_target: Option<(EntityId, std::time::Instant)>,
+        #[cfg(target_arch = "wasm32")]
+        hover_expand_target: Option<(EntityId, web_time::Instant)>,
+    },
 }
 
 /// Captures before-state of an entity for drag operations.

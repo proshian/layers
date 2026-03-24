@@ -61,6 +61,15 @@ impl App {
                 self.request_redraw();
                 return;
             }
+            if self.export_window.is_some() {
+                let (scr_w, scr_h, scale) = self.screen_info();
+                let pos = self.mouse_pos;
+                if let Some(ew) = &mut self.export_window {
+                    ew.update_hover(pos, scr_w, scr_h, scale);
+                }
+                self.request_redraw();
+                return;
+            }
         }
 
         if let Some((initial_bpm, initial_y)) = self.dragging_bpm {
@@ -271,6 +280,126 @@ impl App {
                 self.request_redraw();
                 return;
             }
+        }
+
+        // --- Layer node reorder drag ---
+        if matches!(self.drag, DragState::ReorderingLayerNode { .. }) {
+            let (_, sh, scale) = self.screen_info();
+            let mouse_y = self.mouse_pos[1];
+            let threshold = 4.0 * scale;
+
+            // Extract immutable fields we need
+            let (start_y, entity_id, was_active) = if let DragState::ReorderingLayerNode {
+                start_y, entity_id, drag_active, ..
+            } = &self.drag {
+                (*start_y, *entity_id, *drag_active)
+            } else {
+                unreachable!()
+            };
+
+            // Activate drag if threshold exceeded
+            if !was_active && (mouse_y - start_y).abs() >= threshold {
+                let src_before = crate::layers::find_parent_group(&self.layer_tree, entity_id)
+                    .and_then(|gid| self.groups.get(&gid).map(|g| (gid, g.clone())));
+                if let DragState::ReorderingLayerNode {
+                    ref mut drag_active,
+                    ref mut source_group_before,
+                    ..
+                } = self.drag {
+                    *drag_active = true;
+                    *source_group_before = src_before;
+                }
+            }
+
+            let is_active = if let DragState::ReorderingLayerNode { drag_active, .. } = &self.drag {
+                *drag_active
+            } else { false };
+
+            if is_active {
+                // Compute drop target
+                let item_at = self.sample_browser.item_at(self.mouse_pos, sh, scale);
+                let mut new_target = None;
+                let mut new_indicator = None;
+                let mut expand_group_id: Option<crate::entity_id::EntityId> = None;
+                let mut clear_hover_expand = false;
+
+                if let Some(idx) = item_at {
+                    let top = self.sample_browser.content_top(scale);
+                    let item_h = crate::ui::browser::ITEM_HEIGHT * scale;
+                    let row_y = top + idx as f32 * item_h - self.sample_browser.scroll_offset;
+                    let y_fraction = ((mouse_y - row_y) / item_h).clamp(0.0, 1.0);
+
+                    let target = crate::layers::compute_drop_target(
+                        &self.sample_browser.layer_rows, &self.layer_tree, idx, y_fraction, entity_id,
+                    );
+
+                    if let Some(ref t) = target {
+                        new_indicator = crate::layers::drop_target_indicator(t, &self.layer_tree, &self.sample_browser.layer_rows);
+                    }
+
+                    // Check auto-expand
+                    if let Some(crate::layers::DropTarget::InsideGroup { group_id, .. }) = &target {
+                        let is_collapsed = self.layer_tree.iter()
+                            .find(|n| n.entity_id == *group_id)
+                            .map_or(false, |n| !n.expanded);
+                        if is_collapsed {
+                            let now = TimeInstant::now();
+                            if let DragState::ReorderingLayerNode { ref hover_expand_target, .. } = &self.drag {
+                                let should_expand = match hover_expand_target {
+                                    Some((prev_id, started)) if *prev_id == *group_id => {
+                                        now.duration_since(*started).as_millis() >= 500
+                                    }
+                                    _ => false,
+                                };
+                                let needs_set = match hover_expand_target {
+                                    Some((prev_id, _)) if *prev_id == *group_id => false,
+                                    _ => true,
+                                };
+                                if should_expand {
+                                    expand_group_id = Some(*group_id);
+                                } else if needs_set {
+                                    if let DragState::ReorderingLayerNode { ref mut hover_expand_target, .. } = self.drag {
+                                        *hover_expand_target = Some((*group_id, now));
+                                    }
+                                }
+                            }
+                        } else {
+                            clear_hover_expand = true;
+                        }
+                    } else {
+                        clear_hover_expand = true;
+                    }
+
+                    new_target = target;
+                } else {
+                    new_target = Some(crate::layers::DropTarget::AfterLastRoot);
+                    let total = self.sample_browser.layer_rows.len();
+                    new_indicator = Some((total, 0, false));
+                    clear_hover_expand = true;
+                }
+
+                // Apply updates
+                if let DragState::ReorderingLayerNode { ref mut drop_target, ref mut hover_expand_target, .. } = self.drag {
+                    *drop_target = new_target;
+                    if clear_hover_expand {
+                        *hover_expand_target = None;
+                    }
+                }
+                self.sample_browser.layer_drop_indicator = new_indicator;
+
+                // Handle auto-expand (must be outside drag borrow)
+                if let Some(gid) = expand_group_id {
+                    if let DragState::ReorderingLayerNode { ref mut hover_expand_target, .. } = self.drag {
+                        *hover_expand_target = None;
+                    }
+                    crate::layers::toggle_expanded(&mut self.layer_tree, gid);
+                    self.refresh_project_browser_entries();
+                }
+            }
+
+            self.update_cursor();
+            self.request_redraw();
+            return;
         }
 
         // Update browser hover state
@@ -1095,6 +1224,9 @@ impl App {
                         } else {
                             CursorIcon::NeswResize
                         }
+                    }
+                    DragState::ReorderingLayerNode { drag_active, .. } => {
+                        if *drag_active { CursorIcon::Grabbing } else { CursorIcon::Default }
                     }
                     DragState::None => {
                         if self.cmd_velocity_hover_note.is_some() {

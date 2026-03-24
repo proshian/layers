@@ -221,6 +221,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_vol_knob(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_group() { return false; }
         let (track_pos, track_size) = Self::vol_fader_rects(screen_w, screen_h, scale);
         let fader_pos_val = gain_to_vol_fader_pos(self.volume);
         let thumb_y = Self::vol_fader_thumb_y(fader_pos_val, track_pos, track_size[1]);
@@ -233,6 +234,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_vol_track(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_group() { return false; }
         let (track_pos, track_size) = Self::vol_fader_rects(screen_w, screen_h, scale);
         let margin = 12.0 * scale;
         pos[0] >= track_pos[0] - margin && pos[0] <= track_pos[0] + track_size[0] + margin
@@ -240,6 +242,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_pan_knob(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_group() { return false; }
         let layout = Self::pan_knob_layout(screen_w, screen_h, scale);
         let r = layout.radius + 8.0 * scale;
         let dx = pos[0] - layout.center[0];
@@ -248,21 +251,21 @@ impl RightWindow {
     }
 
     pub fn hit_test_reverse_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
         let (rp, rs) = Self::reverse_button_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     pub fn hit_test_warp_mode_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
         let (rp, rs) = Self::warp_mode_button_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     pub fn hit_test_warp_mode_selector(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
         if self.warp_mode == WarpMode::Off { return false; }
         let (rp, rs) = Self::warp_mode_selector_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -270,7 +273,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_sample_bpm_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
         if self.warp_mode != WarpMode::RePitch { return false; }
         let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -278,7 +281,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_pitch_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
         if self.warp_mode != WarpMode::Semitone { return false; }
         let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -368,6 +371,7 @@ impl RightWindow {
 
 
     pub fn hit_test_vol_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
+        if self.is_group() { return false; }
         let layout = Self::vol_fader_layout(screen_w, screen_h, scale);
         let (rp, rs) = layout.db_text_rect;
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]

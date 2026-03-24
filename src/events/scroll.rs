@@ -4,7 +4,7 @@ use winit::event::MouseScrollDelta;
 
 impl App {
     pub(crate) fn handle_mouse_wheel(&mut self, delta: MouseScrollDelta) {
-        if self.context_menu.is_some() || self.settings_window.is_some() {
+        if self.context_menu.is_some() || self.settings_window.is_some() || self.export_window.is_some() {
             return;
         }
         let is_pixel_delta = matches!(delta, MouseScrollDelta::PixelDelta(_));
@@ -179,7 +179,7 @@ impl App {
     }
 
     pub(crate) fn handle_pinch_gesture(&mut self, delta: f64) {
-        if self.command_palette.is_some() || self.context_menu.is_some() || self.settings_window.is_some() {
+        if self.command_palette.is_some() || self.context_menu.is_some() || self.settings_window.is_some() || self.export_window.is_some() {
             return;
         }
         let factor = (1.0 + delta as f32).clamp(0.5, 2.0);

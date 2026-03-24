@@ -453,6 +453,177 @@ pub fn toggle_expanded(tree: &mut [LayerNode], entity_id: EntityId) {
 }
 
 // ---------------------------------------------------------------------------
+// Drag-to-reorder in layers panel
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DropTarget {
+    /// Insert before the root node at this tree index.
+    BeforeRoot(usize),
+    /// Append after all root nodes.
+    AfterLastRoot,
+    /// Insert inside a group at a child position.
+    InsideGroup { group_id: EntityId, child_index: usize },
+}
+
+/// Given the flat row list, the index the mouse is over, and the Y fraction
+/// within that row (0.0 = top, 1.0 = bottom), compute where a drop should land.
+/// Returns `None` when dropping onto self or an invalid position.
+pub fn compute_drop_target(
+    flat_rows: &[FlatLayerRow],
+    tree: &[LayerNode],
+    mouse_flat_index: usize,
+    y_fraction: f32,
+    dragged_id: EntityId,
+) -> Option<DropTarget> {
+    if mouse_flat_index >= flat_rows.len() {
+        return Some(DropTarget::AfterLastRoot);
+    }
+
+    let row = &flat_rows[mouse_flat_index];
+
+    // Cannot drop onto self
+    if row.entity_id == dragged_id {
+        return None;
+    }
+
+    // Middle 40% of a Group row → drop inside group
+    if row.kind == LayerNodeKind::Group && y_fraction >= 0.3 && y_fraction <= 0.7 {
+        // Don't allow dropping a group into itself
+        if row.entity_id == dragged_id {
+            return None;
+        }
+        let child_count = tree.iter()
+            .find(|n| n.entity_id == row.entity_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
+        return Some(DropTarget::InsideGroup {
+            group_id: row.entity_id,
+            child_index: child_count,
+        });
+    }
+
+    // If this row is a child of a group (depth > 0), compute insertion within that group
+    if row.depth > 0 {
+        // Find the parent group
+        if let Some(parent_group_id) = find_parent_group(tree, row.entity_id) {
+            if let Some(group_node) = tree.iter().find(|n| n.entity_id == parent_group_id) {
+                if let Some(child_idx) = group_node.children.iter().position(|c| c.entity_id == row.entity_id) {
+                    if y_fraction < 0.5 {
+                        return Some(DropTarget::InsideGroup {
+                            group_id: parent_group_id,
+                            child_index: child_idx,
+                        });
+                    } else {
+                        return Some(DropTarget::InsideGroup {
+                            group_id: parent_group_id,
+                            child_index: child_idx + 1,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Root-level row: top half = before, bottom half = after
+    if let Some(root_idx) = tree.iter().position(|n| n.entity_id == row.entity_id) {
+        if y_fraction < 0.5 {
+            Some(DropTarget::BeforeRoot(root_idx))
+        } else {
+            if root_idx + 1 >= tree.len() {
+                Some(DropTarget::AfterLastRoot)
+            } else {
+                Some(DropTarget::BeforeRoot(root_idx + 1))
+            }
+        }
+    } else {
+        None
+    }
+}
+
+/// Find which group (if any) contains the given entity as a direct child.
+pub fn find_parent_group(tree: &[LayerNode], entity_id: EntityId) -> Option<EntityId> {
+    for node in tree {
+        if node.children.iter().any(|c| c.entity_id == entity_id) {
+            return Some(node.entity_id);
+        }
+    }
+    None
+}
+
+/// Remove a node from the tree (root level or as a child) and return it.
+fn remove_node(tree: &mut Vec<LayerNode>, entity_id: EntityId) -> Option<LayerNode> {
+    // Check root level
+    if let Some(idx) = tree.iter().position(|n| n.entity_id == entity_id) {
+        return Some(tree.remove(idx));
+    }
+    // Check children
+    for node in tree.iter_mut() {
+        if let Some(idx) = node.children.iter().position(|c| c.entity_id == entity_id) {
+            return Some(node.children.remove(idx));
+        }
+    }
+    None
+}
+
+/// Execute a drop: move a node to a new position in the tree. Returns true if moved.
+pub fn execute_drop(tree: &mut Vec<LayerNode>, target: &DropTarget, dragged_id: EntityId) -> bool {
+    let node = match remove_node(tree, dragged_id) {
+        Some(n) => n,
+        None => return false,
+    };
+
+    match target {
+        DropTarget::BeforeRoot(idx) => {
+            // After removal, the index may have shifted down by 1 if it was before idx
+            let insert_idx = (*idx).min(tree.len());
+            tree.insert(insert_idx, node);
+        }
+        DropTarget::AfterLastRoot => {
+            tree.push(node);
+        }
+        DropTarget::InsideGroup { group_id, child_index } => {
+            if let Some(group_node) = tree.iter_mut().find(|n| n.entity_id == *group_id) {
+                let insert_idx = (*child_index).min(group_node.children.len());
+                group_node.children.insert(insert_idx, node);
+            } else {
+                // Group not found, put it back at root
+                tree.push(node);
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Compute the visual indicator position for a drop target.
+/// Returns (flat_row_index_for_y, depth, is_inside_group).
+pub fn drop_target_indicator(
+    target: &DropTarget,
+    tree: &[LayerNode],
+    flat_rows: &[FlatLayerRow],
+) -> Option<(usize, usize, bool)> {
+    match target {
+        DropTarget::InsideGroup { group_id, .. } => {
+            // Highlight the group row itself
+            flat_rows.iter().position(|r| r.entity_id == *group_id)
+                .map(|idx| (idx, 0, true))
+        }
+        DropTarget::BeforeRoot(root_idx) => {
+            if let Some(node) = tree.get(*root_idx) {
+                flat_rows.iter().position(|r| r.entity_id == node.entity_id)
+                    .map(|idx| (idx, 0, false))
+            } else {
+                Some((flat_rows.len(), 0, false))
+            }
+        }
+        DropTarget::AfterLastRoot => {
+            Some((flat_rows.len(), 0, false))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Storage conversion
 // ---------------------------------------------------------------------------
 

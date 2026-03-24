@@ -1800,6 +1800,7 @@ impl App {
     fn computer_midi_keyboard_guards_ok(&self) -> bool {
         self.command_palette.is_none()
             && self.settings_window.is_none()
+            && self.export_window.is_none()
             && self.plugin_editor.is_none()
             && self.context_menu.is_none()
             && self.editing_component.is_none()

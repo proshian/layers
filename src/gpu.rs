@@ -713,6 +713,7 @@ impl Gpu {
         waveforms: &indexmap::IndexMap<crate::entity_id::EntityId, waveform::WaveformView>,
         editing_waveform_name: Option<(crate::entity_id::EntityId, &str)>,
         plugin_editor: Option<&plugin_editor::PluginEditorWindow>,
+        export_window: Option<&crate::ui::export_window::ExportWindow>,
         settings_window: Option<&SettingsWindow>,
         settings: &Settings,
         toast_manager: &toast::ToastManager,
@@ -836,6 +837,9 @@ impl Gpu {
             overlay_instances.extend(pe.build_instances(settings, w, h, self.scale_factor));
         }
 
+        if let Some(ew) = export_window {
+            overlay_instances.extend(ew.build_instances(settings, w, h, self.scale_factor));
+        }
 
         overlay_instances.extend(toast_manager.build_instances(w, h, self.scale_factor));
         overlay_instances.extend(tooltip.build_instances(self.scale_factor, &settings.theme));
@@ -1054,6 +1058,20 @@ impl Gpu {
         // Plugin editor text
         if let Some(pe) = plugin_editor {
             for te in pe.get_text_entries(settings, w, h, scale) {
+                let buf = shape_text_entry(&mut self.font_system, &te);
+                text_buffers.push(buf);
+                text_meta.push((
+                    te.x,
+                    te.y,
+                    TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
+                    full_bounds,
+                ));
+            }
+        }
+
+        // Export window text
+        if let Some(ew) = export_window {
+            for te in ew.get_text_entries(settings, w, h, scale) {
                 let buf = shape_text_entry(&mut self.font_system, &te);
                 text_buffers.push(buf);
                 text_meta.push((

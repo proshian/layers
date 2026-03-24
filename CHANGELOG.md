@@ -1,3 +1,5 @@
+- 2026-03-24: fix: export window now renders — wired build_instances/get_text_entries into GPU pipeline; also fixed invisible hit zones stealing clicks (42.7k loc)
+- 2026-03-24: feat: export dialog window with format selection (WAV/MP3), progress bar, background encoding (42.6k loc)
 - 2026-03-24: fix: groups now persist on project save/load (41.3k loc)
 - 2026-03-24: ui: move Export WAV button to bottom of right panel for groups (41.3k loc)
 - 2026-03-24: refactor: extract collect_chain_plugins helper and group membership lookup, fix indentation (41.2k loc)

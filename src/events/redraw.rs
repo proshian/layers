@@ -6,6 +6,7 @@ impl App {
         self.tooltip.tick();
         self.update_recording_waveform();
         self.poll_pending_audio_loads();
+        self.poll_export_progress();
         if let Some(gpu) = &mut self.gpu {
             let w = gpu.config.width as f32;
             let h = gpu.config.height as f32;
@@ -185,6 +186,7 @@ impl App {
                     .as_ref()
                     .map(|(idx, s)| (*idx, s.as_str())),
                 self.plugin_editor.as_ref(),
+                self.export_window.as_ref(),
                 {
                     #[cfg(feature = "native")]
                     { self.settings_window.as_ref() }
@@ -251,6 +253,32 @@ impl App {
         }
         if self.tooltip.is_pending() {
             self.request_redraw();
+        }
+    }
+
+    fn poll_export_progress(&mut self) {
+        if let Some(ew) = &mut self.export_window {
+            if let Some(result) = ew.poll_progress() {
+                match result {
+                    Ok(()) => {
+                        self.toast_manager.push(
+                            "Export complete".to_string(),
+                            crate::ui::toast::ToastKind::Success,
+                        );
+                    }
+                    Err(e) => {
+                        self.toast_manager.push(
+                            format!("Export failed: {}", e),
+                            crate::ui::toast::ToastKind::Error,
+                        );
+                    }
+                }
+                self.export_window = None;
+                self.request_redraw();
+            } else if ew.state == crate::ui::export_window::ExportState::Exporting {
+                // Keep redrawing while export is in progress
+                self.request_redraw();
+            }
         }
     }
 }

@@ -138,6 +138,8 @@ pub struct SampleBrowser {
     search_debounce_deadline: Option<TimeInstant>,
     /// Whether the search clear (X) button is hovered.
     pub search_clear_hovered: bool,
+    /// Drop indicator for layer reorder drag: (flat_row_index, depth, is_inside_group).
+    pub layer_drop_indicator: Option<(usize, usize, bool)>,
 }
 
 impl SampleBrowser {
@@ -175,6 +177,7 @@ impl SampleBrowser {
             file_index_dirty: true,
             search_debounce_deadline: None,
             search_clear_hovered: false,
+            layer_drop_indicator: None,
         }
     }
 
@@ -394,7 +397,7 @@ impl SampleBrowser {
         self.entries.len() as f32 * ITEM_HEIGHT * scale
     }
 
-    fn content_top(&self, scale: f32) -> f32 {
+    pub(crate) fn content_top(&self, scale: f32) -> f32 {
         (HEADER_HEIGHT + SEARCH_BAR_HEIGHT) * scale
     }
 
@@ -1082,6 +1085,43 @@ impl SampleBrowser {
                             });
                         }
                     }
+                }
+            }
+        }
+
+        // --- Layer reorder drop indicator ---
+        if let Some((indicator_row, indicator_depth, is_inside)) = self.layer_drop_indicator {
+            let indent = indicator_depth as f32 * INDENT_PX * scale;
+            if is_inside {
+                // Highlight the group row with accent tint
+                let row_y = ct + indicator_row as f32 * item_h - self.scroll_offset;
+                if row_y + item_h > ct && row_y < screen_h {
+                    out.push(InstanceRaw {
+                        position: [cx + indent, row_y],
+                        size: [content_w - indent, item_h],
+                        color: [settings.theme.accent[0], settings.theme.accent[1], settings.theme.accent[2], 0.15],
+                        border_radius: 2.0 * scale,
+                    });
+                }
+            } else {
+                // Horizontal insertion line between rows
+                let line_y = ct + indicator_row as f32 * item_h - self.scroll_offset;
+                let line_h = 2.0 * scale;
+                if line_y > ct - line_h && line_y < screen_h {
+                    out.push(InstanceRaw {
+                        position: [cx + indent, line_y - line_h * 0.5],
+                        size: [content_w - indent, line_h],
+                        color: settings.theme.accent,
+                        border_radius: 1.0 * scale,
+                    });
+                    // Small dot at left end
+                    let dot = 6.0 * scale;
+                    out.push(InstanceRaw {
+                        position: [cx + indent - dot * 0.5, line_y - dot * 0.5],
+                        size: [dot, dot],
+                        color: settings.theme.accent,
+                        border_radius: dot * 0.5,
+                    });
                 }
             }
         }

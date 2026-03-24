@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::App;
 use crate::automation::AutomationData;
 use crate::entity_id::new_id;
-use crate::layers::{self, LayerNodeKind};
+use crate::group::Group;
+use crate::layers::{self, DropTarget, LayerNodeKind};
 use crate::midi;
 use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView, DEFAULT_AUTO_FADE_PX};
 use crate::HitTarget;
@@ -199,4 +200,133 @@ fn test_delete_instrument_cascades_midi_clips() {
     app.selected = vec![HitTarget::MidiClip(mc_id)];
     app.delete_selected();
     assert!(app.midi_clips.is_empty());
+}
+
+#[test]
+fn test_reorder_root_nodes() {
+    let mut app = App::new_headless();
+    let id_a = new_id();
+    let id_b = new_id();
+    let id_c = new_id();
+    app.waveforms.insert(id_a, make_waveform(0.0, 0.0));
+    app.waveforms.insert(id_b, make_waveform(0.0, 100.0));
+    app.waveforms.insert(id_c, make_waveform(0.0, 200.0));
+    app.refresh_project_browser_entries();
+
+    // Tree should have 3 root nodes (sorted by Y)
+    assert_eq!(app.layer_tree.len(), 3);
+    assert_eq!(app.layer_tree[0].entity_id, id_a);
+    assert_eq!(app.layer_tree[1].entity_id, id_b);
+    assert_eq!(app.layer_tree[2].entity_id, id_c);
+
+    // Move id_c to before id_a (index 0)
+    let moved = layers::execute_drop(&mut app.layer_tree, &DropTarget::BeforeRoot(0), id_c);
+    assert!(moved);
+    assert_eq!(app.layer_tree[0].entity_id, id_c);
+    assert_eq!(app.layer_tree[1].entity_id, id_a);
+    assert_eq!(app.layer_tree[2].entity_id, id_b);
+
+    // Move id_a to after last
+    let moved = layers::execute_drop(&mut app.layer_tree, &DropTarget::AfterLastRoot, id_a);
+    assert!(moved);
+    assert_eq!(app.layer_tree[0].entity_id, id_c);
+    assert_eq!(app.layer_tree[1].entity_id, id_b);
+    assert_eq!(app.layer_tree[2].entity_id, id_a);
+}
+
+#[test]
+fn test_drag_into_group() {
+    let mut app = App::new_headless();
+    let wf_id = new_id();
+    let group_id = new_id();
+    app.waveforms.insert(wf_id, make_waveform(0.0, 0.0));
+    app.groups.insert(group_id, Group::new(
+        group_id, "Group 1".to_string(), [0.0, 200.0], [200.0, 100.0], vec![],
+    ));
+    app.refresh_project_browser_entries();
+
+    assert_eq!(app.layer_tree.len(), 2); // waveform + group at root
+
+    // Drop waveform into the group
+    let moved = layers::execute_drop(
+        &mut app.layer_tree,
+        &DropTarget::InsideGroup { group_id, child_index: 0 },
+        wf_id,
+    );
+    assert!(moved);
+
+    // Waveform should be gone from root and inside the group
+    assert_eq!(app.layer_tree.len(), 1);
+    assert_eq!(app.layer_tree[0].entity_id, group_id);
+    assert_eq!(app.layer_tree[0].children.len(), 1);
+    assert_eq!(app.layer_tree[0].children[0].entity_id, wf_id);
+}
+
+#[test]
+fn test_drag_out_of_group() {
+    let mut app = App::new_headless();
+    let wf_id = new_id();
+    let group_id = new_id();
+    app.waveforms.insert(wf_id, make_waveform(0.0, 0.0));
+    app.groups.insert(group_id, Group::new(
+        group_id, "Group 1".to_string(), [0.0, 0.0], [200.0, 100.0], vec![wf_id],
+    ));
+    app.refresh_project_browser_entries();
+
+    // Waveform should be inside the group (not at root)
+    let group_node = app.layer_tree.iter().find(|n| n.entity_id == group_id).unwrap();
+    assert_eq!(group_node.children.len(), 1);
+    assert_eq!(group_node.children[0].entity_id, wf_id);
+
+    // Drop waveform to root (before the group)
+    let group_idx = app.layer_tree.iter().position(|n| n.entity_id == group_id).unwrap();
+    let moved = layers::execute_drop(
+        &mut app.layer_tree,
+        &DropTarget::BeforeRoot(group_idx),
+        wf_id,
+    );
+    assert!(moved);
+
+    // Waveform should be at root, group should have no children
+    assert_eq!(app.layer_tree.len(), 2);
+    let wf_node = app.layer_tree.iter().find(|n| n.entity_id == wf_id);
+    assert!(wf_node.is_some());
+    let group_node = app.layer_tree.iter().find(|n| n.entity_id == group_id).unwrap();
+    assert!(group_node.children.is_empty());
+}
+
+#[test]
+fn test_drag_between_groups() {
+    let mut app = App::new_headless();
+    let wf_id = new_id();
+    let group_a = new_id();
+    let group_b = new_id();
+    app.waveforms.insert(wf_id, make_waveform(0.0, 0.0));
+    app.groups.insert(group_a, Group::new(
+        group_a, "Group A".to_string(), [0.0, 0.0], [200.0, 100.0], vec![wf_id],
+    ));
+    app.groups.insert(group_b, Group::new(
+        group_b, "Group B".to_string(), [0.0, 200.0], [200.0, 100.0], vec![],
+    ));
+    app.refresh_project_browser_entries();
+
+    // Waveform starts in group A
+    let ga = app.layer_tree.iter().find(|n| n.entity_id == group_a).unwrap();
+    assert_eq!(ga.children.len(), 1);
+    assert_eq!(ga.children[0].entity_id, wf_id);
+
+    // Move waveform into group B
+    let moved = layers::execute_drop(
+        &mut app.layer_tree,
+        &DropTarget::InsideGroup { group_id: group_b, child_index: 0 },
+        wf_id,
+    );
+    assert!(moved);
+
+    // Group A empty, Group B has waveform
+    let ga = app.layer_tree.iter().find(|n| n.entity_id == group_a).unwrap();
+    assert!(ga.children.is_empty());
+    let gb = app.layer_tree.iter().find(|n| n.entity_id == group_b).unwrap();
+    assert_eq!(gb.children.len(), 1);
+    assert_eq!(gb.children[0].entity_id, wf_id);
 }
