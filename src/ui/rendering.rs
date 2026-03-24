@@ -258,19 +258,13 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         }
     }
 
-    // --- loop regions ---
+    // --- loop regions (viewport-height vertical strips) ---
     for (&id, lr) in ctx.loop_regions.iter() {
-        let p = lr.position;
-        let s = lr.size;
-        let lr_right = p[0] + s[0];
-        let lr_bottom = p[1] + s[1];
-        if lr_right < world_left
-            || p[0] > world_right
-            || lr_bottom < world_top
-            || p[1] > world_bottom
-        {
+        let lr_right = lr.position[0] + lr.size[0];
+        if lr_right < world_left || lr.position[0] > world_right {
             continue;
         }
+        let (p, s) = lr.visual_bounds(world_top, world_bottom);
         let is_sel = ctx.selected.contains(&HitTarget::LoopRegion(id));
         let is_hov = ctx.hovered == Some(HitTarget::LoopRegion(id));
         let alpha_mul = if lr.enabled { 1.0 } else { 0.25 };
@@ -298,7 +292,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             position: p,
             size: s,
             color: fill,
-            border_radius: 6.0 / camera.zoom,
+            border_radius: 0.0,
         });
 
         let bw = if is_sel {
@@ -308,12 +302,14 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         } else {
             1.5
         } / camera.zoom;
-        push_border(out, p, s, bw, border);
+        // Left and right borders only (full viewport height)
+        out.push(InstanceRaw { position: p, size: [bw, s[1]], color: border, border_radius: 0.0 });
+        out.push(InstanceRaw { position: [p[0] + s[0] - bw, p[1]], size: [bw, s[1]], color: border, border_radius: 0.0 });
 
         let dash_h = 3.0 / camera.zoom;
         let dash_w = 20.0 / camera.zoom;
         let gap = 10.0 / camera.zoom;
-        let dy = p[1] - dash_h - 2.0 / camera.zoom;
+        let dy = world_top + 2.0 / camera.zoom;
         let mut dx = p[0];
         while dx < lr_right {
             let w = dash_w.min(lr_right - dx);
@@ -329,7 +325,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         let pill_w = LOOP_BADGE_W / camera.zoom;
         let pill_h = LOOP_BADGE_H / camera.zoom;
         let pill_x = p[0] + 4.0 / camera.zoom;
-        let pill_y = p[1] + 4.0 / camera.zoom;
+        let pill_y = world_top + 8.0 / camera.zoom;
         out.push(InstanceRaw {
             position: [pill_x, pill_y],
             size: [pill_w, pill_h],
@@ -339,16 +335,20 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
 
         if is_sel {
             let handle_sz = 8.0 / camera.zoom;
-            for &hx in &[p[0] - handle_sz * 0.5, lr_right - handle_sz * 0.5] {
-                for &hy in &[p[1] - handle_sz * 0.5, lr_bottom - handle_sz * 0.5] {
-                    out.push(InstanceRaw {
-                        position: [hx, hy],
-                        size: [handle_sz, handle_sz],
-                        color: crate::theme::with_alpha(ctx.settings.theme.accent, 0.9 * alpha_mul),
-                        border_radius: 2.0 / camera.zoom,
-                    });
-                }
-            }
+            let mid_y = (world_top + world_bottom) * 0.5;
+            // Left and right edge handles only (centered vertically)
+            out.push(InstanceRaw {
+                position: [p[0] - handle_sz * 0.5, mid_y - handle_sz * 0.5],
+                size: [handle_sz, handle_sz],
+                color: crate::theme::with_alpha(ctx.settings.theme.accent, 0.9 * alpha_mul),
+                border_radius: 2.0 / camera.zoom,
+            });
+            out.push(InstanceRaw {
+                position: [lr_right - handle_sz * 0.5, mid_y - handle_sz * 0.5],
+                size: [handle_sz, handle_sz],
+                color: crate::theme::with_alpha(ctx.settings.theme.accent, 0.9 * alpha_mul),
+                border_radius: 2.0 / camera.zoom,
+            });
         }
     }
 

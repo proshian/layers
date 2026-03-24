@@ -131,6 +131,8 @@ fn collect_clip_chain_plugins_excludes_group_chain() {
         size: [400.0, 200.0],
         member_ids: vec![wf_id],
         effect_chain_id: Some(group_chain_id),
+        volume: 1.0,
+        pan: 0.5,
     });
 
     // collect_chain_plugins (old path, used by instruments) includes group
@@ -179,6 +181,8 @@ fn grouped_waveform_without_own_chain_gets_group_bus() {
         size: [400.0, 200.0],
         member_ids: vec![wf_id],
         effect_chain_id: Some(group_chain_id),
+        volume: 1.0,
+        pan: 0.5,
     });
 
     // clip has no own chain → collect_clip_chain_plugins returns empty
@@ -212,6 +216,8 @@ fn bypassed_group_chain_slots_excluded() {
         size: [400.0, 200.0],
         member_ids: vec![],
         effect_chain_id: Some(group_chain_id),
+        volume: 1.0,
+        pan: 0.5,
     });
 
     let group_plugins = app.collect_group_chain_plugins(group_id);

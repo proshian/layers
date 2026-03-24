@@ -249,6 +249,8 @@ pub fn groups_to_stored(
             size: g.size,
             member_ids: g.member_ids.iter().map(|mid| entity_id_to_string(*mid)).collect(),
             effect_chain_id: g.effect_chain_id.map(|eid| entity_id_to_string(eid)).unwrap_or_default(),
+            volume: g.volume,
+            pan: g.pan,
         })
         .collect()
 }
@@ -275,6 +277,8 @@ pub fn groups_from_stored(
                 } else {
                     Some(entity_id_from_string(&s.effect_chain_id))
                 },
+                volume: if s.volume == 0.0 { 1.0 } else { s.volume },
+                pan: if s.pan == 0.0 { 0.5 } else { s.pan },
             };
             (id, g)
         })

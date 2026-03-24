@@ -317,7 +317,17 @@ impl App {
                             }
                             self.sync_instrument_regions();
                         }
-                        ui::right_window::RightWindowTarget::Group(_) => {}
+                        ui::right_window::RightWindowTarget::Group(gid) => {
+                            if let Some(before) = self.groups.get(&gid).cloned() {
+                                if let Some(g) = self.groups.get_mut(&gid) {
+                                    g.volume = new_gain;
+                                }
+                                if let Some(after) = self.groups.get(&gid).cloned() {
+                                    self.push_op(crate::operations::Operation::UpdateGroup { id: gid, before, after });
+                                }
+                            }
+                            self.sync_audio_clips();
+                        }
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -376,7 +386,17 @@ impl App {
                             }
                             self.sync_instrument_regions();
                         }
-                        ui::right_window::RightWindowTarget::Group(_) => {}
+                        ui::right_window::RightWindowTarget::Group(gid) => {
+                            if let Some(before) = self.groups.get(&gid).cloned() {
+                                if let Some(g) = self.groups.get_mut(&gid) {
+                                    g.pan = new_pan;
+                                }
+                                if let Some(after) = self.groups.get(&gid).cloned() {
+                                    self.push_op(crate::operations::Operation::UpdateGroup { id: gid, before, after });
+                                }
+                            }
+                            self.sync_audio_clips();
+                        }
                     }
                     self.mark_dirty();
                     self.request_redraw();
@@ -574,31 +594,42 @@ impl App {
                                 } else {
                                     ui::palette::db_to_gain(db.clamp(ui::palette::VOL_FADER_DB_BOTTOM, ui::palette::VOL_FADER_DB_MAX))
                                 };
-                                let multi_ids = self.right_window.as_ref()
-                                    .map(|rw| rw.multi_target_ids.clone()).unwrap_or_default();
-                                // For multi-selection: compute dB delta from first clip, apply relatively
-                                let first_original_db = multi_ids.first()
-                                    .and_then(|id| self.waveforms.get(id))
-                                    .map(|wf| ui::palette::gain_to_db(wf.volume))
-                                    .unwrap_or(0.0);
-                                let db_delta = db - first_original_db;
+                                let target = self.right_window.as_ref().map(|rw| rw.target);
                                 let mut ops = Vec::new();
-                                for (i, &mid) in multi_ids.iter().enumerate() {
-                                    if let Some(before) = self.waveforms.get(&mid).cloned() {
-                                        let clip_gain = if i == 0 {
-                                            new_gain
-                                        } else {
-                                            let clip_db = (ui::palette::gain_to_db(before.volume) + db_delta)
-                                                .clamp(ui::palette::VOL_FADER_DB_BOTTOM, ui::palette::VOL_FADER_DB_MAX);
-                                            if clip_db <= ui::palette::VOL_FADER_DB_BOTTOM { 0.0 } else { ui::palette::db_to_gain(clip_db) }
-                                        };
-                                        if let Some(wf) = self.waveforms.get_mut(&mid) {
-                                            wf.volume = clip_gain;
+                                if let Some(ui::right_window::RightWindowTarget::Group(gid)) = target {
+                                    if let Some(before) = self.groups.get(&gid).cloned() {
+                                        if let Some(g) = self.groups.get_mut(&gid) {
+                                            g.volume = new_gain;
                                         }
-                                        if let Some(after) = self.waveforms.get(&mid).cloned() {
-                                            ops.push(crate::operations::Operation::UpdateWaveform {
-                                                id: mid, before, after,
-                                            });
+                                        if let Some(after) = self.groups.get(&gid).cloned() {
+                                            ops.push(crate::operations::Operation::UpdateGroup { id: gid, before, after });
+                                        }
+                                    }
+                                } else {
+                                    let multi_ids = self.right_window.as_ref()
+                                        .map(|rw| rw.multi_target_ids.clone()).unwrap_or_default();
+                                    let first_original_db = multi_ids.first()
+                                        .and_then(|id| self.waveforms.get(id))
+                                        .map(|wf| ui::palette::gain_to_db(wf.volume))
+                                        .unwrap_or(0.0);
+                                    let db_delta = db - first_original_db;
+                                    for (i, &mid) in multi_ids.iter().enumerate() {
+                                        if let Some(before) = self.waveforms.get(&mid).cloned() {
+                                            let clip_gain = if i == 0 {
+                                                new_gain
+                                            } else {
+                                                let clip_db = (ui::palette::gain_to_db(before.volume) + db_delta)
+                                                    .clamp(ui::palette::VOL_FADER_DB_BOTTOM, ui::palette::VOL_FADER_DB_MAX);
+                                                if clip_db <= ui::palette::VOL_FADER_DB_BOTTOM { 0.0 } else { ui::palette::db_to_gain(clip_db) }
+                                            };
+                                            if let Some(wf) = self.waveforms.get_mut(&mid) {
+                                                wf.volume = clip_gain;
+                                            }
+                                            if let Some(after) = self.waveforms.get(&mid).cloned() {
+                                                ops.push(crate::operations::Operation::UpdateWaveform {
+                                                    id: mid, before, after,
+                                                });
+                                            }
                                         }
                                     }
                                 }

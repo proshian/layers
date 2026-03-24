@@ -92,8 +92,9 @@ pub(crate) enum DragState {
     },
     ResizingLoopRegion {
         region_id: EntityId,
-        anchor: [f32; 2],
-        nwse: bool,
+        is_left_edge: bool,
+        initial_position_x: f32,
+        initial_size_w: f32,
         before: LoopRegion,
     },
     ResizingWaveform {

@@ -181,6 +181,8 @@ surreal_derive! {
         pub size: [f32; 2],
         pub member_ids: Vec<String>,
         pub effect_chain_id: String,
+        pub volume: f32,
+        pub pan: f32,
     }
 }
 

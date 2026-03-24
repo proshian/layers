@@ -28,9 +28,13 @@ const PAN_KNOB_Y_OFFSET: f32 = 264.0;
 const REVERSE_BUTTON_Y_OFFSET: f32 = 326.0;
 const PITCH_KNOB_Y_OFFSET: f32 = 368.0;
 
+/// Extra vertical offset for group inspector (space for group name + member count above fader)
+const GROUP_EXTRA_Y: f32 = 40.0;
+
 // Effect chain section
 const EFFECT_CHAIN_TOP_OFFSET: f32 = 460.0;
-const GROUP_EFFECT_CHAIN_TOP_OFFSET: f32 = 90.0;
+/// Group effect chain sits below the pan knob, mirroring the instrument layout
+const GROUP_EFFECT_CHAIN_TOP_OFFSET: f32 = REVERSE_BUTTON_Y_OFFSET + GROUP_EXTRA_Y;
 const EFFECT_SLOT_HEIGHT: f32 = 30.0;
 const EFFECT_SLOT_GAP: f32 = 2.0;
 const EFFECT_ADD_BUTTON_H: f32 = 24.0;
@@ -150,30 +154,46 @@ impl RightWindow {
         self.multi_target_ids.len()
     }
 
+    fn y_extra(&self) -> f32 {
+        if self.is_group() { GROUP_EXTRA_Y } else { 0.0 }
+    }
+
+    pub fn target_y_extra(target: &RightWindowTarget) -> f32 {
+        if matches!(target, RightWindowTarget::Group(_)) { GROUP_EXTRA_Y } else { 0.0 }
+    }
+
     pub fn panel_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let w = RIGHT_WINDOW_WIDTH * scale;
         let h = screen_h;
         ([screen_w - w, 0.0], [w, h])
     }
 
-    fn vol_fader_rects(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+    fn vol_fader_rects_with_offset(screen_w: f32, screen_h: f32, scale: f32, y_extra: f32) -> ([f32; 2], [f32; 2]) {
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
         let panel_cx = pp[0] + ps[0] * 0.5;
         let track_pos = [
             panel_cx - FADER_TRACK_W * 0.5 * scale,
-            pp[1] + (HEADER_HEIGHT + FADER_TOP_OFFSET) * scale,
+            pp[1] + (HEADER_HEIGHT + FADER_TOP_OFFSET + y_extra) * scale,
         ];
         let track_size = [FADER_TRACK_W * scale, FADER_TRACK_HEIGHT * scale];
         (track_pos, track_size)
+    }
+
+    fn vol_fader_rects(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
+        Self::vol_fader_rects_with_offset(screen_w, screen_h, scale, 0.0)
     }
 
     fn vol_fader_thumb_y(fader_pos: f32, track_pos: [f32; 2], track_h: f32) -> f32 {
         track_pos[1] + (1.0 - fader_pos) * track_h
     }
 
-    fn pan_knob_center(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
+    fn pan_knob_center_with_offset(screen_w: f32, screen_h: f32, scale: f32, y_extra: f32) -> [f32; 2] {
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
-        [pp[0] + ps[0] * 0.5, pp[1] + HEADER_HEIGHT * scale + PAN_KNOB_Y_OFFSET * scale]
+        [pp[0] + ps[0] * 0.5, pp[1] + (HEADER_HEIGHT + PAN_KNOB_Y_OFFSET + y_extra) * scale]
+    }
+
+    fn pan_knob_center(screen_w: f32, screen_h: f32, scale: f32) -> [f32; 2] {
+        Self::pan_knob_center_with_offset(screen_w, screen_h, scale, 0.0)
     }
 
     fn warp_mode_button_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
@@ -221,11 +241,9 @@ impl RightWindow {
     }
 
     pub fn hit_test_vol_knob(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_group() { return false; }
-        let (track_pos, track_size) = Self::vol_fader_rects(screen_w, screen_h, scale);
+        let (track_pos, track_size) = Self::vol_fader_rects_with_offset(screen_w, screen_h, scale, self.y_extra());
         let fader_pos_val = gain_to_vol_fader_pos(self.volume);
         let thumb_y = Self::vol_fader_thumb_y(fader_pos_val, track_pos, track_size[1]);
-        // Rectangular hit zone: covers triangle + track, 20px tall around thumb
         let hit_x = track_pos[0] - 18.0 * scale;
         let hit_w = track_size[0] + 22.0 * scale;
         let hit_h = 18.0 * scale;
@@ -234,16 +252,14 @@ impl RightWindow {
     }
 
     pub fn hit_test_vol_track(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_group() { return false; }
-        let (track_pos, track_size) = Self::vol_fader_rects(screen_w, screen_h, scale);
+        let (track_pos, track_size) = Self::vol_fader_rects_with_offset(screen_w, screen_h, scale, self.y_extra());
         let margin = 12.0 * scale;
         pos[0] >= track_pos[0] - margin && pos[0] <= track_pos[0] + track_size[0] + margin
             && pos[1] >= track_pos[1] && pos[1] <= track_pos[1] + track_size[1]
     }
 
     pub fn hit_test_pan_knob(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_group() { return false; }
-        let layout = Self::pan_knob_layout(screen_w, screen_h, scale);
+        let layout = Self::pan_knob_layout_with_offset(screen_w, screen_h, scale, self.y_extra());
         let r = layout.radius + 8.0 * scale;
         let dx = pos[0] - layout.center[0];
         let dy = pos[1] - layout.center[1];
@@ -288,9 +304,9 @@ impl RightWindow {
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
-    pub fn vol_fader_layout(screen_w: f32, screen_h: f32, scale: f32) -> VolFaderLayout {
+    pub fn vol_fader_layout_with_offset(screen_w: f32, screen_h: f32, scale: f32, y_extra: f32) -> VolFaderLayout {
         let (pp, _ps) = Self::panel_rect(screen_w, screen_h, scale);
-        let (track_pos, track_size) = Self::vol_fader_rects(screen_w, screen_h, scale);
+        let (track_pos, track_size) = Self::vol_fader_rects_with_offset(screen_w, screen_h, scale, y_extra);
         let center_x = track_pos[0] + track_size[0] * 0.5;
         let rw_w = RIGHT_WINDOW_WIDTH * scale;
         let db_text_y = track_pos[1] + track_size[1] + 4.0 * scale;
@@ -311,8 +327,12 @@ impl RightWindow {
         }
     }
 
-    pub fn pan_knob_layout(screen_w: f32, screen_h: f32, scale: f32) -> PanKnobLayout {
-        let center = Self::pan_knob_center(screen_w, screen_h, scale);
+    pub fn vol_fader_layout(screen_w: f32, screen_h: f32, scale: f32) -> VolFaderLayout {
+        Self::vol_fader_layout_with_offset(screen_w, screen_h, scale, 0.0)
+    }
+
+    pub fn pan_knob_layout_with_offset(screen_w: f32, screen_h: f32, scale: f32, y_extra: f32) -> PanKnobLayout {
+        let center = Self::pan_knob_center_with_offset(screen_w, screen_h, scale, y_extra);
         let radius = KNOB_R * scale;
         let label_y = center[1] - radius - 18.0 * scale;
         let value_y = center[1] + radius + 4.0 * scale;
@@ -326,6 +346,10 @@ impl RightWindow {
             bracket_y0: label_y - 4.0 * scale,
             bracket_y1: value_y + 18.0 * scale,
         }
+    }
+
+    pub fn pan_knob_layout(screen_w: f32, screen_h: f32, scale: f32) -> PanKnobLayout {
+        Self::pan_knob_layout_with_offset(screen_w, screen_h, scale, 0.0)
     }
 
     pub fn pitch_text_layout(screen_w: f32, screen_h: f32, scale: f32) -> PitchTextLayout {
@@ -371,8 +395,7 @@ impl RightWindow {
 
 
     pub fn hit_test_vol_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_group() { return false; }
-        let layout = Self::vol_fader_layout(screen_w, screen_h, scale);
+        let layout = Self::vol_fader_layout_with_offset(screen_w, screen_h, scale, self.y_extra());
         let (rp, rs) = layout.db_text_rect;
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
@@ -470,7 +493,7 @@ impl RightWindow {
             border_radius: 0.0,
         });
 
-        // Group target: render export button only, skip volume/pan/warp controls
+        // Group target: render export button (fall through to vol/pan below)
         if self.is_group() {
             let (ebp, ebs) = Self::export_button_rect(screen_w, screen_h, scale);
             out.push(InstanceRaw {
@@ -483,12 +506,12 @@ impl RightWindow {
                 },
                 border_radius: 4.0 * scale,
             });
-            return out;
         }
 
         // Volume fader
+        let y_extra = self.y_extra();
         let vol_pos = gain_to_vol_fader_pos(self.volume);
-        let layout = Self::vol_fader_layout(screen_w, screen_h, scale);
+        let layout = Self::vol_fader_layout_with_offset(screen_w, screen_h, scale, y_extra);
         let track_pos = layout.track_pos;
         let track_size = layout.track_size;
         let thumb_y = Self::vol_fader_thumb_y(vol_pos, track_pos, track_size[1]);
@@ -569,7 +592,7 @@ impl RightWindow {
         // No thumb circle — triangle indicator is rendered as text in gpu.rs
 
         // Pan knob
-        let pan_layout = Self::pan_knob_layout(screen_w, screen_h, scale);
+        let pan_layout = Self::pan_knob_layout_with_offset(screen_w, screen_h, scale, y_extra);
         Self::push_knob(&mut out, pan_layout.center[0], pan_layout.center[1], self.pan, scale, &settings.theme);
 
         // Pan knob focus brackets
@@ -772,10 +795,11 @@ impl RightWindow {
     pub fn get_text_entries(&self, theme: &crate::theme::RuntimeTheme, screen_w: f32, screen_h: f32, scale: f32) -> Vec<TextEntry> {
         let mut out = Vec::new();
         let (pp, _) = Self::panel_rect(screen_w, screen_h, scale);
-        let layout = Self::vol_fader_layout(screen_w, screen_h, scale);
+        let y_extra = self.y_extra();
+        let layout = Self::vol_fader_layout_with_offset(screen_w, screen_h, scale, y_extra);
         let fader_pos = layout.track_pos;
         let fader_size = layout.track_size;
-        let pan_layout = Self::pan_knob_layout(screen_w, screen_h, scale);
+        let pan_layout = Self::pan_knob_layout_with_offset(screen_w, screen_h, scale, y_extra);
         let header_font = 10.0 * scale;
         let header_line = 14.0 * scale;
         let label_font = 11.0 * scale;
@@ -860,7 +884,7 @@ impl RightWindow {
                 bounds: None,
                 center: false,
             });
-            return out;
+            // fall through to vol/pan text
         }
 
         // Fader geometry helpers

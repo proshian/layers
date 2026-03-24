@@ -373,3 +373,92 @@ fn collect_plugins_for_rect_finds_overlapping_blocks() {
     assert!(!result.contains(&id3), "bypassed plugins should be excluded");
     assert_eq!(result[0], id1, "should be sorted by X position");
 }
+
+#[test]
+fn group_volume_pan_defaults_and_update() {
+    let mut app = App::new_headless();
+
+    let id1 = new_id();
+    let id2 = new_id();
+    app.objects.insert(id1, CanvasObject {
+        position: [0.0, 0.0],
+        size: [100.0, 50.0],
+        color: [1.0, 0.0, 0.0, 1.0],
+        border_radius: 0.0,
+    });
+    app.objects.insert(id2, CanvasObject {
+        position: [200.0, 0.0],
+        size: [100.0, 50.0],
+        color: [0.0, 1.0, 0.0, 1.0],
+        border_radius: 0.0,
+    });
+    app.selected.push(HitTarget::Object(id1));
+    app.selected.push(HitTarget::Object(id2));
+    app.execute_command(CommandAction::CreateGroup);
+
+    let group_id = app.groups.keys().next().copied().unwrap();
+
+    // Defaults
+    assert!((app.groups[&group_id].volume - 1.0).abs() < f32::EPSILON);
+    assert!((app.groups[&group_id].pan - 0.5).abs() < f32::EPSILON);
+
+    // Right window reads group vol/pan
+    app.selected.clear();
+    app.selected.push(HitTarget::Group(group_id));
+    app.update_right_window();
+    let rw = app.right_window.as_ref().unwrap();
+    assert!((rw.volume - 1.0).abs() < f32::EPSILON);
+    assert!((rw.pan - 0.5).abs() < f32::EPSILON);
+
+    // Mutate via UpdateGroup and undo
+    let before = app.groups[&group_id].clone();
+    app.groups.get_mut(&group_id).unwrap().volume = 0.5;
+    app.groups.get_mut(&group_id).unwrap().pan = 0.75;
+    let after = app.groups[&group_id].clone();
+    app.push_op(crate::operations::Operation::UpdateGroup { id: group_id, before, after });
+
+    assert!((app.groups[&group_id].volume - 0.5).abs() < f32::EPSILON);
+    assert!((app.groups[&group_id].pan - 0.75).abs() < f32::EPSILON);
+
+    app.undo_op();
+    assert!((app.groups[&group_id].volume - 1.0).abs() < f32::EPSILON);
+    assert!((app.groups[&group_id].pan - 0.5).abs() < f32::EPSILON);
+
+    app.redo_op();
+    assert!((app.groups[&group_id].volume - 0.5).abs() < f32::EPSILON);
+    assert!((app.groups[&group_id].pan - 0.75).abs() < f32::EPSILON);
+}
+
+#[test]
+fn group_volume_pan_roundtrip_serialization() {
+    let mut app = App::new_headless();
+
+    let id1 = new_id();
+    let id2 = new_id();
+    app.objects.insert(id1, CanvasObject {
+        position: [0.0, 0.0],
+        size: [100.0, 50.0],
+        color: [1.0, 0.0, 0.0, 1.0],
+        border_radius: 0.0,
+    });
+    app.objects.insert(id2, CanvasObject {
+        position: [200.0, 0.0],
+        size: [100.0, 50.0],
+        color: [0.0, 1.0, 0.0, 1.0],
+        border_radius: 0.0,
+    });
+    app.selected.push(HitTarget::Object(id1));
+    app.selected.push(HitTarget::Object(id2));
+    app.execute_command(CommandAction::CreateGroup);
+
+    let group_id = app.groups.keys().next().copied().unwrap();
+    app.groups.get_mut(&group_id).unwrap().volume = 0.3;
+    app.groups.get_mut(&group_id).unwrap().pan = 0.8;
+
+    let stored = storage::groups_to_stored(&app.groups);
+    let restored = storage::groups_from_stored(stored);
+
+    let rg = &restored[&group_id];
+    assert!((rg.volume - 0.3).abs() < 1e-5);
+    assert!((rg.pan - 0.8).abs() < 1e-5);
+}

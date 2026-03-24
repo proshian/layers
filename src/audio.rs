@@ -107,6 +107,8 @@ struct PlaybackClip {
 pub struct GroupBus {
     pub plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
     pub latency_samples: u32,
+    pub volume: f32,
+    pub pan: f32,
 }
 
 pub struct AudioEffectRegion {
@@ -584,9 +586,14 @@ impl AudioEngine {
                                     }
                                 }
 
+                                // Apply group-level volume and stereo balance (linear law)
+                                let gv = bus.volume;
+                                let gp = bus.pan.clamp(0.0, 1.0);
+                                let l_mul = (2.0 * (1.0 - gp)).min(1.0) * gv;
+                                let r_mul = (2.0 * gp).min(1.0) * gv;
                                 for j in 0..frames {
-                                    dry_mix[j][0] += group_bus_l[j];
-                                    dry_mix[j][1] += group_bus_r[j];
+                                    dry_mix[j][0] += group_bus_l[j] * l_mul;
+                                    dry_mix[j][1] += group_bus_r[j] * r_mul;
                                 }
                             }
                         }

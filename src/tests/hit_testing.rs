@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use crate::automation::AutomationData;
 use crate::component;
 use crate::entity_id::{EntityId, new_id};
+use crate::regions::LoopRegion;
 use crate::ui::hit_testing::{canonical_rect, hit_test, point_in_rect, rects_overlap, targets_in_rect};
 use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView};
 use crate::{Camera, CanvasObject, HitTarget};
@@ -172,6 +173,8 @@ fn test_hit_test_priority_order() {
         [50.0, 30.0],
         &camera,
         None,
+        1280.0,
+        800.0,
     );
     assert_eq!(result, Some(HitTarget::ComponentInstance(inst_id)));
 
@@ -192,6 +195,8 @@ fn test_hit_test_priority_order() {
         [50.0, 30.0],
         &camera,
         None,
+        1280.0,
+        800.0,
     );
     assert_eq!(result, Some(HitTarget::Waveform(wf_id)));
 
@@ -211,6 +216,8 @@ fn test_hit_test_priority_order() {
         [50.0, 30.0],
         &camera,
         None,
+        1280.0,
+        800.0,
     );
     assert_eq!(result, Some(HitTarget::Object(obj_id)));
 }
@@ -263,4 +270,101 @@ fn test_targets_in_rect_skips_component_waveforms() {
     let has_wf1 = targets.contains(&HitTarget::Waveform(wf1_id));
     assert!(!has_wf0, "waveform owned by component should be skipped");
     assert!(has_wf1, "free waveform should be selected");
+}
+
+// ---- viewport-height loop region ----
+
+#[test]
+fn test_loop_region_hit_test_viewport_height() {
+    // A loop region with a small stored height should still be hittable
+    // anywhere in the viewport thanks to viewport-height visual bounds.
+    let camera = Camera::new(); // position [-100, -50], zoom 1.0
+    let screen_w = 1280.0_f32;
+    let screen_h = 800.0_f32;
+    let world_top = camera.position[1];
+    let world_bottom = world_top + screen_h / camera.zoom;
+
+    let lr_id = new_id();
+    let lr = LoopRegion {
+        position: [100.0, 0.0],
+        size: [200.0, 30.0],
+        enabled: true,
+    };
+    let mut loop_regions = IndexMap::new();
+    loop_regions.insert(lr_id, lr);
+
+    // Click on the left border at the viewport center (far from stored Y=0..30)
+    let mid_y = (world_top + world_bottom) * 0.5;
+    assert!(
+        loop_regions[&lr_id].hit_test_border([100.0, mid_y], &camera, world_top, world_bottom),
+        "left border should be hittable at any viewport Y"
+    );
+    // Click on the right border
+    assert!(
+        loop_regions[&lr_id].hit_test_border([300.0, mid_y], &camera, world_top, world_bottom),
+        "right border should be hittable at any viewport Y"
+    );
+    // Click in the middle of the loop (not on border) should miss
+    assert!(
+        !loop_regions[&lr_id].hit_test_border([200.0, mid_y], &camera, world_top, world_bottom),
+        "center of loop should not hit border"
+    );
+}
+
+#[test]
+fn test_loop_region_marquee_x_only() {
+    // Marquee selection should find a loop via X overlap regardless of Y.
+    let lr_id = new_id();
+    let lr = LoopRegion {
+        position: [100.0, 0.0],
+        size: [200.0, 30.0],
+        enabled: true,
+    };
+    let mut loop_regions = IndexMap::new();
+    loop_regions.insert(lr_id, lr);
+
+    let empty_obj = IndexMap::new();
+    let empty_wf: IndexMap<EntityId, WaveformView> = IndexMap::new();
+    let empty_pb = IndexMap::new();
+    let empty_xr = IndexMap::new();
+    let empty_comp = IndexMap::new();
+    let empty_inst = IndexMap::new();
+    let empty_mc = IndexMap::new();
+
+    // Marquee at Y=500..700, which is far from stored loop Y=0..30
+    let targets = targets_in_rect(
+        &empty_obj,
+        &empty_wf,
+        &empty_pb,
+        &loop_regions,
+        &empty_xr,
+        &empty_comp,
+        &empty_inst,
+        &empty_mc,
+        &IndexMap::new(),
+        None,
+        [150.0, 500.0],
+        [100.0, 200.0],
+    );
+    assert!(
+        targets.contains(&HitTarget::LoopRegion(lr_id)),
+        "marquee should find loop via X overlap even when Y is far from stored rect"
+    );
+}
+
+#[test]
+fn test_loop_region_move_only_x() {
+    let mut app = crate::App::new_headless();
+    let id = new_id();
+    let lr = LoopRegion {
+        position: [100.0, 50.0],
+        size: [200.0, 30.0],
+        enabled: true,
+    };
+    app.loop_regions.insert(id, lr);
+
+    app.set_target_pos(&HitTarget::LoopRegion(id), [300.0, 999.0]);
+    let lr = &app.loop_regions[&id];
+    assert_eq!(lr.position[0], 300.0, "X should be updated");
+    assert_eq!(lr.position[1], 50.0, "Y should remain unchanged");
 }

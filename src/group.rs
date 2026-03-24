@@ -3,6 +3,9 @@
 use crate::entity_id::EntityId;
 use crate::{Camera, InstanceRaw, HitTarget};
 
+fn default_volume() -> f32 { 1.0 }
+fn default_pan() -> f32 { 0.5 }
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Group {
     pub id: EntityId,
@@ -13,11 +16,15 @@ pub(crate) struct Group {
     pub member_ids: Vec<EntityId>,
     #[serde(default)]
     pub effect_chain_id: Option<crate::entity_id::EntityId>,
+    #[serde(default = "default_volume")]
+    pub volume: f32,
+    #[serde(default = "default_pan")]
+    pub pan: f32,
 }
 
 impl Group {
     pub fn new(id: EntityId, name: String, position: [f32; 2], size: [f32; 2], member_ids: Vec<EntityId>) -> Self {
-        Self { id, name, position, size, member_ids, effect_chain_id: None }
+        Self { id, name, position, size, member_ids, effect_chain_id: None, volume: 1.0, pan: 0.5 }
     }
 }
 

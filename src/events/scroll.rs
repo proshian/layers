@@ -100,7 +100,17 @@ impl App {
                         }
                         self.sync_instrument_regions();
                     }
-                    ui::right_window::RightWindowTarget::Group(_) => {}
+                    ui::right_window::RightWindowTarget::Group(gid) => {
+                        if let Some(before) = self.groups.get(&gid).cloned() {
+                            if let Some(g) = self.groups.get_mut(&gid) {
+                                g.volume = new_vol;
+                            }
+                            if let Some(after) = self.groups.get(&gid).cloned() {
+                                self.push_op(crate::operations::Operation::UpdateGroup { id: gid, before, after });
+                            }
+                        }
+                        self.sync_audio_clips();
+                    }
                 }
                 self.request_redraw();
                 return;
@@ -138,7 +148,17 @@ impl App {
                         }
                         self.sync_instrument_regions();
                     }
-                    ui::right_window::RightWindowTarget::Group(_) => {}
+                    ui::right_window::RightWindowTarget::Group(gid) => {
+                        if let Some(before) = self.groups.get(&gid).cloned() {
+                            if let Some(g) = self.groups.get_mut(&gid) {
+                                g.pan = new_pan;
+                            }
+                            if let Some(after) = self.groups.get(&gid).cloned() {
+                                self.push_op(crate::operations::Operation::UpdateGroup { id: gid, before, after });
+                            }
+                        }
+                        self.sync_audio_clips();
+                    }
                 }
                 self.request_redraw();
                 return;

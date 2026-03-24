@@ -109,6 +109,18 @@ fn mix_group(app: &App, group_id: EntityId) -> Result<MixedAudio, String> {
         }
     }
 
+    // Apply group-level volume and stereo balance (same linear law as live engine)
+    let gv = group.volume;
+    let gp = group.pan.clamp(0.0, 1.0);
+    let l_mul = (2.0 * (1.0 - gp)).min(1.0) * gv;
+    let r_mul = (2.0 * gp).min(1.0) * gv;
+    if (l_mul - 1.0).abs() > f32::EPSILON || (r_mul - 1.0).abs() > f32::EPSILON {
+        for i in 0..total_frames {
+            left_buf[i] *= l_mul;
+            right_buf[i] *= r_mul;
+        }
+    }
+
     Ok(MixedAudio { left: left_buf, right: right_buf, total_frames })
 }
 

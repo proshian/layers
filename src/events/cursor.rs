@@ -157,7 +157,12 @@ impl App {
                                     inst.volume = new_vol;
                                 }
                             }
-                            Some(ui::right_window::RightWindowTarget::Group(_)) | None => {}
+                            Some(ui::right_window::RightWindowTarget::Group(gid)) => {
+                                if let Some(g) = self.groups.get_mut(&gid) {
+                                    g.volume = new_vol;
+                                }
+                            }
+                            None => {}
                         }
                     } else if is_pan_drag {
                         let new_pan = ui::right_window::RightWindow::drag_pan_delta(
@@ -189,7 +194,12 @@ impl App {
                                     inst.pan = new_pan;
                                 }
                             }
-                            Some(ui::right_window::RightWindowTarget::Group(_)) | None => {}
+                            Some(ui::right_window::RightWindowTarget::Group(gid)) => {
+                                if let Some(g) = self.groups.get_mut(&gid) {
+                                    g.pan = new_pan;
+                                }
+                            }
+                            None => {}
                         }
                     } else if is_sbpm_drag {
                         let new_bpm = ui::right_window::RightWindow::drag_sample_bpm_delta(
@@ -567,13 +577,25 @@ impl App {
             return;
         }
 
-        // Resizing loop region
-        if let DragState::ResizingLoopRegion { region_id, anchor, .. } = self.drag {
+        // Resizing loop region (horizontal only)
+        if let DragState::ResizingLoopRegion { region_id, is_left_edge, initial_position_x, initial_size_w, .. } = self.drag {
             let world = self.camera.screen_to_world(self.mouse_pos);
-            let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
+            let snapped_x = if self.is_snap_override_active() {
+                world[0]
+            } else {
+                snap_to_grid(world[0], &self.settings, self.camera.zoom, self.bpm)
+            };
+            let min_w = 40.0;
             if let Some(lr) = self.loop_regions.get_mut(&region_id) {
-                lr.position = pos;
-                lr.size = size;
+                if is_left_edge {
+                    let right_x = initial_position_x + initial_size_w;
+                    let new_left = snapped_x.min(right_x - min_w);
+                    lr.position[0] = new_left;
+                    lr.size[0] = (right_x - new_left).max(min_w);
+                } else {
+                    let new_right = snapped_x.max(initial_position_x + min_w);
+                    lr.size[0] = new_right - lr.position[0];
+                }
             }
             self.sync_loop_region();
             self.mark_dirty();
@@ -1196,12 +1218,8 @@ impl App {
                             CursorIcon::NeswResize
                         }
                     }
-                    DragState::ResizingLoopRegion { nwse, .. } => {
-                        if *nwse {
-                            CursorIcon::NwseResize
-                        } else {
-                            CursorIcon::NeswResize
-                        }
+                    DragState::ResizingLoopRegion { .. } => {
+                        CursorIcon::EwResize
                     }
                     DragState::ReorderingLayerNode { drag_active, .. } => {
                         if *drag_active { CursorIcon::Grabbing } else { CursorIcon::Default }
@@ -1251,11 +1269,8 @@ impl App {
                                     }
                                     ExportHover::RenderPill(_) => CursorIcon::Pointer,
                                     ExportHover::None => match self.loop_hover {
-                                        LoopHover::CornerNW(_) | LoopHover::CornerSE(_) => {
-                                            CursorIcon::NwseResize
-                                        }
-                                        LoopHover::CornerNE(_) | LoopHover::CornerSW(_) => {
-                                            CursorIcon::NeswResize
+                                        LoopHover::LeftEdge(_) | LoopHover::RightEdge(_) => {
+                                            CursorIcon::EwResize
                                         }
                                         LoopHover::None => {
                                             if matches!(self.hovered, Some(HitTarget::MidiClip(i)) if self.editing_midi_clip == Some(i)) {
@@ -1371,6 +1386,7 @@ impl App {
         } else {
             None
         };
+        let (sw, sh, _) = self.screen_info();
         let raw_hover = hit_test(
             &self.objects,
             &self.waveforms,
@@ -1386,6 +1402,8 @@ impl App {
             world,
             &self.camera,
             self.editing_group,
+            sw,
+            sh,
         );
         self.hovered = raw_hover.map(|h| self.redirect_to_group(h));
 
@@ -1451,25 +1469,28 @@ impl App {
         }
 
         self.loop_hover = LoopHover::None;
+        let (sw_l, sh_l, _) = self.screen_info();
+        let wt = self.camera.position[1];
+        let wb = wt + sh_l / self.camera.zoom;
         for (&i, lr) in self.loop_regions.iter() {
             if !lr.enabled {
                 continue;
             }
-            let handle_sz = 24.0 / self.camera.zoom;
-            let hs = handle_sz * 0.5;
-            let p = lr.position;
-            let s = lr.size;
-            if point_in_rect(world, [p[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
-                self.loop_hover = LoopHover::CornerNW(i);
+            let border_zone = 8.0 / self.camera.zoom;
+            let p_x = lr.position[0];
+            let right_x = p_x + lr.size[0];
+            // Left edge: vertical strip [p_x - border_zone, p_x + border_zone] x full viewport
+            if world[0] >= p_x - border_zone && world[0] <= p_x + border_zone
+                && world[1] >= wt && world[1] <= wb
+            {
+                self.loop_hover = LoopHover::LeftEdge(i);
                 break;
-            } else if point_in_rect(world, [p[0] + s[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
-                self.loop_hover = LoopHover::CornerNE(i);
-                break;
-            } else if point_in_rect(world, [p[0] - hs, p[1] + s[1] - hs], [handle_sz, handle_sz]) {
-                self.loop_hover = LoopHover::CornerSW(i);
-                break;
-            } else if point_in_rect(world, [p[0] + s[0] - hs, p[1] + s[1] - hs], [handle_sz, handle_sz]) {
-                self.loop_hover = LoopHover::CornerSE(i);
+            }
+            // Right edge
+            if world[0] >= right_x - border_zone && world[0] <= right_x + border_zone
+                && world[1] >= wt && world[1] <= wb
+            {
+                self.loop_hover = LoopHover::RightEdge(i);
                 break;
             }
         }

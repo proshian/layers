@@ -108,6 +108,7 @@ impl App {
                     }
                 }
 
+                let (sw, sh, _) = self.screen_info();
                 let hit = hit_test(
                     &self.objects,
                     &self.waveforms,
@@ -123,6 +124,8 @@ impl App {
                     world,
                     &self.camera,
                     self.editing_group,
+                    sw,
+                    sh,
                 );
                 let hit = hit.map(|h| self.redirect_to_group(h));
                 let menu_ctx = match hit {
@@ -679,17 +682,29 @@ impl App {
                             let is_dbl = now.duration_since(self.last_vol_knob_click_time).as_millis() < 400;
                             self.last_vol_knob_click_time = now;
                             if is_dbl {
-                                // Double-click resets volume to 0 dB (all multi-selected clips)
+                                // Double-click resets volume to 0 dB
+                                let target = self.right_window.as_ref().map(|rw| rw.target);
                                 let multi_ids = self.right_window.as_ref()
                                     .map(|rw| rw.multi_target_ids.clone()).unwrap_or_default();
                                 let mut ops = Vec::new();
-                                for &mid in &multi_ids {
-                                    if let Some(before) = self.waveforms.get(&mid).cloned() {
-                                        if let Some(wf) = self.waveforms.get_mut(&mid) {
-                                            wf.volume = 1.0;
+                                if let Some(ui::right_window::RightWindowTarget::Group(gid)) = target {
+                                    if let Some(before) = self.groups.get(&gid).cloned() {
+                                        if let Some(g) = self.groups.get_mut(&gid) {
+                                            g.volume = 1.0;
                                         }
-                                        if let Some(after) = self.waveforms.get(&mid).cloned() {
-                                            ops.push(crate::operations::Operation::UpdateWaveform { id: mid, before, after });
+                                        if let Some(after) = self.groups.get(&gid).cloned() {
+                                            ops.push(crate::operations::Operation::UpdateGroup { id: gid, before, after });
+                                        }
+                                    }
+                                } else {
+                                    for &mid in &multi_ids {
+                                        if let Some(before) = self.waveforms.get(&mid).cloned() {
+                                            if let Some(wf) = self.waveforms.get_mut(&mid) {
+                                                wf.volume = 1.0;
+                                            }
+                                            if let Some(after) = self.waveforms.get(&mid).cloned() {
+                                                ops.push(crate::operations::Operation::UpdateWaveform { id: mid, before, after });
+                                            }
                                         }
                                     }
                                 }
@@ -743,17 +758,29 @@ impl App {
                             let is_dbl = now.duration_since(self.last_pan_knob_click_time).as_millis() < 400;
                             self.last_pan_knob_click_time = now;
                             if is_dbl {
-                                // Double-click resets pan to center (all multi-selected clips)
+                                // Double-click resets pan to center
+                                let target = self.right_window.as_ref().map(|rw| rw.target);
                                 let multi_ids = self.right_window.as_ref()
                                     .map(|rw| rw.multi_target_ids.clone()).unwrap_or_default();
                                 let mut ops = Vec::new();
-                                for &mid in &multi_ids {
-                                    if let Some(before) = self.waveforms.get(&mid).cloned() {
-                                        if let Some(wf) = self.waveforms.get_mut(&mid) {
-                                            wf.pan = 0.5;
+                                if let Some(ui::right_window::RightWindowTarget::Group(gid)) = target {
+                                    if let Some(before) = self.groups.get(&gid).cloned() {
+                                        if let Some(g) = self.groups.get_mut(&gid) {
+                                            g.pan = 0.5;
                                         }
-                                        if let Some(after) = self.waveforms.get(&mid).cloned() {
-                                            ops.push(crate::operations::Operation::UpdateWaveform { id: mid, before, after });
+                                        if let Some(after) = self.groups.get(&gid).cloned() {
+                                            ops.push(crate::operations::Operation::UpdateGroup { id: gid, before, after });
+                                        }
+                                    }
+                                } else {
+                                    for &mid in &multi_ids {
+                                        if let Some(before) = self.waveforms.get(&mid).cloned() {
+                                            if let Some(wf) = self.waveforms.get_mut(&mid) {
+                                                wf.pan = 0.5;
+                                            }
+                                            if let Some(after) = self.waveforms.get(&mid).cloned() {
+                                                ops.push(crate::operations::Operation::UpdateWaveform { id: mid, before, after });
+                                            }
                                         }
                                     }
                                 }
@@ -1471,14 +1498,25 @@ impl App {
                     }
                 }
 
-                // --- loop region corner resize ---
+                // --- loop region edge resize ---
                 for (&i, lr) in self.loop_regions.iter() {
                     if !lr.enabled {
                         continue;
                     }
-                    if let Some((anchor, nwse)) = hit_test_corner_resize(lr.position, lr.size, world, self.camera.zoom) {
+                    let edge_zone = 8.0 / self.camera.zoom;
+                    let left_x = lr.position[0];
+                    let right_x = left_x + lr.size[0];
+                    let near_left = (world[0] - left_x).abs() <= edge_zone;
+                    let near_right = (world[0] - right_x).abs() <= edge_zone;
+                    if near_left || near_right {
                         let before = lr.clone();
-                        self.drag = DragState::ResizingLoopRegion { region_id: i, anchor, nwse, before };
+                        self.drag = DragState::ResizingLoopRegion {
+                            region_id: i,
+                            is_left_edge: near_left,
+                            initial_position_x: lr.position[0],
+                            initial_size_w: lr.size[0],
+                            before,
+                        };
                         self.update_cursor();
                         self.request_redraw();
                         return;
@@ -1656,6 +1694,7 @@ impl App {
                     }
                 }
 
+                let (sw, sh, _) = self.screen_info();
                 let hit = hit_test(
                     &self.objects,
                     &self.waveforms,
@@ -1671,6 +1710,8 @@ impl App {
                     world,
                     &self.camera,
                     self.editing_group,
+                    sw,
+                    sh,
                 );
 
                 // Double-click detection: enter component edit mode
@@ -1996,6 +2037,7 @@ impl App {
                             self.selected.clear();
                             println!("Exited component edit mode");
                             // Re-do hit test without edit mode
+                            let (sw2, sh2, _) = self.screen_info();
                             let hit2 = hit_test(
                                 &self.objects,
                                 &self.waveforms,
@@ -2011,6 +2053,8 @@ impl App {
                                 world,
                                 &self.camera,
                                 self.editing_group,
+                                sw2,
+                                sh2,
                             );
                             if let Some(raw_target) = hit2 {
                                 let target = self.redirect_to_group(raw_target);
@@ -2124,7 +2168,20 @@ impl App {
                                         });
                                     }
                                 }
-                                ui::right_window::RightWindowTarget::Group(_) => {}
+                                ui::right_window::RightWindowTarget::Group(gid) => {
+                                    if let Some(g) = self.groups.get(&gid) {
+                                        let after = g.clone();
+                                        let mut before = after.clone();
+                                        if is_vol_drag {
+                                            before.volume = ui::palette::vol_fader_pos_to_gain(drag_start_value);
+                                        } else if is_pan_drag {
+                                            before.pan = drag_start_value;
+                                        }
+                                        self.push_op(crate::operations::Operation::UpdateGroup {
+                                            id: gid, before, after,
+                                        });
+                                    }
+                                }
                             }
                         }
                         self.request_redraw();
@@ -2656,6 +2713,26 @@ impl App {
                         if is_instrument {
                             self.add_instrument(&plugin_id, &plugin_name);
                         } else {
+                            // Check if dropped on the right window panel → add to inspected target's chain
+                            let rw_target = self.right_window.as_ref().map(|rw| rw.target);
+                            if let Some(target) = rw_target {
+                                let (sw, sh, scale) = self.screen_info();
+                                let (pp, ps) = ui::right_window::RightWindow::panel_rect(sw, sh, scale);
+                                if point_in_rect(self.mouse_pos, pp, ps) {
+                                    match target {
+                                        ui::right_window::RightWindowTarget::Waveform(id) =>
+                                            self.add_plugin_to_waveform_chain(id, &plugin_id, &plugin_name),
+                                        ui::right_window::RightWindowTarget::Instrument(id) =>
+                                            self.add_plugin_to_instrument_chain(id, &plugin_id, &plugin_name),
+                                        ui::right_window::RightWindowTarget::Group(id) =>
+                                            self.add_plugin_to_group_chain(id, &plugin_id, &plugin_name),
+                                    }
+                                    self.drag = DragState::None;
+                                    self.update_hover();
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
                             // Check if dropped on a waveform — add to its effect chain
                             let world = self.camera.screen_to_world(self.mouse_pos);
                             let mut target_wf: Option<EntityId> = None;

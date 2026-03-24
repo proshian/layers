@@ -27,6 +27,7 @@ impl App {
             .map(|m| m.position)
             .unwrap_or(self.mouse_pos);
         let world = self.camera.screen_to_world(screen_pos);
+        let (sw, sh, _) = self.screen_info();
         let hit = hit_test(
             &self.objects,
             &self.waveforms,
@@ -42,6 +43,8 @@ impl App {
             world,
             &self.camera,
             self.editing_group,
+            sw,
+            sh,
         );
         let wf_id = match hit {
             Some(HitTarget::Waveform(i)) => i,

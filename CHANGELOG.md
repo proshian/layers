@@ -1,3 +1,5 @@
+- add volume and pan controls for groups in right inspector panel, with undo, keyboard/scroll/drag support, and export parity (42.7k loc)
+- loop region now spans full viewport height like the playhead; resize/move are horizontal-only (42.5k loc)
 - refactor: remove EffectRegion entity — groups now serve as spatial FX rectangles; added collect_plugins_for_rect helper (42.3k loc)
 - fix: group VST bus architecture — group FX now process once on summed bus instead of N times per member; eliminated per-callback heap allocations in audio thread (43.1k loc)
 - fix: canvas no longer goes black at brightness 0 — removed double brightness multiply from GPU clear color (42.8k loc)

@@ -203,6 +203,8 @@ pub(crate) fn hit_test(
     world_pos: [f32; 2],
     camera: &Camera,
     editing_group: Option<EntityId>,
+    screen_w: f32,
+    screen_h: f32,
 ) -> Option<HitTarget> {
     // When editing a component, only its waveforms are hittable
     if let Some(ec_id) = editing_component {
@@ -264,9 +266,11 @@ pub(crate) fn hit_test(
             return Some(HitTarget::MidiClip(id));
         }
     }
-    // InstrumentRegion hit-testing removed — instruments are non-spatial now
+    // Loop regions use viewport-height visual bounds
+    let world_top = camera.position[1];
+    let world_bottom = world_top + screen_h / camera.zoom;
     for (&id, lr) in loop_regions.iter().rev() {
-        if lr.hit_test_border(world_pos, camera) {
+        if lr.hit_test_border(world_pos, camera, world_top, world_bottom) {
             return Some(HitTarget::LoopRegion(id));
         }
     }
@@ -357,7 +361,10 @@ pub(crate) fn targets_in_rect(
         }
     }
     for (&id, lr) in loop_regions.iter() {
-        if rects_overlap(rect_pos, rect_size, lr.position, lr.size) {
+        // Loop regions span full viewport height: only check X overlap
+        let x_overlap = rect_pos[0] < lr.position[0] + lr.size[0]
+            && rect_pos[0] + rect_size[0] > lr.position[0];
+        if x_overlap {
             result.push(HitTarget::LoopRegion(id));
         }
     }

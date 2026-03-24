@@ -73,25 +73,17 @@ pub(crate) struct LoopRegion {
 }
 
 impl LoopRegion {
-    pub fn hit_test_border(&self, world_pos: [f32; 2], camera: &Camera) -> bool {
+    /// Visual bounds: full viewport height, stored X position/size.
+    pub fn visual_bounds(&self, world_top: f32, world_bottom: f32) -> ([f32; 2], [f32; 2]) {
+        (
+            [self.position[0], world_top],
+            [self.size[0], (world_bottom - world_top).max(1.0)],
+        )
+    }
+
+    pub fn hit_test_border(&self, world_pos: [f32; 2], camera: &Camera, world_top: f32, world_bottom: f32) -> bool {
         let border_thickness = 6.0 / camera.zoom;
-        let p = self.position;
-        let s = self.size;
-        if !point_in_rect(
-            world_pos,
-            [p[0] - border_thickness, p[1] - border_thickness],
-            [s[0] + border_thickness * 2.0, s[1] + border_thickness * 2.0],
-        ) {
-            return false;
-        }
-        // Top edge
-        if point_in_rect(world_pos, [p[0], p[1] - border_thickness], [s[0], border_thickness * 2.0]) {
-            return true;
-        }
-        // Bottom edge
-        if point_in_rect(world_pos, [p[0], p[1] + s[1] - border_thickness], [s[0], border_thickness * 2.0]) {
-            return true;
-        }
+        let (p, s) = self.visual_bounds(world_top, world_bottom);
         // Left edge
         if point_in_rect(world_pos, [p[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
             return true;
@@ -100,12 +92,12 @@ impl LoopRegion {
         if point_in_rect(world_pos, [p[0] + s[0] - border_thickness, p[1]], [border_thickness * 2.0, s[1]]) {
             return true;
         }
-        // LOOP badge area
+        // LOOP badge area (pinned to viewport top)
         let badge_w = LOOP_BADGE_W / camera.zoom;
         let badge_h = LOOP_BADGE_H / camera.zoom;
         if point_in_rect(
             world_pos,
-            [p[0] + 4.0 / camera.zoom, p[1] + 4.0 / camera.zoom],
+            [p[0] + 4.0 / camera.zoom, world_top + 4.0 / camera.zoom],
             [badge_w, badge_h],
         ) {
             return true;
@@ -117,10 +109,8 @@ impl LoopRegion {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum LoopHover {
     None,
-    CornerNW(EntityId),
-    CornerNE(EntityId),
-    CornerSW(EntityId),
-    CornerSE(EntityId),
+    LeftEdge(EntityId),
+    RightEdge(EntityId),
 }
 
 pub(crate) const LOOP_REGION_DEFAULT_WIDTH: f32 = 800.0;

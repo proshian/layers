@@ -176,6 +176,7 @@ impl App {
                 computer_keyboard_armed,
                 playback_pos,
                 &self.export_regions,
+                &self.loop_regions,
                 &self.plugin_blocks,
                 None,
                 &self.waveforms,

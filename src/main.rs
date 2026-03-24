@@ -1395,10 +1395,17 @@ impl App {
             if let Some(g) = self.groups.get(&group_id) {
                 let name = g.name.clone();
                 let member_count = g.member_ids.len();
+                let (vol_entry, vol_fader_focused, pan_knob_focused) =
+                    if self.right_window.as_ref().map_or(false, |rw| rw.target_id() == group_id && rw.is_group()) {
+                        let rw = self.right_window.take().unwrap();
+                        (rw.vol_entry, rw.vol_fader_focused, rw.pan_knob_focused)
+                    } else {
+                        (ui::value_entry::ValueEntry::new(), false, false)
+                    };
                 self.right_window = Some(ui::right_window::RightWindow {
                     target: ui::right_window::RightWindowTarget::Group(group_id),
-                    volume: 1.0,
-                    pan: 0.5,
+                    volume: g.volume,
+                    pan: g.pan,
                     warp_mode: ui::waveform::WarpMode::Off,
                     sample_bpm: 120.0,
                     pitch_semitones: 0.0,
@@ -1409,11 +1416,11 @@ impl App {
                     pitch_dragging: false,
                     drag_start_y: 0.0,
                     drag_start_value: 0.0,
-                    vol_entry: ui::value_entry::ValueEntry::new(),
+                    vol_entry,
                     sample_bpm_entry: ui::value_entry::ValueEntry::new(),
                     pitch_entry: ui::value_entry::ValueEntry::new(),
-                    vol_fader_focused: false,
-                    pan_knob_focused: false,
+                    vol_fader_focused,
+                    pan_knob_focused,
                     pitch_focused: false,
                     sample_bpm_focused: false,
                     add_effect_hovered: false,
@@ -1692,18 +1699,23 @@ impl App {
         if let Some(engine) = &self.audio_engine {
             let group_of = self.build_group_membership();
 
-            // Build group → bus_index mapping and collect group bus data
+            // Build group → bus_index mapping and collect group bus data.
+            // Allocate a bus when the group has FX plugins OR has audio members
+            // (so group volume/pan always applies).
             let mut group_id_to_bus_idx: std::collections::HashMap<EntityId, usize> = std::collections::HashMap::new();
             let mut group_buses: Vec<audio::GroupBus> = Vec::new();
-            for (&gid, _group) in &self.groups {
+            for (&gid, group) in &self.groups {
                 let plugins = self.collect_group_chain_plugins(gid);
-                if plugins.is_empty() {
+                let has_audio_member = group.member_ids.iter().any(|mid| {
+                    self.waveforms.get(mid).map_or(false, |wf| !wf.disabled && self.audio_clips.contains_key(mid))
+                });
+                if plugins.is_empty() && !has_audio_member {
                     continue;
                 }
                 let latency = Self::collect_chain_latency(&plugins);
                 let bus_idx = group_buses.len();
                 group_id_to_bus_idx.insert(gid, bus_idx);
-                group_buses.push(audio::GroupBus { plugins, latency_samples: latency });
+                group_buses.push(audio::GroupBus { plugins, latency_samples: latency, volume: group.volume, pan: group.pan });
             }
 
             let mut positions: Vec<[f32; 2]> = Vec::new();
@@ -2656,7 +2668,7 @@ impl App {
             HitTarget::Object(i) => { if let Some(o) = self.objects.get_mut(i) { o.position = pos; } }
             HitTarget::Waveform(i) => { if let Some(w) = self.waveforms.get_mut(i) { w.position = pos; } }
             HitTarget::PluginBlock(i) => { if let Some(p) = self.plugin_blocks.get_mut(i) { p.position = pos; } }
-            HitTarget::LoopRegion(i) => { if let Some(l) = self.loop_regions.get_mut(i) { l.position = pos; } }
+            HitTarget::LoopRegion(i) => { if let Some(l) = self.loop_regions.get_mut(i) { l.position[0] = pos[0]; } }
             HitTarget::ExportRegion(i) => { if let Some(e) = self.export_regions.get_mut(i) { e.position = pos; } }
             HitTarget::TextNote(i) => { if let Some(tn) = self.text_notes.get_mut(i) { tn.position = pos; } }
             HitTarget::ComponentDef(i) => {
@@ -2695,7 +2707,7 @@ impl App {
                     else if let Some(mc) = self.midi_clips.get_mut(mid) { mc.position[0] += dx; mc.position[1] += dy; }
                     else if let Some(tn) = self.text_notes.get_mut(mid) { tn.position[0] += dx; tn.position[1] += dy; }
                     else if let Some(obj) = self.objects.get_mut(mid) { obj.position[0] += dx; obj.position[1] += dy; }
-                    else if let Some(lr) = self.loop_regions.get_mut(mid) { lr.position[0] += dx; lr.position[1] += dy; }
+                    else if let Some(lr) = self.loop_regions.get_mut(mid) { lr.position[0] += dx; }
                     else if let Some(xr) = self.export_regions.get_mut(mid) { xr.position[0] += dx; xr.position[1] += dy; }
                     else if let Some(c) = self.components.get_mut(mid) { c.position[0] += dx; c.position[1] += dy; }
                 }

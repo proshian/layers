@@ -705,6 +705,7 @@ impl Gpu {
         computer_keyboard_armed: bool,
         playback_position: f64,
         export_regions: &indexmap::IndexMap<crate::entity_id::EntityId, ExportRegion>,
+        loop_regions: &indexmap::IndexMap<crate::entity_id::EntityId, crate::regions::LoopRegion>,
         plugin_blocks: &indexmap::IndexMap<crate::entity_id::EntityId, effects::PluginBlock>,
         _editing_effect_name: Option<(crate::entity_id::EntityId, &str)>,
         waveforms: &indexmap::IndexMap<crate::entity_id::EntityId, waveform::WaveformView>,
@@ -1162,6 +1163,58 @@ impl Gpu {
                         &mut self.font_system,
                         &label_text,
                         Attrs::new().family(Family::SansSerif),
+                        Shaping::Advanced,
+                    );
+                    buf.shape_until_scroll(&mut self.font_system, false);
+                    text_buffers.push(buf);
+                    text_meta.push((
+                        pill_screen_x + 8.0,
+                        pill_screen_y + (pill_h_screen - label_line) * 0.5,
+                        TextColor::rgb(255, 255, 255),
+                        full_bounds,
+                    ));
+                }
+            }
+        }
+
+        // Loop region "LOOP" badge label (world-space -> screen-space)
+        for (_lr_id, lr) in loop_regions {
+            if !lr.enabled {
+                continue;
+            }
+            if settings_window.is_none() && command_palette.is_none() {
+                let pill_world_x = lr.position[0] + 4.0 / camera.zoom;
+                let pill_world_y = camera.position[1] + 8.0 / camera.zoom;
+                let pill_screen_x = (pill_world_x - camera.position[0]) * camera.zoom;
+                let pill_screen_y = (pill_world_y - camera.position[1]) * camera.zoom;
+                let pill_w_screen = crate::regions::LOOP_BADGE_W;
+                let pill_h_screen = crate::regions::LOOP_BADGE_H;
+
+                let overlaps_ctx = if let Some((cm_pos, cm_size)) = ctx_menu_rect {
+                    pill_screen_x + pill_w_screen > cm_pos[0]
+                        && pill_screen_x < cm_pos[0] + cm_size[0]
+                        && pill_screen_y + pill_h_screen > cm_pos[1]
+                        && pill_screen_y < cm_pos[1] + cm_size[1]
+                } else {
+                    false
+                };
+
+                if !overlaps_ctx {
+                    let label_font = 11.0 * scale;
+                    let label_line = 16.0 * scale;
+                    let mut buf = TextBuffer::new(
+                        &mut self.font_system,
+                        Metrics::new(label_font, label_line),
+                    );
+                    buf.set_size(
+                        &mut self.font_system,
+                        Some(pill_w_screen),
+                        Some(pill_h_screen),
+                    );
+                    buf.set_text(
+                        &mut self.font_system,
+                        "Loop",
+                        Attrs::new().family(Family::SansSerif).weight(glyphon::Weight(500)),
                         Shaping::Advanced,
                     );
                     buf.shape_until_scroll(&mut self.font_system, false);
