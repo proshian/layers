@@ -731,6 +731,7 @@ impl Gpu {
         editing_text_note: Option<(crate::entity_id::EntityId, usize)>,
         selected_ids: &std::collections::HashSet<crate::entity_id::EntityId>,
         groups: &indexmap::IndexMap<crate::entity_id::EntityId, crate::group::Group>,
+        hidden_take_children: &std::collections::HashSet<crate::entity_id::EntityId>,
     ) {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
@@ -1244,6 +1245,7 @@ impl Gpu {
         let mut new_wf_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut wf_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
         for (wf_idx, wf) in waveforms.iter() {
+            if hidden_take_children.contains(wf_idx) { continue; }
             let wf_right = wf.position[0] + wf.size[0];
             let wf_bottom = wf.position[1] + wf.size[1];
             if wf_right < world_left
@@ -1288,15 +1290,26 @@ impl Gpu {
                     wf.filename.clone()
                 }
             } else {
-                let base = if !wf.audio.filename.is_empty() {
-                    wf.audio.filename.clone()
+                // Child takes get "Take 1", "Take 2", etc. Parent keeps its filename.
+                let take_label: Option<String> = waveforms.iter().find_map(|(_, pw)| {
+                    pw.take_group.as_ref().and_then(|tg| {
+                        tg.take_ids.iter().position(|id| id == wf_idx)
+                            .map(|pos| format!("Take {}", pos + 1))
+                    })
+                });
+                if let Some(label) = take_label {
+                    label
                 } else {
-                    wf.filename.clone()
-                };
-                if wf.disabled && has_remote_storage {
-                    format!("{} (uploading...)", base)
-                } else {
-                    base
+                    let base = if !wf.audio.filename.is_empty() {
+                        wf.audio.filename.clone()
+                    } else {
+                        wf.filename.clone()
+                    };
+                    if wf.disabled && has_remote_storage {
+                        format!("{} (uploading...)", base)
+                    } else {
+                        base
+                    }
                 }
             };
 
@@ -1578,6 +1591,7 @@ impl Gpu {
         let mut auto_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
         if automation_mode && settings_window.is_none() && command_palette.is_none() {
             for (_wf_id, wf) in waveforms.iter() {
+                if hidden_take_children.contains(_wf_id) { continue; }
                 let wf_right = wf.position[0] + wf.size[0];
                 let wf_bottom = wf.position[1] + wf.size[1];
                 if wf_right < world_left
@@ -1661,6 +1675,7 @@ impl Gpu {
         self.auto_lane_close_rects.clear();
         if automation_mode && settings_window.is_none() && command_palette.is_none() {
             for (wf_id, wf) in waveforms.iter() {
+                if hidden_take_children.contains(wf_id) { continue; }
                 let wf_right = wf.position[0] + wf.size[0];
                 let wf_bottom = wf.position[1] + wf.size[1];
                 if wf_right < world_left

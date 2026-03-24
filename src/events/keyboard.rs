@@ -1404,6 +1404,25 @@ impl App {
                         self.request_redraw();
                     }
                 }
+                Key::Named(NamedKey::Enter) => {
+                    // Enter on a selected take → switch it to active (promote to main)
+                    if let Some(HitTarget::Waveform(wf_id)) = self.selected.first().copied() {
+                        if let Some(parent_id) = self.find_take_parent(wf_id) {
+                            // Selected waveform is a child take — find its index and switch
+                            if let Some(tg) = self.waveforms.get(&parent_id).and_then(|wf| wf.take_group.clone()) {
+                                if let Some(pos) = tg.take_ids.iter().position(|id| *id == wf_id) {
+                                    self.switch_active_take(parent_id, pos + 1);
+                                }
+                            }
+                        } else if let Some(tg) = self.waveforms.get(&wf_id).and_then(|wf| wf.take_group.clone()) {
+                            // Selected waveform is a parent with takes — switch to parent (index 0)
+                            if tg.active_index != 0 {
+                                self.switch_active_take(wf_id, 0);
+                            }
+                        }
+                        self.request_redraw();
+                    }
+                }
                 Key::Character(ch) if !self.cmd_held() => match ch.as_ref() {
                     "0" => {
                         let wf_ids: Vec<EntityId> = self
@@ -1580,6 +1599,17 @@ impl App {
                                 } else {
                                     self.execute_command(CommandAction::CreateGroup);
                                 }
+                            }
+                            "t" => {
+                                // Toggle take lane expand/collapse for selected parent waveform
+                                if let Some(HitTarget::Waveform(wf_id)) = self.selected.first().copied() {
+                                    // If selected is a child take, resolve to parent
+                                    let parent_id = self.find_take_parent(wf_id).unwrap_or(wf_id);
+                                    if self.waveforms.get(&parent_id).and_then(|wf| wf.take_group.as_ref()).is_some() {
+                                        self.toggle_take_expanded(parent_id);
+                                    }
+                                }
+                                self.request_redraw();
                             }
                             "l" => {
                                 self.execute_command(CommandAction::AddLoopArea);

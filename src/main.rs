@@ -780,7 +780,11 @@ impl App {
                         sample_offset_px: sw.sample_offset_px,
                         automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
                         effect_chain_id: None,
-                        take_group: None,
+                        take_group: if sw.take_group_json.is_empty() {
+                            None
+                        } else {
+                            serde_json::from_str(&sw.take_group_json).ok()
+                        },
                     }))
                     .collect();
 
@@ -1617,7 +1621,7 @@ impl App {
 
     /// Collect only the entity's own effect chain plugins (no group chain).
     /// Used for waveform clips where group FX are processed on a separate bus.
-    fn collect_clip_chain_plugins(
+    pub(crate) fn collect_clip_chain_plugins(
         &self,
         own_chain_id: Option<EntityId>,
     ) -> Vec<std::sync::Arc<std::sync::Mutex<Option<effects::PluginGuiHandle>>>> {
@@ -1696,6 +1700,42 @@ impl App {
             let mut chain_plugins_per_clip: Vec<Vec<std::sync::Arc<std::sync::Mutex<Option<effects::PluginGuiHandle>>>>> = Vec::new();
             let mut chain_latencies: Vec<u32> = Vec::new();
             let mut group_bus_indices: Vec<Option<usize>> = Vec::new();
+            let mut chain_bus_indices: Vec<Option<usize>> = Vec::new();
+
+            // Count references per effect_chain_id to detect shared chains
+            let mut chain_ref_counts: std::collections::HashMap<EntityId, usize> = std::collections::HashMap::new();
+            for wf in self.waveforms.values() {
+                if wf.disabled { continue; }
+                if let Some(cid) = wf.effect_chain_id {
+                    *chain_ref_counts.entry(cid).or_insert(0) += 1;
+                }
+            }
+            // Also count from component instances
+            for inst in self.component_instances.values() {
+                if let Some(def) = self.components.values().find(|c| c.id == inst.component_id) {
+                    for &wf_id in &def.waveform_ids {
+                        if let Some(wf) = self.waveforms.get(&wf_id) {
+                            if !wf.disabled && self.audio_clips.contains_key(&wf_id) {
+                                if let Some(cid) = wf.effect_chain_id {
+                                    *chain_ref_counts.entry(cid).or_insert(0) += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Build ChainBus entries for shared chains (ref_count > 1)
+            let mut chain_id_to_bus_idx: std::collections::HashMap<EntityId, usize> = std::collections::HashMap::new();
+            let mut chain_buses: Vec<audio::ChainBus> = Vec::new();
+            for (&cid, &count) in &chain_ref_counts {
+                if count <= 1 { continue; }
+                let plugins = self.collect_clip_chain_plugins(Some(cid));
+                let latency = Self::collect_chain_latency(&plugins);
+                let idx = chain_buses.len();
+                chain_id_to_bus_idx.insert(cid, idx);
+                chain_buses.push(audio::ChainBus { plugins, latency_samples: latency });
+            }
 
             for (&wf_id, wf) in self.waveforms.iter() {
                 if wf.disabled {
@@ -1721,8 +1761,9 @@ impl App {
                 sample_bpms.push(wf.sample_bpm);
                 pitch_semitones_vec.push(wf.pitch_semitones);
 
-                let clip_plugins = self.collect_clip_chain_plugins(wf.effect_chain_id);
-                let clip_latency = Self::collect_chain_latency(&clip_plugins);
+                let is_shared = wf.effect_chain_id
+                    .map(|cid| chain_id_to_bus_idx.contains_key(&cid))
+                    .unwrap_or(false);
 
                 let bus_idx = group_of.get(&wf_id)
                     .and_then(|gid| group_id_to_bus_idx.get(gid).copied());
@@ -1730,8 +1771,22 @@ impl App {
                     .map(|idx| group_buses[idx].latency_samples)
                     .unwrap_or(0);
 
-                chain_latencies.push(clip_latency + group_latency);
-                chain_plugins_per_clip.push(clip_plugins);
+                if is_shared {
+                    let chain_bus_idx = wf.effect_chain_id
+                        .and_then(|cid| chain_id_to_bus_idx.get(&cid).copied());
+                    let chain_latency = chain_bus_idx
+                        .map(|idx| chain_buses[idx].latency_samples)
+                        .unwrap_or(0);
+                    chain_latencies.push(chain_latency + group_latency);
+                    chain_plugins_per_clip.push(Vec::new());
+                    chain_bus_indices.push(chain_bus_idx);
+                } else {
+                    let clip_plugins = self.collect_clip_chain_plugins(wf.effect_chain_id);
+                    let clip_latency = Self::collect_chain_latency(&clip_plugins);
+                    chain_latencies.push(clip_latency + group_latency);
+                    chain_plugins_per_clip.push(clip_plugins);
+                    chain_bus_indices.push(None);
+                }
                 group_bus_indices.push(bus_idx);
             }
 
@@ -1760,16 +1815,32 @@ impl App {
                                 warp_modes.push(match wf.warp_mode { ui::waveform::WarpMode::RePitch => 1, _ => 0 });
                                 sample_bpms.push(wf.sample_bpm);
 
-                                let clip_plugins = self.collect_clip_chain_plugins(wf.effect_chain_id);
-                                let clip_latency = Self::collect_chain_latency(&clip_plugins);
+                                let is_shared = wf.effect_chain_id
+                                    .map(|cid| chain_id_to_bus_idx.contains_key(&cid))
+                                    .unwrap_or(false);
+
                                 let bus_idx = group_of.get(&wf_id)
                                     .and_then(|gid| group_id_to_bus_idx.get(gid).copied());
                                 let group_latency = bus_idx
                                     .map(|idx| group_buses[idx].latency_samples)
                                     .unwrap_or(0);
 
-                                chain_latencies.push(clip_latency + group_latency);
-                                chain_plugins_per_clip.push(clip_plugins);
+                                if is_shared {
+                                    let chain_bus_idx = wf.effect_chain_id
+                                        .and_then(|cid| chain_id_to_bus_idx.get(&cid).copied());
+                                    let chain_latency = chain_bus_idx
+                                        .map(|idx| chain_buses[idx].latency_samples)
+                                        .unwrap_or(0);
+                                    chain_latencies.push(chain_latency + group_latency);
+                                    chain_plugins_per_clip.push(Vec::new());
+                                    chain_bus_indices.push(chain_bus_idx);
+                                } else {
+                                    let clip_plugins = self.collect_clip_chain_plugins(wf.effect_chain_id);
+                                    let clip_latency = Self::collect_chain_latency(&clip_plugins);
+                                    chain_latencies.push(clip_latency + group_latency);
+                                    chain_plugins_per_clip.push(clip_plugins);
+                                    chain_bus_indices.push(None);
+                                }
                                 group_bus_indices.push(bus_idx);
                             }
                         }
@@ -1778,8 +1849,9 @@ impl App {
             }
 
             let owned_clips: Vec<AudioClipData> = clips.iter().map(|c| (*c).clone()).collect();
-            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &warp_modes, &sample_bpms, self.bpm, &pitch_semitones_vec, &chain_plugins_per_clip, &chain_latencies, &group_bus_indices);
+            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &warp_modes, &sample_bpms, self.bpm, &pitch_semitones_vec, &chain_plugins_per_clip, &chain_latencies, &group_bus_indices, &chain_bus_indices);
             engine.update_group_buses(group_buses);
+            engine.update_chain_buses(chain_buses);
 
             let regions: Vec<audio::AudioEffectRegion> = Vec::new();
             engine.update_effect_regions(regions);
@@ -2323,18 +2395,26 @@ impl App {
             let sample_rate = self.recorder.as_ref().unwrap().sample_rate();
 
             // Check if a waveform is selected — if so, record as a new take
+            // If a child take is selected, resolve to the parent waveform
             let selected_wf_id = self.selected.first().and_then(|t| match t {
-                HitTarget::Waveform(id) => Some(*id),
+                HitTarget::Waveform(id) => {
+                    // If this waveform is a child take, use its parent instead
+                    Some(self.find_take_parent(*id).unwrap_or(*id))
+                },
                 _ => None,
             });
 
             // Determine recording position: if recording into a take, position below parent
             let (rec_x, rec_y) = if let Some(parent_id) = selected_wf_id {
                 if let Some(parent) = self.waveforms.get(&parent_id) {
-                    let take_count = parent.take_group.as_ref()
-                        .map(|tg| tg.take_count())
-                        .unwrap_or(1); // parent itself is take 0
-                    (parent.position[0], parent.position[1] + height * take_count as f32)
+                    let parent_h = parent.size[1];
+                    let half_h = parent_h * 0.5;
+                    // First child starts below parent at full height, subsequent at half-height each
+                    let num_children = parent.take_group.as_ref()
+                        .map(|tg| tg.take_ids.len())
+                        .unwrap_or(0);
+                    let child_y = parent.position[1] + parent_h + half_h * num_children as f32;
+                    (parent.position[0], child_y)
                 } else {
                     let world = self.last_canvas_click_world;
                     (world[0], world[1] - height * 0.5)
@@ -2342,6 +2422,17 @@ impl App {
             } else {
                 let world = self.last_canvas_click_world;
                 (world[0], world[1] - height * 0.5)
+            };
+
+            // Determine filename: "Take N" when recording into a take, "Recording" otherwise
+            let rec_filename = if let Some(pid) = selected_wf_id {
+                let num_children = self.waveforms.get(&pid)
+                    .and_then(|wf| wf.take_group.as_ref())
+                    .map(|tg| tg.take_ids.len())
+                    .unwrap_or(0);
+                format!("Take {}", num_children + 1)
+            } else {
+                "Recording".to_string()
             };
 
             let wf_id = new_id();
@@ -2352,11 +2443,11 @@ impl App {
                     left_peaks: Arc::new(WaveformPeaks::empty()),
                     right_peaks: Arc::new(WaveformPeaks::empty()),
                     sample_rate,
-                    filename: "Recording".to_string(),
+                    filename: rec_filename.clone(),
                 }),
-                filename: "Recording".to_string(),
+                filename: rec_filename,
                 position: [rec_x, rec_y],
-                size: [0.0, height],
+                size: [0.0, selected_wf_id.and_then(|pid| self.waveforms.get(&pid)).map(|wf| wf.size[1] * 0.5).unwrap_or(height)],
                 color: WAVEFORM_COLORS[color_idx],
                 border_radius: 8.0,
                 fade_in_px: if self.settings.auto_clip_fades { ui::waveform::DEFAULT_AUTO_FADE_PX } else { 0.0 },
@@ -2573,10 +2664,26 @@ impl App {
         }
     }
 
-    fn set_target_pos(&mut self, target: &HitTarget, pos: [f32; 2]) {
+    pub(crate) fn set_target_pos(&mut self, target: &HitTarget, pos: [f32; 2]) {
         match target {
             HitTarget::Object(i) => { if let Some(o) = self.objects.get_mut(i) { o.position = pos; } }
-            HitTarget::Waveform(i) => { if let Some(w) = self.waveforms.get_mut(i) { w.position = pos; } }
+            HitTarget::Waveform(i) => {
+                // If this waveform is a take parent, move all child takes by the same delta
+                let take_delta = self.waveforms.get(i).and_then(|w| {
+                    let dx = pos[0] - w.position[0];
+                    let dy = pos[1] - w.position[1];
+                    w.take_group.as_ref().map(|tg| (tg.take_ids.clone(), dx, dy))
+                });
+                if let Some(w) = self.waveforms.get_mut(i) { w.position = pos; }
+                if let Some((ids, dx, dy)) = take_delta {
+                    for cid in &ids {
+                        if let Some(cw) = self.waveforms.get_mut(cid) {
+                            cw.position[0] += dx;
+                            cw.position[1] += dy;
+                        }
+                    }
+                }
+            }
             HitTarget::LoopRegion(i) => { if let Some(l) = self.loop_regions.get_mut(i) { l.position[0] = pos[0]; } }
             HitTarget::ExportRegion(i) => { if let Some(e) = self.export_regions.get_mut(i) { e.position = pos; } }
             HitTarget::TextNote(i) => { if let Some(tn) = self.text_notes.get_mut(i) { tn.position = pos; } }
@@ -2848,6 +2955,21 @@ impl App {
             } else if let Some(c) = self.components.get(mid) {
                 let t = HitTarget::ComponentDef(*mid);
                 if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::ComponentDef(c.clone()))); }
+            }
+        }
+
+        // Also capture before-states for take children so undo/redo works
+        let take_child_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| {
+            if let HitTarget::Waveform(id) = t {
+                self.waveforms.get(id).and_then(|wf| wf.take_group.as_ref())
+                    .map(|tg| tg.take_ids.clone())
+            } else { None }
+        }).flatten().collect();
+        let existing_ids2: HashSet<HitTarget> = before_states.iter().map(|(t, _)| *t).collect();
+        for cid in &take_child_ids {
+            if let Some(wf) = self.waveforms.get(cid) {
+                let t = HitTarget::Waveform(*cid);
+                if !existing_ids2.contains(&t) { before_states.push((t, EntityBeforeState::Waveform(wf.clone()))); }
             }
         }
 

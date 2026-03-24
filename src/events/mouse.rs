@@ -2038,6 +2038,28 @@ impl App {
 
                 match hit {
                     Some(raw_target) => {
+                        // If clicking a disabled child take, switch to it instead of selecting
+                        if let HitTarget::Waveform(wf_id) = raw_target {
+                            if let Some(wf) = self.waveforms.get(&wf_id) {
+                                if wf.disabled {
+                                    if let Some(parent_id) = self.find_take_parent(wf_id) {
+                                        if let Some(parent) = self.waveforms.get(&parent_id) {
+                                            if let Some(tg) = &parent.take_group {
+                                                if let Some(pos) = tg.take_ids.iter().position(|id| *id == wf_id) {
+                                                    self.switch_active_take(parent_id, pos + 1);
+                                                    self.selected.clear();
+                                                    self.selected.push(HitTarget::Waveform(wf_id));
+                                                    self.update_right_window();
+                                                    self.update_cursor();
+                                                    self.request_redraw();
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         let target = self.redirect_to_group(raw_target);
                         self.select_area = None;
                         if self.selected.contains(&target) {

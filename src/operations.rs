@@ -256,6 +256,47 @@ impl Operation {
                 }
             }
             Operation::DeleteWaveform { id, .. } => {
+                // If deleting a parent with take_group, also remove child takes
+                if let Some(wf) = app.waveforms.get(id) {
+                    if let Some(tg) = &wf.take_group {
+                        let child_ids: Vec<EntityId> = tg.take_ids.clone();
+                        for cid in child_ids {
+                            app.waveforms.shift_remove(&cid);
+                            app.audio_clips.shift_remove(&cid);
+                        }
+                    }
+                }
+                // If deleting a child take, remove it from parent's take_ids
+                let mut parent_to_update: Option<(EntityId, usize)> = None;
+                for (&pid, wf) in &app.waveforms {
+                    if let Some(tg) = &wf.take_group {
+                        if let Some(pos) = tg.take_ids.iter().position(|tid| tid == id) {
+                            parent_to_update = Some((pid, pos));
+                            break;
+                        }
+                    }
+                }
+                if let Some((pid, pos)) = parent_to_update {
+                    if let Some(parent) = app.waveforms.get_mut(&pid) {
+                        if let Some(tg) = &mut parent.take_group {
+                            tg.take_ids.remove(pos);
+                            // Adjust active_index
+                            let child_index = pos + 1; // take index = pos + 1 (0 = parent)
+                            if tg.active_index == child_index {
+                                // Deleted the active take: fall back to parent
+                                tg.active_index = 0;
+                                parent.disabled = false;
+                            } else if tg.active_index > child_index {
+                                tg.active_index -= 1;
+                            }
+                            // If no children left, remove take_group entirely
+                            if tg.take_ids.is_empty() {
+                                parent.take_group = None;
+                                parent.disabled = false;
+                            }
+                        }
+                    }
+                }
                 app.waveforms.shift_remove(id);
                 app.audio_clips.shift_remove(id);
             }

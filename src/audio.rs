@@ -102,6 +102,12 @@ struct PlaybackClip {
     chain_plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
     chain_latency_samples: u32,
     group_bus_index: Option<usize>,
+    chain_bus_index: Option<usize>,
+}
+
+pub struct ChainBus {
+    pub plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
+    pub latency_samples: u32,
 }
 
 pub struct GroupBus {
@@ -170,6 +176,7 @@ pub struct AudioEngine {
     effect_regions: Arc<Mutex<Vec<AudioEffectRegion>>>,
     instrument_regions: Arc<Mutex<Vec<AudioInstrument>>>,
     group_buses: Arc<Mutex<Vec<GroupBus>>>,
+    chain_buses: Arc<Mutex<Vec<ChainBus>>>,
     master_volume: Arc<AtomicU64>,
     rms_peak: Arc<AtomicU64>,
     loop_enabled: Arc<AtomicBool>,
@@ -322,6 +329,7 @@ impl AudioEngine {
         let effect_regions: Arc<Mutex<Vec<AudioEffectRegion>>> = Arc::new(Mutex::new(Vec::new()));
         let instrument_regions: Arc<Mutex<Vec<AudioInstrument>>> = Arc::new(Mutex::new(Vec::new()));
         let group_buses: Arc<Mutex<Vec<GroupBus>>> = Arc::new(Mutex::new(Vec::new()));
+        let chain_buses: Arc<Mutex<Vec<ChainBus>>> = Arc::new(Mutex::new(Vec::new()));
         let master_volume = Arc::new(AtomicU64::new(1.0f64.to_bits()));
         let rms_peak = Arc::new(AtomicU64::new(0.0f64.to_bits()));
         let loop_enabled = Arc::new(AtomicBool::new(false));
@@ -346,6 +354,7 @@ impl AudioEngine {
         let er = effect_regions.clone();
         let inst_r = instrument_regions.clone();
         let gb = group_buses.clone();
+        let cb = chain_buses.clone();
         let kb_preview = keyboard_preview.clone();
         let vol = master_volume.clone();
         let rms = rms_peak.clone();
@@ -379,6 +388,8 @@ impl AudioEngine {
         let mut clip_dry = vec![[0.0f32; 2]; initial_mix_capacity];
         let mut group_bus_l = vec![0.0f32; initial_mix_capacity];
         let mut group_bus_r = vec![0.0f32; initial_mix_capacity];
+        let mut chain_bus_l = vec![0.0f32; initial_mix_capacity];
+        let mut chain_bus_r = vec![0.0f32; initial_mix_capacity];
         let mut kb_batch_buf: Vec<KeyboardPreviewEvent> = Vec::with_capacity(64);
         let mut silent_buf = vec![0.0f32; effect_block_size];
 
@@ -447,6 +458,8 @@ impl AudioEngine {
                         clip_dry.resize(mix_capacity, [0.0f32; 2]);
                         group_bus_l.resize(mix_capacity, 0.0f32);
                         group_bus_r.resize(mix_capacity, 0.0f32);
+                        chain_bus_l.resize(mix_capacity, 0.0f32);
+                        chain_bus_r.resize(mix_capacity, 0.0f32);
                     }
                     dry_mix[..frames].fill([0.0, 0.0]);
                     if is_playing {
@@ -456,7 +469,7 @@ impl AudioEngine {
                         let mut mix_l = 0.0f32;
                         let mut mix_r = 0.0f32;
                         for clip in clips_ref.iter() {
-                            if !clip.chain_plugins.is_empty() || clip.group_bus_index.is_some() {
+                            if !clip.chain_plugins.is_empty() || clip.group_bus_index.is_some() || clip.chain_bus_index.is_some() {
                                 continue;
                             }
                             let clip_t = t - clip.start_time_secs;
@@ -497,9 +510,9 @@ impl AudioEngine {
                         dry_mix[i] = [mix_l, mix_r];
                     }
 
-                    // Pass 2: clips with clip-level FX but no group → clip FX → dry_mix
+                    // Pass 2: clips with clip-level FX but no group and no chain bus → clip FX → dry_mix
                     for clip in clips_ref.iter() {
-                        if clip.chain_plugins.is_empty() || clip.group_bus_index.is_some() {
+                        if clip.chain_plugins.is_empty() || clip.group_bus_index.is_some() || clip.chain_bus_index.is_some() {
                             continue;
                         }
                         render_clip_dry(clip, frames, current_time, sr, &mut clip_dry);
@@ -508,6 +521,64 @@ impl AudioEngine {
                         for j in 0..frames {
                             dry_mix[j][0] += clip_dry[j][0];
                             dry_mix[j][1] += clip_dry[j][1];
+                        }
+                    }
+
+                    // Pass 2.5: chain bus processing — shared effect chains process once on summed audio
+                    if let Ok(cb_guard) = cb.try_lock() {
+                        if !cb_guard.is_empty() {
+                            for (bus_idx, bus) in cb_guard.iter().enumerate() {
+                                chain_bus_l[..frames].fill(0.0);
+                                chain_bus_r[..frames].fill(0.0);
+
+                                // Sum dry audio from all clips assigned to this chain bus (ungrouped only)
+                                for clip in clips_ref.iter() {
+                                    if clip.chain_bus_index != Some(bus_idx) { continue; }
+                                    if clip.group_bus_index.is_some() { continue; }
+                                    render_clip_dry(clip, frames, current_time, sr, &mut clip_dry);
+                                    for j in 0..frames {
+                                        chain_bus_l[j] += clip_dry[j][0];
+                                        chain_bus_r[j] += clip_dry[j][1];
+                                    }
+                                }
+
+                                // Process chain bus through plugins (block-by-block)
+                                if !bus.plugins.is_empty() {
+                                    for block_start in (0..frames).step_by(effect_block_size) {
+                                        let block_end = (block_start + effect_block_size).min(frames);
+                                        let block_len = block_end - block_start;
+                                        fx_buf_l[..block_len].copy_from_slice(&chain_bus_l[block_start..block_end]);
+                                        fx_buf_r[..block_len].copy_from_slice(&chain_bus_r[block_start..block_end]);
+                                        #[allow(unused_mut)]
+                                        let (mut src_l, mut src_r, mut dst_l, mut dst_r) = (
+                                            &mut fx_buf_l, &mut fx_buf_r, &mut fx_out_l, &mut fx_out_r,
+                                        );
+                                        for plugin_arc in &bus.plugins {
+                                            dst_l[..block_len].copy_from_slice(&src_l[..block_len]);
+                                            dst_r[..block_len].copy_from_slice(&src_r[..block_len]);
+                                            if let Ok(guard) = plugin_arc.try_lock() {
+                                                if let Some(ref gui) = *guard {
+                                                    let inputs: [&[f32]; 2] = [&src_l[..block_len], &src_r[..block_len]];
+                                                    let mut outputs: [&mut [f32]; 2] = [&mut dst_l[..block_len], &mut dst_r[..block_len]];
+                                                    gui.process(&inputs, &mut outputs, block_len);
+                                                }
+                                            }
+                                            std::mem::swap(src_l, dst_l);
+                                            std::mem::swap(src_r, dst_r);
+                                        }
+                                        for j in 0..block_len {
+                                            chain_bus_l[block_start + j] = src_l[j];
+                                            chain_bus_r[block_start + j] = src_r[j];
+                                        }
+                                    }
+                                }
+
+                                // Mix chain bus result into dry_mix
+                                for j in 0..frames {
+                                    dry_mix[j][0] += chain_bus_l[j];
+                                    dry_mix[j][1] += chain_bus_r[j];
+                                }
+                            }
                         }
                     }
 
@@ -991,6 +1062,7 @@ impl AudioEngine {
             effect_regions,
             instrument_regions,
             group_buses,
+            chain_buses,
             master_volume,
             rms_peak,
             loop_enabled,
@@ -1077,6 +1149,7 @@ impl AudioEngine {
         chain_plugins_per_clip: &[Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>],
         chain_latencies: &[u32],
         group_bus_indices: &[Option<usize>],
+        chain_bus_indices: &[Option<usize>],
     ) {
         let mut clips = self.clips.lock().unwrap();
         clips.clear();
@@ -1126,12 +1199,19 @@ impl AudioEngine {
                 chain_plugins: chain_plugins_per_clip.get(i).cloned().unwrap_or_default(),
                 chain_latency_samples: chain_latencies.get(i).copied().unwrap_or(0),
                 group_bus_index: group_bus_indices.get(i).copied().flatten(),
+                chain_bus_index: chain_bus_indices.get(i).copied().flatten(),
             });
         }
     }
 
     pub fn update_group_buses(&self, buses: Vec<GroupBus>) {
         if let Ok(mut guard) = self.group_buses.lock() {
+            *guard = buses;
+        }
+    }
+
+    pub fn update_chain_buses(&self, buses: Vec<ChainBus>) {
+        if let Ok(mut guard) = self.chain_buses.lock() {
             *guard = buses;
         }
     }

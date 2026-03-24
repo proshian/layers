@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::App;
+use crate::{App, HitTarget};
 use crate::entity_id::new_id;
 use crate::effects::{EffectChain, EffectChainSlot};
 use crate::ui::waveform::{AudioData, WaveformPeaks, WaveformView, WarpMode};
@@ -271,4 +271,157 @@ fn drop_plugin_on_right_window_adds_to_chain() {
     app.add_plugin_to_waveform_chain(wf_id, "test_delay_id", "TestDelay");
     assert_eq!(app.effect_chains[&chain_id].slots.len(), 2);
     assert_eq!(app.effect_chains[&chain_id].slots[1].plugin_name, "TestDelay");
+}
+
+#[test]
+fn duplicate_selected_shares_effect_chain() {
+    let mut app = App::new_headless();
+    let wf_id = new_id();
+    let mut wf = make_waveform(100.0, 100.0);
+
+    let chain_id = new_id();
+    let mut chain = EffectChain::new();
+    chain.slots.push(make_slot("Reverb"));
+    app.effect_chains.insert(chain_id, chain);
+    wf.effect_chain_id = Some(chain_id);
+    app.waveforms.insert(wf_id, wf);
+
+    app.selected.push(HitTarget::Waveform(wf_id));
+    app.duplicate_selected();
+
+    assert_eq!(app.waveforms.len(), 2, "duplicate should create exactly one new waveform");
+    assert_eq!(app.effect_chains.len(), 1, "no new effect chain should be created");
+    for wf in app.waveforms.values() {
+        assert_eq!(wf.effect_chain_id, Some(chain_id), "all waveforms must reference the same chain");
+    }
+}
+
+#[test]
+fn copy_paste_shares_effect_chain_via_api() {
+    let mut app = App::new_headless();
+    let wf_id = new_id();
+    let mut wf = make_waveform(100.0, 100.0);
+
+    let chain_id = new_id();
+    let mut chain = EffectChain::new();
+    chain.slots.push(make_slot("Delay"));
+    app.effect_chains.insert(chain_id, chain);
+    wf.effect_chain_id = Some(chain_id);
+    app.waveforms.insert(wf_id, wf);
+
+    app.selected.push(HitTarget::Waveform(wf_id));
+    app.copy_selected();
+    app.paste_clipboard();
+
+    assert_eq!(app.waveforms.len(), 2, "paste should create one new waveform");
+    assert_eq!(app.effect_chains.len(), 1, "no new effect chain should be created");
+    for wf in app.waveforms.values() {
+        assert_eq!(wf.effect_chain_id, Some(chain_id), "pasted waveform must share the original's effect chain");
+    }
+}
+
+#[test]
+fn duplicate_waveform_no_chain_stays_none() {
+    let mut app = App::new_headless();
+    let wf_id = new_id();
+    app.waveforms.insert(wf_id, make_waveform(100.0, 100.0));
+
+    app.selected.push(HitTarget::Waveform(wf_id));
+    app.duplicate_selected();
+
+    assert_eq!(app.waveforms.len(), 2);
+    assert!(app.effect_chains.is_empty(), "no effect chain should be created for waveform without one");
+    for wf in app.waveforms.values() {
+        assert!(wf.effect_chain_id.is_none());
+    }
+}
+
+#[test]
+fn shared_chain_ref_count_drives_bus_creation() {
+    let mut app = App::new_headless();
+    let wf1 = new_id();
+    let wf2 = new_id();
+    let wf3 = new_id();
+    app.waveforms.insert(wf1, make_waveform(100.0, 100.0));
+    app.waveforms.insert(wf2, make_waveform(400.0, 100.0));
+    app.waveforms.insert(wf3, make_waveform(700.0, 100.0));
+
+    let chain_id = new_id();
+    let mut chain = EffectChain::new();
+    chain.slots.push(make_slot("Reverb"));
+    app.effect_chains.insert(chain_id, chain);
+
+    // Single ref — no bus needed
+    app.waveforms.get_mut(&wf1).unwrap().effect_chain_id = Some(chain_id);
+    let ref_count = crate::ui::right_window::RightWindow::chain_ref_count(chain_id, &app.waveforms);
+    assert_eq!(ref_count, 1, "single waveform should have ref_count 1");
+
+    // Two refs — bus needed
+    app.waveforms.get_mut(&wf2).unwrap().effect_chain_id = Some(chain_id);
+    let ref_count = crate::ui::right_window::RightWindow::chain_ref_count(chain_id, &app.waveforms);
+    assert_eq!(ref_count, 2, "two waveforms sharing chain should have ref_count 2");
+
+    // Three refs
+    app.waveforms.get_mut(&wf3).unwrap().effect_chain_id = Some(chain_id);
+    let ref_count = crate::ui::right_window::RightWindow::chain_ref_count(chain_id, &app.waveforms);
+    assert_eq!(ref_count, 3, "three waveforms sharing chain should have ref_count 3");
+
+    // Detach wf2 — ref count drops
+    app.detach_effect_chain(wf2);
+    let ref_count = crate::ui::right_window::RightWindow::chain_ref_count(chain_id, &app.waveforms);
+    assert_eq!(ref_count, 2, "after detach ref_count should drop to 2");
+    // wf2 should have a different chain now
+    assert_ne!(app.waveforms[&wf2].effect_chain_id, Some(chain_id));
+}
+
+#[test]
+fn shared_chain_collect_returns_same_plugin_arcs() {
+    let mut app = App::new_headless();
+    let wf1 = new_id();
+    let wf2 = new_id();
+    app.waveforms.insert(wf1, make_waveform(100.0, 100.0));
+    app.waveforms.insert(wf2, make_waveform(400.0, 100.0));
+
+    let chain_id = new_id();
+    let mut chain = EffectChain::new();
+    chain.slots.push(make_slot("Reverb"));
+    app.effect_chains.insert(chain_id, chain);
+
+    app.waveforms.get_mut(&wf1).unwrap().effect_chain_id = Some(chain_id);
+    app.waveforms.get_mut(&wf2).unwrap().effect_chain_id = Some(chain_id);
+
+    // Both waveforms collect the same Arc pointers (this is why we need ChainBus)
+    let plugins1 = app.collect_clip_chain_plugins(Some(chain_id));
+    let plugins2 = app.collect_clip_chain_plugins(Some(chain_id));
+    assert_eq!(plugins1.len(), 1);
+    assert_eq!(plugins2.len(), 1);
+    // Same Arc — proves they share the same plugin instance
+    assert!(Arc::ptr_eq(&plugins1[0], &plugins2[0]),
+        "shared chain should yield identical plugin Arc pointers");
+}
+
+#[test]
+fn disabled_waveforms_not_counted_for_shared_chains() {
+    let mut app = App::new_headless();
+    let wf1 = new_id();
+    let wf2 = new_id();
+    app.waveforms.insert(wf1, make_waveform(100.0, 100.0));
+    let mut wf2_view = make_waveform(400.0, 100.0);
+    wf2_view.disabled = true;
+    app.waveforms.insert(wf2, wf2_view);
+
+    let chain_id = new_id();
+    let mut chain = EffectChain::new();
+    chain.slots.push(make_slot("Reverb"));
+    app.effect_chains.insert(chain_id, chain);
+
+    app.waveforms.get_mut(&wf1).unwrap().effect_chain_id = Some(chain_id);
+    app.waveforms.get_mut(&wf2).unwrap().effect_chain_id = Some(chain_id);
+
+    // chain_ref_count counts all (including disabled), but the audio sync logic
+    // skips disabled waveforms, so only 1 active waveform uses this chain
+    let active_count = app.waveforms.values()
+        .filter(|w| !w.disabled && w.effect_chain_id == Some(chain_id))
+        .count();
+    assert_eq!(active_count, 1, "only active waveforms should count for bus creation");
 }

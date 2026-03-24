@@ -51,6 +51,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) groups: &'a IndexMap<EntityId, crate::group::Group>,
     pub(crate) remote_users: &'a std::collections::HashMap<crate::user::UserId, crate::user::RemoteUserState>,
     pub(crate) network_mode: crate::network::NetworkMode,
+    pub(crate) hidden_take_children: &'a HashSet<EntityId>,
 }
 
 pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
@@ -399,6 +400,7 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
 
     // --- waveforms ---
     for (&id, wf) in ctx.waveforms.iter() {
+        if ctx.hidden_take_children.contains(&id) { continue; }
         let wf_right = wf.position[0] + wf.size[0];
         let wf_bottom = wf.position[1] + wf.size[1];
         if wf_right < world_left
@@ -745,6 +747,7 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
     let world_top = camera.position[1];
     let world_bottom = world_top + ctx.screen_h / camera.zoom;
     for (&id, wf) in ctx.waveforms.iter() {
+        if ctx.hidden_take_children.contains(&id) { continue; }
         let wf_right = wf.position[0] + wf.size[0];
         let wf_bottom = wf.position[1] + wf.size[1];
         if wf_right < world_left

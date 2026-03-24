@@ -61,6 +61,7 @@ surreal_derive! {
         pub sample_offset_px: f32,
         pub automation_volume: Vec<[f32; 2]>,
         pub automation_pan: Vec<[f32; 2]>,
+        pub take_group_json: String,
     }
 }
 

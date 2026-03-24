@@ -94,18 +94,39 @@ pub fn build_default_tree(
         });
     }
 
-    // Waveforms sorted by Y
+    // Collect all child take IDs so we can skip them from top-level
+    let child_take_ids: std::collections::HashSet<EntityId> = waveforms.iter()
+        .filter_map(|(_, wf)| wf.take_group.as_ref())
+        .flat_map(|tg| tg.take_ids.iter().copied())
+        .collect();
+
+    // Waveforms sorted by Y (skip child takes — they appear under their parent)
     let mut wfs: Vec<(EntityId, f32)> = waveforms.iter()
+        .filter(|(&id, _)| !child_take_ids.contains(&id))
         .map(|(&id, wf)| (id, wf.position[1]))
         .collect();
     wfs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     for (wf_id, _) in &wfs {
+        // If this waveform has takes, add children
+        let children = if let Some(tg) = waveforms.get(wf_id).and_then(|wf| wf.take_group.as_ref()) {
+            tg.take_ids.iter().filter_map(|&cid| {
+                waveforms.get(&cid).map(|_| LayerNode {
+                    entity_id: cid,
+                    kind: LayerNodeKind::Waveform,
+                    expanded: false,
+                    children: Vec::new(),
+                })
+            }).collect()
+        } else {
+            Vec::new()
+        };
+        let has_takes = !children.is_empty();
         tree.push(LayerNode {
             entity_id: *wf_id,
             kind: LayerNodeKind::Waveform,
-            expanded: false,
-            children: Vec::new(),
+            expanded: has_takes, // auto-expand if has takes
+            children,
         });
     }
 
@@ -167,9 +188,18 @@ fn flatten_node(
             }).unwrap_or_else(|| "MIDI".to_string())
         }
         LayerNodeKind::Waveform => {
-            waveforms.get(&node.entity_id).map(|wf| {
-                if !wf.audio.filename.is_empty() { wf.audio.filename.clone() } else { wf.filename.clone() }
-            }).unwrap_or_else(|| "Audio".to_string())
+            // Check if this waveform is a child take — label as "Take N"
+            let take_label = waveforms.iter().find_map(|(_, pw)| {
+                pw.take_group.as_ref().and_then(|tg| {
+                    tg.take_ids.iter().position(|id| *id == node.entity_id)
+                        .map(|pos| format!("Take {}", pos + 1))
+                })
+            });
+            take_label.unwrap_or_else(|| {
+                waveforms.get(&node.entity_id).map(|wf| {
+                    if !wf.audio.filename.is_empty() { wf.audio.filename.clone() } else { wf.filename.clone() }
+                }).unwrap_or_else(|| "Audio".to_string())
+            })
         }
         LayerNodeKind::TextNote => "Text Note".to_string(),
         LayerNodeKind::Group => {
@@ -223,9 +253,18 @@ pub fn sync_tree(
         .flat_map(|g| g.member_ids.iter().copied())
         .collect();
 
-    // Phase 1: remove stale root nodes + remove root entries that now belong to a group
+    // Collect all child take IDs — these should not appear as root nodes
+    let child_take_ids: std::collections::HashSet<EntityId> = waveforms.iter()
+        .filter_map(|(_, wf)| wf.take_group.as_ref())
+        .flat_map(|tg| tg.take_ids.iter().copied())
+        .collect();
+
+    // Phase 1: remove stale root nodes + remove root entries that belong to a group or are child takes
     tree.retain(|node| {
         if node.kind != LayerNodeKind::Group && grouped_ids.contains(&node.entity_id) {
+            return false;
+        }
+        if node.kind == LayerNodeKind::Waveform && child_take_ids.contains(&node.entity_id) {
             return false;
         }
         match node.kind {
@@ -254,6 +293,30 @@ pub fn sync_tree(
                 }
             }
             for c in &node.children { seen_ids.insert(c.entity_id); }
+        } else if node.kind == LayerNodeKind::Waveform {
+            // Sync take children for waveforms with a take_group
+            if let Some(wf) = waveforms.get(&node.entity_id) {
+                if let Some(tg) = &wf.take_group {
+                    // Retain only children that are still in take_ids
+                    let take_set: std::collections::HashSet<EntityId> = tg.take_ids.iter().copied().collect();
+                    node.children.retain(|c| take_set.contains(&c.entity_id));
+                    let existing: std::collections::HashSet<EntityId> = node.children.iter().map(|c| c.entity_id).collect();
+                    for &cid in &tg.take_ids {
+                        if !existing.contains(&cid) && waveforms.contains_key(&cid) {
+                            node.children.push(LayerNode {
+                                entity_id: cid, kind: LayerNodeKind::Waveform, expanded: false, children: Vec::new(),
+                            });
+                        }
+                    }
+                    if !node.children.is_empty() && !node.expanded {
+                        node.expanded = true; // auto-expand when takes exist
+                    }
+                    for c in &node.children { seen_ids.insert(c.entity_id); }
+                } else {
+                    // No take_group anymore — remove stale children
+                    node.children.clear();
+                }
+            }
         } else if node.kind == LayerNodeKind::Group {
             if let Some(group) = groups.get(&node.entity_id) {
                 // Retain only children whose member still exists in some entity map
@@ -289,8 +352,20 @@ pub fn sync_tree(
     }
     // InstrumentRegion fallback removed — instruments are the sole source
     for &id in waveforms.keys() {
-        if !seen_ids.contains(&id) && !grouped_ids.contains(&id) {
-            tree.push(LayerNode { entity_id: id, kind: LayerNodeKind::Waveform, expanded: false, children: Vec::new() });
+        if !seen_ids.contains(&id) && !grouped_ids.contains(&id) && !child_take_ids.contains(&id) {
+            // If this waveform has takes, add children
+            let children = if let Some(tg) = waveforms.get(&id).and_then(|wf| wf.take_group.as_ref()) {
+                tg.take_ids.iter().filter_map(|&cid| {
+                    if waveforms.contains_key(&cid) {
+                        seen_ids.insert(cid);
+                        Some(LayerNode { entity_id: cid, kind: LayerNodeKind::Waveform, expanded: false, children: Vec::new() })
+                    } else { None }
+                }).collect()
+            } else {
+                Vec::new()
+            };
+            let has_takes = !children.is_empty();
+            tree.push(LayerNode { entity_id: id, kind: LayerNodeKind::Waveform, expanded: has_takes, children });
             seen_ids.insert(id);
         }
     }

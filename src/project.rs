@@ -83,6 +83,9 @@ impl App {
                     sample_offset_px: wf.sample_offset_px,
                     automation_volume: wf.automation.volume_lane().points.iter().map(|p| [p.t, p.value]).collect(),
                     automation_pan: wf.automation.pan_lane().points.iter().map(|p| [p.t, p.value]).collect(),
+                    take_group_json: wf.take_group.as_ref()
+                        .map(|tg| serde_json::to_string(tg).unwrap_or_default())
+                        .unwrap_or_default(),
                 })
                 .collect();
 
@@ -392,7 +395,11 @@ impl App {
                 sample_offset_px: sw.sample_offset_px,
                 automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
                 effect_chain_id: None,
-                take_group: None,
+                take_group: if sw.take_group_json.is_empty() {
+                    None
+                } else {
+                    serde_json::from_str(&sw.take_group_json).ok()
+                },
             }))
             .collect();
 

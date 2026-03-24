@@ -40,6 +40,16 @@ impl App {
                 || self.file_hovering
                 || self.network.is_connected();
 
+            // Collect child take IDs whose parent has expanded=false
+            let hidden_take_children: HashSet<EntityId> = self.waveforms.iter()
+                .filter_map(|(_, wf)| {
+                    wf.take_group.as_ref().and_then(|tg| {
+                        if !tg.expanded { Some(tg.take_ids.iter().copied()) } else { None }
+                    })
+                })
+                .flatten()
+                .collect();
+
             if needs_rebuild {
                 let selected_set: HashSet<HitTarget> =
                     self.selected.iter().copied().collect();
@@ -80,6 +90,7 @@ impl App {
                     groups: &self.groups,
                     remote_users: &self.remote_users,
                     network_mode: self.network.mode(),
+                    hidden_take_children: &hidden_take_children,
                 };
                 build_instances(&mut self.cached_instances, &render_ctx);
                 build_waveform_vertices(&mut self.cached_wf_verts, &render_ctx);
@@ -241,6 +252,7 @@ impl App {
                 self.editing_text_note.as_ref().map(|e| (e.note_id, e.cursor)),
                 &selected_entity_ids,
                 &self.groups,
+                &hidden_take_children,
             );
         }
         if self.toast_manager.has_active() {

@@ -224,3 +224,187 @@ fn test_take_group_serde_roundtrip() {
     assert_eq!(restored.active_index, 1);
     assert!(!restored.expanded);
 }
+
+#[test]
+fn test_delete_child_take_updates_parent() {
+    let mut app = App::new_headless();
+    let parent_id = new_id();
+    let child1_id = new_id();
+    let child2_id = new_id();
+
+    let mut parent = make_waveform(100.0, 50.0);
+    parent.take_group = Some(TakeGroup {
+        take_ids: vec![child1_id, child2_id],
+        active_index: 2, // child2 is active
+        expanded: true,
+    });
+    parent.disabled = true;
+
+    let mut child1 = make_waveform(100.0, 130.0);
+    child1.disabled = true;
+    let child2 = make_waveform(100.0, 210.0);
+
+    app.waveforms.insert(parent_id, parent.clone());
+    app.audio_clips.insert(parent_id, make_clip());
+    app.waveforms.insert(child1_id, child1.clone());
+    app.audio_clips.insert(child1_id, make_clip());
+    app.waveforms.insert(child2_id, child2.clone());
+    app.audio_clips.insert(child2_id, make_clip());
+
+    // Delete child1 (inactive child, index 1)
+    let op = crate::operations::Operation::DeleteWaveform {
+        id: child1_id,
+        data: child1,
+        audio_clip: None,
+    };
+    crate::operations::Operation::apply(&op, &mut app);
+
+    // child1 should be gone
+    assert!(!app.waveforms.contains_key(&child1_id));
+    // Parent's take_ids should only have child2
+    let tg = app.waveforms[&parent_id].take_group.as_ref().unwrap();
+    assert_eq!(tg.take_ids.len(), 1);
+    assert_eq!(tg.take_ids[0], child2_id);
+    // active_index was 2, now should be 1 (shifted down)
+    assert_eq!(tg.active_index, 1);
+}
+
+#[test]
+fn test_delete_active_child_falls_back_to_parent() {
+    let mut app = App::new_headless();
+    let parent_id = new_id();
+    let child_id = new_id();
+
+    let mut parent = make_waveform(100.0, 50.0);
+    parent.take_group = Some(TakeGroup {
+        take_ids: vec![child_id],
+        active_index: 1,
+        expanded: true,
+    });
+    parent.disabled = true;
+
+    let child = make_waveform(100.0, 130.0);
+
+    app.waveforms.insert(parent_id, parent.clone());
+    app.audio_clips.insert(parent_id, make_clip());
+    app.waveforms.insert(child_id, child.clone());
+    app.audio_clips.insert(child_id, make_clip());
+
+    // Delete the active child
+    let op = crate::operations::Operation::DeleteWaveform {
+        id: child_id,
+        data: child,
+        audio_clip: None,
+    };
+    crate::operations::Operation::apply(&op, &mut app);
+
+    // Child gone, take_group removed entirely, parent re-enabled
+    assert!(!app.waveforms.contains_key(&child_id));
+    assert!(app.waveforms[&parent_id].take_group.is_none());
+    assert!(!app.waveforms[&parent_id].disabled);
+}
+
+#[test]
+fn test_delete_parent_deletes_children() {
+    let mut app = App::new_headless();
+    let parent_id = new_id();
+    let child1_id = new_id();
+    let child2_id = new_id();
+
+    let mut parent = make_waveform(100.0, 50.0);
+    parent.take_group = Some(TakeGroup {
+        take_ids: vec![child1_id, child2_id],
+        active_index: 1,
+        expanded: true,
+    });
+    parent.disabled = true;
+
+    app.waveforms.insert(parent_id, parent.clone());
+    app.audio_clips.insert(parent_id, make_clip());
+    app.waveforms.insert(child1_id, make_waveform(100.0, 130.0));
+    app.audio_clips.insert(child1_id, make_clip());
+    app.waveforms.insert(child2_id, make_waveform(100.0, 210.0));
+    app.audio_clips.insert(child2_id, make_clip());
+
+    // Delete the parent
+    let op = crate::operations::Operation::DeleteWaveform {
+        id: parent_id,
+        data: parent,
+        audio_clip: None,
+    };
+    crate::operations::Operation::apply(&op, &mut app);
+
+    // All three should be gone
+    assert!(!app.waveforms.contains_key(&parent_id));
+    assert!(!app.waveforms.contains_key(&child1_id));
+    assert!(!app.waveforms.contains_key(&child2_id));
+}
+
+#[test]
+fn test_find_take_parent_resolves_child() {
+    // When a child take is selected, find_take_parent should resolve to the parent.
+    // This is used during recording to avoid creating nested take groups.
+    let mut app = App::new_headless();
+    let parent_id = new_id();
+    let child_id = new_id();
+
+    let mut parent = make_waveform(100.0, 50.0);
+    parent.take_group = Some(TakeGroup {
+        take_ids: vec![child_id],
+        active_index: 1,
+        expanded: true,
+    });
+    parent.disabled = true;
+
+    let child = make_waveform(100.0, 130.0);
+
+    app.waveforms.insert(parent_id, parent);
+    app.audio_clips.insert(parent_id, make_clip());
+    app.waveforms.insert(child_id, child);
+    app.audio_clips.insert(child_id, make_clip());
+
+    // Child resolves to parent
+    assert_eq!(app.find_take_parent(child_id), Some(parent_id));
+    // Parent does not resolve (it IS the parent)
+    assert_eq!(app.find_take_parent(parent_id), None);
+    // So the recording logic: unwrap_or(*id) gives parent_id for child, parent_id for parent
+    let resolved_from_child = app.find_take_parent(child_id).unwrap_or(child_id);
+    assert_eq!(resolved_from_child, parent_id);
+    let resolved_from_parent = app.find_take_parent(parent_id).unwrap_or(parent_id);
+    assert_eq!(resolved_from_parent, parent_id);
+}
+
+#[test]
+fn test_move_parent_moves_children() {
+    use crate::HitTarget;
+    let mut app = App::new_headless();
+    let parent_id = new_id();
+    let child1_id = new_id();
+    let child2_id = new_id();
+
+    let mut parent = make_waveform(100.0, 50.0);
+    parent.take_group = Some(TakeGroup {
+        take_ids: vec![child1_id, child2_id],
+        active_index: 1,
+        expanded: true,
+    });
+    parent.disabled = true;
+
+    let child1 = make_waveform(100.0, 130.0);
+    let mut child2 = make_waveform(100.0, 170.0);
+    child2.disabled = true;
+
+    app.waveforms.insert(parent_id, parent);
+    app.audio_clips.insert(parent_id, make_clip());
+    app.waveforms.insert(child1_id, child1);
+    app.audio_clips.insert(child1_id, make_clip());
+    app.waveforms.insert(child2_id, child2);
+    app.audio_clips.insert(child2_id, make_clip());
+
+    // Move parent by (+50, +20)
+    app.set_target_pos(&HitTarget::Waveform(parent_id), [150.0, 70.0]);
+
+    assert_eq!(app.waveforms[&parent_id].position, [150.0, 70.0]);
+    assert_eq!(app.waveforms[&child1_id].position, [150.0, 150.0]); // 100+50, 130+20
+    assert_eq!(app.waveforms[&child2_id].position, [150.0, 190.0]); // 100+50, 170+20
+}
