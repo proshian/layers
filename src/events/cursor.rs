@@ -548,6 +548,9 @@ impl App {
                 *overlap_temp_splits = tsplits;
             }
             self.sync_audio_clips();
+            if let DragState::ResizingWaveform { waveform_id, .. } = self.drag {
+                self.update_groups_containing(waveform_id);
+            }
             self.mark_dirty();
             self.request_redraw();
             return;
@@ -715,6 +718,16 @@ impl App {
                 }
                 if let Some(ec_idx) = self.editing_component {
                     self.update_component_bounds(ec_idx);
+                }
+                // Live group bounds update during drag
+                for (target, _) in &offsets {
+                    match target {
+                        HitTarget::Waveform(id) | HitTarget::MidiClip(id) | HitTarget::EffectRegion(id)
+                        | HitTarget::TextNote(id) | HitTarget::Object(id) => {
+                            self.update_groups_containing(*id);
+                        }
+                        _ => {}
+                    }
                 }
                 if needs_sync {
                     self.sync_audio_clips();

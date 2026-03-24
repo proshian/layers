@@ -1,3 +1,4 @@
+- 2026-03-24: feat: live group bounds recalculation during drag and resize (40.4k loc)
 - 2026-03-24: feat: auto-resize groups to fit member bounds on move, resize, nudge, and delete (40.4k loc)
 - 2026-03-24: feat: audio export — Export WAV button renders group members to stereo WAV with volume, pan, and fades (40.3k loc)
 - 2026-03-24: fix: separate hover states for Export WAV button and Add Effect button in right panel (40.1k loc)
