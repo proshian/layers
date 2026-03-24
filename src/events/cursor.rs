@@ -1160,9 +1160,15 @@ impl App {
             }
         }
         let world = self.camera.screen_to_world(self.mouse_pos);
-        self.fade_handle_hovered = hit_test_fade_handle(&self.waveforms, world, &self.camera);
+        self.fade_handle_hovered = hit_test_fade_handle(&self.waveforms, world, &self.camera)
+            .filter(|(id, _)| !self.is_in_non_entered_group(id));
         self.waveform_edge_hover = if self.fade_handle_hovered.is_none() {
-            hit_test_waveform_edge(&self.waveforms, world, &self.camera)
+            let edge = hit_test_waveform_edge(&self.waveforms, world, &self.camera);
+            match &edge {
+                WaveformEdgeHover::LeftEdge(id) | WaveformEdgeHover::RightEdge(id)
+                    if self.is_in_non_entered_group(id) => WaveformEdgeHover::None,
+                _ => edge,
+            }
         } else {
             WaveformEdgeHover::None
         };
@@ -1232,6 +1238,7 @@ impl App {
         };
         self.fade_curve_hovered = if self.fade_handle_hovered.is_none() && self.waveform_edge_hover == WaveformEdgeHover::None {
             hit_test_fade_curve_dot(&self.waveforms, world, &self.camera)
+                .filter(|(id, _)| !self.is_in_non_entered_group(id))
         } else {
             None
         };

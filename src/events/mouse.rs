@@ -1458,20 +1458,22 @@ impl App {
                 if let Some((wf_idx, is_fade_in)) =
                     hit_test_fade_handle(&self.waveforms, world, &self.camera)
                 {
-                    let before = self.waveforms[&wf_idx].clone();
-                    self.drag = DragState::DraggingFade {
-                        waveform_id: wf_idx,
-                        is_fade_in,
-                        before,
-                    };
-                    self.update_cursor();
-                    self.request_redraw();
-                    return;
+                    if !self.is_in_non_entered_group(&wf_idx) {
+                        let before = self.waveforms[&wf_idx].clone();
+                        self.drag = DragState::DraggingFade {
+                            waveform_id: wf_idx,
+                            is_fade_in,
+                            before,
+                        };
+                        self.update_cursor();
+                        self.request_redraw();
+                        return;
+                    }
                 }
 
                 // --- waveform edge resize ---
                 match hit_test_waveform_edge(&self.waveforms, world, &self.camera) {
-                    WaveformEdgeHover::LeftEdge(i) | WaveformEdgeHover::RightEdge(i) => {
+                    WaveformEdgeHover::LeftEdge(i) | WaveformEdgeHover::RightEdge(i) if !self.is_in_non_entered_group(&i) => {
                         let is_left = matches!(self.waveform_edge_hover, WaveformEdgeHover::LeftEdge(_));
                         let wf = &self.waveforms[&i];
                         let pos_x = wf.position[0];
@@ -1492,7 +1494,7 @@ impl App {
                         self.request_redraw();
                         return;
                     }
-                    WaveformEdgeHover::None => {}
+                    WaveformEdgeHover::None | _ => {}
                 }
 
                 // Check automation lane close (×) button
@@ -1595,19 +1597,21 @@ impl App {
                 if let Some((wf_idx, is_fade_in)) =
                     hit_test_fade_curve_dot(&self.waveforms, world, &self.camera)
                 {
-                    let wf = &self.waveforms[&wf_idx];
-                    let start_curve = if is_fade_in { wf.fade_in_curve } else { wf.fade_out_curve };
-                    let before = wf.clone();
-                    self.drag = DragState::DraggingFadeCurve {
-                        waveform_id: wf_idx,
-                        is_fade_in,
-                        start_mouse_y: self.mouse_pos[1],
-                        start_curve,
-                        before,
-                    };
-                    self.update_cursor();
-                    self.request_redraw();
-                    return;
+                    if !self.is_in_non_entered_group(&wf_idx) {
+                        let wf = &self.waveforms[&wf_idx];
+                        let start_curve = if is_fade_in { wf.fade_in_curve } else { wf.fade_out_curve };
+                        let before = wf.clone();
+                        self.drag = DragState::DraggingFadeCurve {
+                            waveform_id: wf_idx,
+                            is_fade_in,
+                            start_mouse_y: self.mouse_pos[1],
+                            start_curve,
+                            before,
+                        };
+                        self.update_cursor();
+                        self.request_redraw();
+                        return;
+                    }
                 }
 
                 let hit = hit_test(

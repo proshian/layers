@@ -488,6 +488,16 @@ impl App {
         Self::new_minimal("Untitled")
     }
 
+    /// Returns true if `entity_id` belongs to a group that is NOT currently entered.
+    fn is_in_non_entered_group(&self, entity_id: &EntityId) -> bool {
+        for (gid, group) in &self.groups {
+            if group.member_ids.contains(entity_id) {
+                return self.editing_group != Some(*gid);
+            }
+        }
+        false
+    }
+
     fn mark_dirty(&mut self) {
         self.render_generation = self.render_generation.wrapping_add(1);
         self.project_dirty = true;

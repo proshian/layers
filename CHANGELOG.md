@@ -1,3 +1,4 @@
+- 2026-03-24: fix: block fade handle, fade curve, and edge resize on clips inside non-entered groups (39.9k loc)
 - 2026-03-24: feat: Figma-style group move (moves all members) and double-click to enter/exit group editing mode (39.9k loc)
 - 2026-03-24: feat: multi-selection volume and pan editing in right panel with relative adjustments and batch undo/redo (39.7k loc)
 - 2026-03-24: feat: show Groups in layers panel with expandable member children (39.5k loc)
