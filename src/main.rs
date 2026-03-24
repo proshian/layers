@@ -10,6 +10,7 @@ mod entity_id;
 mod events;
 mod gpu;
 mod grid;
+mod group;
 mod icons;
 mod history;
 mod instruments;
@@ -263,6 +264,7 @@ struct App {
     select_area: Option<SelectArea>,
     component_def_hover: ComponentDefHover,
     effect_region_hover: EffectRegionHover,
+    groups: IndexMap<EntityId, group::Group>,
     text_notes: IndexMap<EntityId, text_note::TextNote>,
     text_note_hover: TextNoteHover,
     editing_text_note: Option<text_note::TextNoteEditState>,
@@ -396,6 +398,7 @@ impl App {
             select_area: None,
             component_def_hover: ComponentDefHover::None,
             effect_region_hover: EffectRegionHover::None,
+            groups: IndexMap::new(),
             text_notes: IndexMap::new(),
             text_note_hover: TextNoteHover::None,
             editing_text_note: None,
@@ -1121,6 +1124,7 @@ impl App {
             select_area: None,
             component_def_hover: ComponentDefHover::None,
             effect_region_hover: EffectRegionHover::None,
+            groups: IndexMap::new(),
             text_notes: restored_text_notes,
             text_note_hover: TextNoteHover::None,
             editing_text_note: None,
@@ -1255,6 +1259,10 @@ impl App {
             conn_state,
             rt,
         );
+
+        // Clear stale state from previous session before installing new network
+        self.remote_users.clear();
+        self.applied_remote_seqs.clear();
 
         self.network = mgr;
         self.connect_url = Some(url.to_string());
@@ -2232,6 +2240,7 @@ impl App {
             }
             HitTarget::ComponentInstance(i) => { if let Some(c) = self.component_instances.get_mut(i) { c.position = pos; } }
             HitTarget::MidiClip(i) => { if let Some(m) = self.midi_clips.get_mut(i) { m.position = pos; } }
+            HitTarget::Group(i) => { if let Some(g) = self.groups.get_mut(i) { g.position = pos; } }
         }
     }
 
@@ -2247,6 +2256,7 @@ impl App {
             HitTarget::ComponentInstance(i) => self.component_instances.get(i).map(|c| c.position).unwrap_or([0.0; 2]),
             HitTarget::MidiClip(i) => self.midi_clips.get(i).map(|m| m.position).unwrap_or([0.0; 2]),
             HitTarget::TextNote(i) => self.text_notes.get(i).map(|t| t.position).unwrap_or([0.0; 2]),
+            HitTarget::Group(i) => self.groups.get(i).map(|g| g.position).unwrap_or([0.0; 2]),
         }
     }
 
@@ -2267,6 +2277,7 @@ impl App {
             }
             HitTarget::MidiClip(i) => self.midi_clips.get(i).map(|m| m.size).unwrap_or([50.0; 2]),
             HitTarget::TextNote(i) => self.text_notes.get(i).map(|t| t.size).unwrap_or([50.0; 2]),
+            HitTarget::Group(i) => self.groups.get(i).map(|g| g.size).unwrap_or([50.0; 2]),
         }
     }
 
@@ -2386,6 +2397,14 @@ impl App {
                             new_selected.push(HitTarget::TextNote(nid));
                         }
                     }
+                    HitTarget::Group(i) => {
+                        if let Some(g) = self.groups.get(&i).cloned() {
+                            let nid = new_id();
+                            self.groups.insert(nid, g.clone());
+                            copy_ops.push(operations::Operation::CreateGroup { id: nid, data: g });
+                            new_selected.push(HitTarget::Group(nid));
+                        }
+                    }
                     HitTarget::ComponentDef(i) => {
                         if let Some(src) = self.components.get(&i).cloned() {
                             let comp_nid = new_id();
@@ -2437,6 +2456,7 @@ impl App {
                 HitTarget::ComponentInstance(id) => self.component_instances.get(id).map(|c| (*t, EntityBeforeState::ComponentInstance(c.clone()))),
                 HitTarget::MidiClip(id) => self.midi_clips.get(id).map(|m| (*t, EntityBeforeState::MidiClip(m.clone()))),
                 HitTarget::TextNote(id) => self.text_notes.get(id).map(|tn| (*t, EntityBeforeState::TextNote(tn.clone()))),
+                HitTarget::Group(id) => self.groups.get(id).map(|g| (*t, EntityBeforeState::Group(g.clone()))),
             }
         }).collect();
 
@@ -2572,6 +2592,7 @@ impl App {
                     HitTarget::ComponentInstance(id) => self.component_instances.get(id).map(|c| (*t, EntityBeforeState::ComponentInstance(c.clone()))),
                     HitTarget::MidiClip(id) => self.midi_clips.get(id).map(|m| (*t, EntityBeforeState::MidiClip(m.clone()))),
                     HitTarget::TextNote(id) => self.text_notes.get(id).map(|tn| (*t, EntityBeforeState::TextNote(tn.clone()))),
+                    HitTarget::Group(id) => self.groups.get(id).map(|g| (*t, EntityBeforeState::Group(g.clone()))),
                 }
             }).collect();
             self.arrow_nudge_before = Some(before_states);

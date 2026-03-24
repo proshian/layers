@@ -36,11 +36,11 @@ impl SharedConnectionState {
     }
 
     pub fn get(&self) -> NetworkMode {
-        NetworkMode::from_u8(self.0.load(Ordering::Relaxed))
+        NetworkMode::from_u8(self.0.load(Ordering::Acquire))
     }
 
     pub fn set(&self, mode: NetworkMode) {
-        self.0.store(mode as u8, Ordering::Relaxed);
+        self.0.store(mode as u8, Ordering::Release);
     }
 }
 
@@ -103,6 +103,8 @@ impl NetworkManager {
     }
 
     /// Send a committed operation to the server.
+    /// Ops are queued in the channel even if still connecting — the async task
+    /// will drain them once the handshake completes. In offline mode this is a no-op.
     pub fn send_op(&self, op: CommittedOp) {
         if let Some(tx) = &self.op_sender {
             log::info!("[SYNC] network.send_op: {} (seq={}, connected={})", op.op.variant_name(), op.seq, self.is_connected());

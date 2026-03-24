@@ -664,25 +664,32 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
             continue;
         }
         if let Some(pos) = remote.cursor_world {
-            // Cursor arrow body
-            let arrow_sz = 12.0 / camera.zoom;
+            let s = 1.0 / camera.zoom;
+            let c = remote.user.color;
+
+            // Compose a pointer-arrow shape from rects:
+            // Main body: tall narrow rect (the shaft of the arrow)
             out.push(InstanceRaw {
                 position: [pos[0], pos[1]],
-                size: [arrow_sz, arrow_sz],
-                color: remote.user.color,
-                border_radius: 2.0 / camera.zoom,
+                size: [3.0 * s, 18.0 * s],
+                color: c,
+                border_radius: 0.5 * s,
             });
-            // Name tag background
-            let tag_w = 60.0 / camera.zoom;
-            let tag_h = 16.0 / camera.zoom;
-            let tag_x = pos[0] + arrow_sz * 0.8;
-            let tag_y = pos[1] + arrow_sz * 0.8;
+            // Right wing: short rect extending right, offset down
             out.push(InstanceRaw {
-                position: [tag_x, tag_y],
-                size: [tag_w, tag_h],
-                color: [remote.user.color[0], remote.user.color[1], remote.user.color[2], 0.85],
-                border_radius: 3.0 / camera.zoom,
+                position: [pos[0] + 2.0 * s, pos[1] + 12.0 * s],
+                size: [10.0 * s, 3.0 * s],
+                color: c,
+                border_radius: 0.5 * s,
             });
+            // Diagonal fill: small rect bridging body and wing
+            out.push(InstanceRaw {
+                position: [pos[0] + 1.0 * s, pos[1] + 10.0 * s],
+                size: [5.0 * s, 5.0 * s],
+                color: c,
+                border_radius: 0.5 * s,
+            });
+
         }
         // Ghost outlines for drag previews
         if let Some(preview) = &remote.drag_preview {
@@ -904,6 +911,7 @@ pub(crate) fn target_rect(
             let tn = text_notes.get(id)?;
             Some((tn.position, tn.size))
         }
+        HitTarget::Group(_) => None,
     }
 }
 

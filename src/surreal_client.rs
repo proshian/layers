@@ -61,13 +61,20 @@ fn presence_to_user(p: &PresenceRecord) -> User {
     }
 }
 
-fn committed_to_record(op: &CommittedOp) -> OpRecord {
-    OpRecord {
+fn committed_to_record(op: &CommittedOp) -> Option<OpRecord> {
+    let op_json = match serde_json::to_string(&op.op) {
+        Ok(json) => json,
+        Err(e) => {
+            log::error!("[SurrealClient] Failed to serialize op: {e}");
+            return None;
+        }
+    };
+    Some(OpRecord {
         user_id: op.user_id.to_string(),
         seq: op.seq,
         timestamp_ms: op.timestamp_ms,
-        op_json: serde_json::to_string(&op.op).unwrap_or_default(),
-    }
+        op_json,
+    })
 }
 
 fn record_to_committed(rec: &OpRecord) -> Option<CommittedOp> {
@@ -148,14 +155,13 @@ pub fn spawn_surreal_client(
         let user_id = uuid::Uuid::new_v4();
         let user_id_str = user_id.to_string();
 
-        // Count existing presence to pick a color index
-        let color_idx: usize = db
-            .query("SELECT count() FROM presence GROUP ALL")
-            .await
-            .ok()
-            .and_then(|mut r| r.take::<Option<serde_json::Value>>(0).ok().flatten())
-            .and_then(|v| v.get("count").and_then(|c| c.as_u64()))
-            .unwrap_or(0) as usize;
+        // Derive color from user_id hash (deterministic, no server round-trip needed)
+        let color_idx: usize = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            user_id.hash(&mut hasher);
+            hasher.finish() as usize
+        };
 
         let color = color_for_user_index(color_idx);
         let name = format!("User {}", color_idx + 1);
@@ -261,7 +267,9 @@ pub fn spawn_surreal_client(
                         committed.seq,
                         committed.user_id
                     );
-                    let record = committed_to_record(&committed);
+                    let Some(record) = committed_to_record(&committed) else {
+                        continue;
+                    };
                     let result: Result<Option<OpRecord>, _> =
                         db.create("ops").content(record).await;
                     if let Err(e) = result {
@@ -271,15 +279,15 @@ pub fn spawn_surreal_client(
 
                 // Outbound: local ephemeral → SurrealDB
                 Some(eph) = eph_rx.recv() => {
-                    let (kind, payload_json) = match &eph {
+                    let (kind, payload_json, fire_and_forget) = match &eph {
                         EphemeralMessage::CursorMove { .. } => {
-                            ("CursorMove".to_string(), serde_json::to_string(&eph).unwrap_or_default())
+                            ("CursorMove".to_string(), serde_json::to_string(&eph).unwrap_or_default(), false)
                         }
                         EphemeralMessage::DragUpdate { .. } => {
-                            ("DragUpdate".to_string(), serde_json::to_string(&eph).unwrap_or_default())
+                            ("DragUpdate".to_string(), serde_json::to_string(&eph).unwrap_or_default(), false)
                         }
                         EphemeralMessage::DragEnd { .. } => {
-                            ("DragEnd".to_string(), serde_json::to_string(&eph).unwrap_or_default())
+                            ("DragEnd".to_string(), serde_json::to_string(&eph).unwrap_or_default(), true)
                         }
                         // Don't send UserJoined/UserLeft through ephemeral table
                         _ => continue,
@@ -290,8 +298,15 @@ pub fn spawn_surreal_client(
                         payload_json,
                         updated_at_ms: now_ms(),
                     };
-                    let _: Result<Option<EphemeralRecord>, _> =
-                        db.upsert(("ephemeral", &*user_id_str)).content(record).await;
+                    if fire_and_forget {
+                        // Use create for one-shot messages so they aren't overwritten
+                        let _: Result<Option<EphemeralRecord>, _> =
+                            db.create("ephemeral").content(record).await;
+                    } else {
+                        // Use upsert for high-frequency updates (cursor, drag preview)
+                        let _: Result<Option<EphemeralRecord>, _> =
+                            db.upsert(("ephemeral", &*user_id_str)).content(record).await;
+                    }
                 }
 
                 // Inbound: ops live query
@@ -391,6 +406,13 @@ pub fn spawn_surreal_client(
                     let _ = db
                         .query("DELETE presence WHERE heartbeat_ms < $cutoff")
                         .bind(("cutoff", cutoff))
+                        .await;
+
+                    // GC old fire-and-forget ephemeral records (>5s old)
+                    let eph_cutoff = now_ms().saturating_sub(5_000);
+                    let _ = db
+                        .query("DELETE ephemeral WHERE updated_at_ms < $cutoff")
+                        .bind(("cutoff", eph_cutoff))
                         .await;
                 }
             }

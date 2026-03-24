@@ -202,6 +202,13 @@ impl Camera {
         ]
     }
 
+    pub(crate) fn world_to_screen(&self, world: [f32; 2]) -> [f32; 2] {
+        [
+            (world[0] - self.position[0]) * self.zoom,
+            (world[1] - self.position[1]) * self.zoom,
+        ]
+    }
+
     pub(crate) fn zoom_at(&mut self, screen_pos: [f32; 2], factor: f32) {
         let world = self.screen_to_world(screen_pos);
         self.zoom = (self.zoom * factor).clamp(0.05, 200.0);

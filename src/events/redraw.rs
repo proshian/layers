@@ -36,7 +36,8 @@ impl App {
                 || gen_changed
                 || playhead_world_x.is_some()
                 || sel_rect.is_some()
-                || self.file_hovering;
+                || self.file_hovering
+                || self.network.is_connected();
 
             if needs_rebuild {
                 let selected_set: HashSet<HitTarget> =

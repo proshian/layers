@@ -123,6 +123,7 @@ You can also add entire folders to the browser with `⇧⌘A` (or the **+** butt
 - **Nudge** — Use arrow keys to move selected clips by one grid step. `Shift`+arrows for larger steps (4 beats horizontal, 1 row vertical).
 - **Duplicate** — `⌘D`, or hold `Alt` while dragging to duplicate-and-move.
 - **Disable/Enable** — Press `0` to toggle a clip's playback on or off (disabled clips appear dimmed).
+- **Overlap resolution** — When you move or resize a clip so it overlaps another on the same track, the background clip is automatically cropped, split, or deleted. This is previewed live during the drag and fully undoable.
 
 ### Volume, Pan & Color
 
@@ -130,7 +131,8 @@ When a clip is selected, the **Properties Panel** on the right shows:
 
 - **Volume** — Adjust the gain fader. Double-click the value to type a dB number. Double-click the knob to reset to 0 dB.
 - **Pan** — Adjust stereo position. Double-click the knob to reset to center.
-- **Color** — Right-click a clip and choose a color from the context menu for visual organization.
+- **Color** — Right-click a clip and choose a color from the 70-color palette in the context menu for visual organization.
+- **Mousewheel** — Hover over the volume fader or pan knob and scroll to adjust without clicking. Works with both mouse wheel and trackpad.
 
 Use arrow keys while a fader or knob is focused for fine adjustment. Hold `Shift` for even finer steps.
 
@@ -165,9 +167,16 @@ Double-click the pitch or sample BPM fields in the Properties Panel to type exac
 
 ### Creating MIDI Clips
 
-Create a MIDI clip from the right-click context menu on the canvas. A new clip appears with a default piano roll range (C0–C8).
+Create a MIDI clip from the right-click context menu on the canvas. A new clip appears with a default piano roll range of three octaves (C3–C5).
 
-MIDI clips are color-coded differently from audio clips so you can tell them apart at a glance.
+MIDI clips are color-coded differently from audio clips so you can tell them apart at a glance. Right-click a MIDI clip to change its color from the same 70-color palette used for audio clips.
+
+**Resizing MIDI clips:**
+
+- **Width** — Drag the left or right edge of the clip to change its duration. The cursor changes to a horizontal resize arrow when you're close enough.
+- **Pitch range** — Drag the top or bottom edge to extend or shrink the pitch range by semitones. Drag the top edge upward to add higher pitches, or the bottom edge downward to add lower pitches. The note height stays consistent as you resize.
+
+**Overlap resolution:** When you move or resize a MIDI clip so it overlaps another clip on the same track (same vertical position), the background clip is automatically cropped, split, or deleted — just like audio clips. Overlaps are previewed live while dragging and can be undone.
 
 ### Piano Roll Editing
 
@@ -216,12 +225,12 @@ The velocity lane is resizable — drag its top border to give yourself more or 
 
 ### Loading VST3 Instruments
 
-1. Open the **Sample Browser** (`⌘B`) and expand the **Plugins** section.
-2. Drag a VST3 instrument onto the canvas to create an **Instrument Region**.
-3. The instrument region automatically includes a MIDI clip — double-click the MIDI clip to write notes that the instrument will play.
-4. Double-click the instrument block to open the plugin's native GUI.
+1. Open the **Sample Browser** (`⌘B`) and switch to the **Instruments** tab.
+2. Drag a VST3 instrument onto the canvas. This creates an instrument with a linked MIDI clip.
+3. Double-click the MIDI clip to enter the piano roll and write notes for the instrument.
+4. To open the plugin's native GUI, right-click the instrument in the **Layers** panel and choose **Open**.
 
-Instrument regions are shown with a purple dashed border and an "INST" badge.
+When you select an instrument or its MIDI clip, the **Properties Panel** on the right shows the instrument's volume, pan, and effect chain — the same controls available for audio clips.
 
 ### Effect Regions
 
@@ -409,6 +418,7 @@ Open the sample browser with `⌘B`. It appears as a sidebar on the left side of
 **Features:**
 
 - Browse folders of audio samples with expandable directory trees.
+- **Search** — Press `⌘F` to focus the search bar and type to filter entries. Click the **X** button or press `Escape` to clear.
 - Drag and drop files directly onto the canvas.
 - Add sample folders with the **+** button or `⇧⌘A`.
 - Scroll through files with the mouse wheel.
@@ -457,11 +467,12 @@ Open Settings with `⌘,` (Cmd+Comma).
 | Brightness | Adjust UI brightness |
 | Color Intensity | Adjust color saturation |
 | Grid Line Intensity | Control how visible the grid lines are |
-| Theme Preset | Choose "Default" or "Ableton" (darker) |
+| Theme Preset | Choose "Default", "Ableton" (darker), or "Light" |
 
 ### Other
 
 - **Dev Mode** — Show additional debug information.
+- **Reset to Defaults** — In the Developer tab, click "Reset to Defaults" to restore the original theme (Default preset, hue 216°, full brightness and saturation).
 - All settings are saved to `~/.layers/settings.json` and loaded on startup.
 
 ---
@@ -488,6 +499,7 @@ Open Settings with `⌘,` (Cmd+Comma).
 | Shortcut | Action |
 |---|---|
 | `⌘B` | Toggle sample browser |
+| `⌘F` | Focus browser search bar |
 | `⌘K` / `⌘T` / `⌘P` | Open command palette |
 | `⌘,` | Open settings |
 | `⌘+` | Zoom in |
@@ -569,6 +581,10 @@ Open Settings with `⌘,` (Cmd+Comma).
 | Drag note body | Move note |
 | Drag note edge | Resize note |
 | Drag velocity handle | Adjust note velocity |
+| Scroll on volume fader | Adjust clip volume |
+| Scroll on pan knob | Adjust clip pan |
+| Drag MIDI clip top/bottom edge | Resize pitch range (semitones) |
+| Drag MIDI clip left/right edge | Resize clip width |
 
 ### Right Mouse Button
 
@@ -578,6 +594,8 @@ Open Settings with `⌘,` (Cmd+Comma).
 | Right-click clip | Clip context menu (color, effects, automation, etc.) |
 | Right-click automation point | Delete point |
 | Right-click in browser | Browser context menu |
+| Right-click instrument in Layers | Open plugin GUI, delete |
+| Right-click MIDI clip | Color picker, copy, paste, delete |
 
 ### Middle Mouse Button / Scroll
 

@@ -5,6 +5,7 @@ use crate::entity_id::EntityId;
 use crate::instruments::InstrumentSnapshot;
 use crate::midi::{MidiClip, MidiNote};
 use crate::regions::{ExportRegion, LoopRegion};
+use crate::group::Group;
 use crate::text_note::TextNote;
 use crate::{CanvasObject, WaveformView};
 
@@ -80,6 +81,11 @@ pub enum Operation {
     DeleteTextNote { id: EntityId, data: TextNote },
     UpdateTextNote { id: EntityId, before: TextNote, after: TextNote },
 
+    // --- Group ---
+    CreateGroup { id: EntityId, data: Group },
+    DeleteGroup { id: EntityId, data: Group },
+    UpdateGroup { id: EntityId, before: Group, after: Group },
+
     // --- Global state ---
     SetBpm { before: f32, after: f32 },
 
@@ -126,6 +132,9 @@ impl Operation {
             Operation::CreateTextNote { .. } => "CreateTextNote",
             Operation::DeleteTextNote { .. } => "DeleteTextNote",
             Operation::UpdateTextNote { .. } => "UpdateTextNote",
+            Operation::CreateGroup { .. } => "CreateGroup",
+            Operation::DeleteGroup { .. } => "DeleteGroup",
+            Operation::UpdateGroup { .. } => "UpdateGroup",
             Operation::SetBpm { .. } => "SetBpm",
             Operation::Batch(_) => "Batch",
         }
@@ -192,6 +201,11 @@ impl Operation {
             Operation::CreateTextNote { id, data } => Operation::DeleteTextNote { id: *id, data: data.clone() },
             Operation::DeleteTextNote { id, data } => Operation::CreateTextNote { id: *id, data: data.clone() },
             Operation::UpdateTextNote { id, before, after } => Operation::UpdateTextNote { id: *id, before: after.clone(), after: before.clone() },
+
+            // Groups
+            Operation::CreateGroup { id, data } => Operation::DeleteGroup { id: *id, data: data.clone() },
+            Operation::DeleteGroup { id, data } => Operation::CreateGroup { id: *id, data: data.clone() },
+            Operation::UpdateGroup { id, before, after } => Operation::UpdateGroup { id: *id, before: after.clone(), after: before.clone() },
 
             // BPM
             Operation::SetBpm { before, after } => Operation::SetBpm { before: *after, after: *before },
@@ -440,6 +454,19 @@ impl Operation {
                 }
             }
 
+            // --- Group ---
+            Operation::CreateGroup { id, data } => {
+                app.groups.insert(*id, data.clone());
+            }
+            Operation::DeleteGroup { id, .. } => {
+                app.groups.shift_remove(id);
+            }
+            Operation::UpdateGroup { id, after, .. } => {
+                if let Some(g) = app.groups.get_mut(id) {
+                    *g = after.clone();
+                }
+            }
+
             // --- Global state ---
             Operation::SetBpm { before, after } => {
                 let scale = before / after;
@@ -680,15 +707,13 @@ impl App {
 
     /// Apply a remote operation (from network) without pushing to local undo.
     /// Deduplicates by (user_id, seq) to prevent double-application.
+    /// The set is cleared on reconnect (in connect_to_server) so it stays bounded
+    /// to the ops received in a single session.
     pub(crate) fn apply_remote_op(&mut self, committed: CommittedOp) {
         let key = (committed.user_id, committed.seq);
         if !self.applied_remote_seqs.insert(key) {
             log::info!("[SYNC] apply_remote_op: SKIPPED duplicate {} (user={}, seq={})", committed.op.variant_name(), committed.user_id, committed.seq);
-            return; // duplicate — already applied
-        }
-        // Bound memory: clear set when it gets too large
-        if self.applied_remote_seqs.len() > 20_000 {
-            self.applied_remote_seqs.clear();
+            return;
         }
         log::info!("[SYNC] apply_remote_op: {} (user={}, seq={})", committed.op.variant_name(), committed.user_id, committed.seq);
         committed.op.apply(self);

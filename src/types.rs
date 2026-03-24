@@ -35,6 +35,7 @@ pub(crate) enum HitTarget {
     ComponentInstance(EntityId),
     MidiClip(EntityId),
     TextNote(EntityId),
+    Group(EntityId),
 }
 
 #[derive(Clone, Copy)]
@@ -210,6 +211,7 @@ pub(crate) enum EntityBeforeState {
     ComponentInstance(component::ComponentInstance),
     MidiClip(midi::MidiClip),
     TextNote(text_note::TextNote),
+    Group(crate::group::Group),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -255,6 +257,7 @@ pub(crate) enum ClipboardItem {
     MidiClip(midi::MidiClip),
     MidiNotes(Vec<midi::MidiNote>),
     TextNote(text_note::TextNote),
+    Group(crate::group::Group),
 }
 
 pub(crate) struct Clipboard {

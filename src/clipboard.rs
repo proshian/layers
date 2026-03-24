@@ -15,6 +15,7 @@ impl App {
                 HitTarget::ComponentInstance(id) => { if let Some(d) = self.component_instances.get(id) { ops.push(operations::Operation::CreateComponentInstance { id: *id, data: d.clone() }); } }
                 HitTarget::MidiClip(id) => { if let Some(d) = self.midi_clips.get(id) { ops.push(operations::Operation::CreateMidiClip { id: *id, data: d.clone() }); } }
                 HitTarget::TextNote(id) => { if let Some(d) = self.text_notes.get(id) { ops.push(operations::Operation::CreateTextNote { id: *id, data: d.clone() }); } }
+                HitTarget::Group(id) => { if let Some(d) = self.groups.get(id) { ops.push(operations::Operation::CreateGroup { id: *id, data: d.clone() }); } }
             }
         }
         ops
@@ -462,6 +463,15 @@ impl App {
                         new_selected.push(HitTarget::TextNote(nid));
                     }
                 }
+                HitTarget::Group(i) => {
+                    if let Some(g) = self.groups.get(&i).cloned() {
+                        let mut g = g;
+                        g.position[0] += g.size[0];
+                        let nid = new_id();
+                        self.groups.insert(nid, g);
+                        new_selected.push(HitTarget::Group(nid));
+                    }
+                }
             }
         }
 
@@ -570,6 +580,11 @@ impl App {
                         self.clipboard.items.push(ClipboardItem::TextNote(tn.clone()));
                     }
                 }
+                HitTarget::Group(i) => {
+                    if let Some(g) = self.groups.get(i) {
+                        self.clipboard.items.push(ClipboardItem::Group(g.clone()));
+                    }
+                }
             }
         }
     }
@@ -637,6 +652,7 @@ impl App {
                 ClipboardItem::MidiClip(mc) => mc.position,
                 ClipboardItem::MidiNotes(_) => continue,
                 ClipboardItem::TextNote(tn) => tn.position,
+                ClipboardItem::Group(g) => g.position,
             };
             if pos[0] < min_x {
                 min_x = pos[0];
@@ -743,6 +759,13 @@ impl App {
                     self.text_notes.insert(nid, tn);
                     new_selected.push(HitTarget::TextNote(nid));
                 }
+                ClipboardItem::Group(mut g) => {
+                    g.position[0] += dx;
+                    g.position[1] += dy;
+                    let nid = new_id();
+                    self.groups.insert(nid, g);
+                    new_selected.push(HitTarget::Group(nid));
+                }
             }
         }
 
@@ -777,6 +800,7 @@ impl App {
         let inst_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ComponentInstance(i) => Some(*i), _ => None }).collect();
         let mc_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::MidiClip(i) => Some(*i), _ => None }).collect();
         let tn_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::TextNote(i) => Some(*i), _ => None }).collect();
+        let group_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::Group(i) => Some(*i), _ => None }).collect();
 
         // Capture before removing
         for &id in &inst_ids {
@@ -809,6 +833,7 @@ impl App {
         for &id in &xr_ids { if let Some(d) = self.export_regions.get(&id) { del_ops.push(operations::Operation::DeleteExportRegion { id, data: d.clone() }); } self.export_regions.shift_remove(&id); }
         for &id in &mc_ids { if let Some(d) = self.midi_clips.get(&id) { del_ops.push(operations::Operation::DeleteMidiClip { id, data: d.clone() }); } self.midi_clips.shift_remove(&id); }
         for &id in &tn_ids { if let Some(d) = self.text_notes.get(&id) { del_ops.push(operations::Operation::DeleteTextNote { id, data: d.clone() }); } self.text_notes.shift_remove(&id); }
+        for &id in &group_ids { if let Some(d) = self.groups.get(&id) { del_ops.push(operations::Operation::DeleteGroup { id, data: d.clone() }); } self.groups.shift_remove(&id); }
         if !del_ops.is_empty() {
             self.push_op(operations::Operation::Batch(del_ops));
         }
