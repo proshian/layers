@@ -14,6 +14,7 @@
 #include "public.sdk/source/vst/hosting/plugprovider.h"
 #include "public.sdk/source/vst/hosting/connectionproxy.h"
 #include "public.sdk/source/common/memorystream.h"
+#include "public.sdk/source/vst/hosting/parameterchanges.h"
 
 #include "vst3_gui.h"
 
@@ -26,14 +27,19 @@
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+// Forward declaration
+struct Vst3GuiHandle;
+
 // --- Minimal IComponentHandler so plugin can notify host of param changes ---
 
 class ComponentHandlerImpl : public IComponentHandler {
 public:
-    ComponentHandlerImpl() : refCount(1) {}
+    ComponentHandlerImpl() : refCount(1), handle(nullptr) {}
+
+    void setHandle(Vst3GuiHandle* h) { handle = h; }
 
     tresult PLUGIN_API beginEdit(ParamID /*id*/) override { return kResultOk; }
-    tresult PLUGIN_API performEdit(ParamID /*id*/, ParamValue /*valueNormalized*/) override { return kResultOk; }
+    tresult PLUGIN_API performEdit(ParamID id, ParamValue valueNormalized) override;
     tresult PLUGIN_API endEdit(ParamID /*id*/) override { return kResultOk; }
     tresult PLUGIN_API restartComponent(int32 /*flags*/) override { return kResultOk; }
 
@@ -54,6 +60,7 @@ public:
     }
 private:
     std::atomic<uint32> refCount;
+    Vst3GuiHandle* handle;
 };
 
 // --- Minimal IEventList for MIDI events ---
@@ -118,6 +125,8 @@ struct Vst3GuiHandle {
     bool processingSetUp = false;
     std::vector<Event> pendingMidiEvents;
     std::mutex midiMutex;
+    Steinberg::Vst::ParameterChangeTransfer paramTransfer;
+    Steinberg::Vst::ParameterChanges processParamChanges;  // pre-allocated, reused each process() call
 };
 
 // --- Common helpers ---

@@ -1,5 +1,12 @@
 #include "vst3_gui_internal.h"
 
+tresult PLUGIN_API ComponentHandlerImpl::performEdit(ParamID id, ParamValue valueNormalized) {
+    if (handle) {
+        handle->paramTransfer.addChange(id, valueNormalized, 0);
+    }
+    return kResultOk;
+}
+
 Steinberg::Vst::HostApplication& getHostApp() {
     static Steinberg::Vst::HostApplication sHostApp;
     return sHostApp;
@@ -60,8 +67,16 @@ Vst3GuiHandle* vst3_gui_open_headless(const char* vst3_path, const char* uid_str
 
     if (!controller) { if (component) component->terminate(); return nullptr; }
 
+    auto* handle = new Vst3GuiHandle();
+    handle->module = module;
+    handle->component = component;
+    handle->controller = controller;
+    handle->isSingleComponent = isSingleComponent;
+
     auto* ch = new ComponentHandlerImpl();
+    ch->setHandle(handle);
     controller->setComponentHandler(ch);
+    handle->componentHandler = ch;
 
     IPtr<ConnectionProxy> componentCP, controllerCP;
     if (!isSingleComponent) {
@@ -74,21 +89,11 @@ Vst3GuiHandle* vst3_gui_open_headless(const char* vst3_path, const char* uid_str
             controllerCP->connect(compICP);
         }
     }
+    handle->componentCP = componentCP;
+    handle->controllerCP = controllerCP;
 
     { MemoryStream s; if (component->getState(&s) == kResultOk) { s.seek(0, IBStream::kIBSeekSet, nullptr); controller->setComponentState(&s); } }
 
-    auto* handle = new Vst3GuiHandle();
-    handle->module = module;
-    handle->component = component;
-    handle->controller = controller;
-    handle->view = nullptr;
-    handle->window = nullptr;
-    handle->containerView = nullptr;
-    handle->plugFrame = nullptr;
-    handle->componentHandler = ch;
-    handle->isSingleComponent = isSingleComponent;
-    handle->componentCP = componentCP;
-    handle->controllerCP = controllerCP;
     return handle;
 
     } catch (...) {
@@ -302,6 +307,7 @@ int vst3_gui_set_parameter(Vst3GuiHandle* handle, int index, double value) {
     ParameterInfo info;
     if (handle->controller->getParameterInfo(index, info) != kResultOk) return -1;
     if (handle->controller->setParamNormalized(info.id, value) != kResultOk) return -1;
+    handle->paramTransfer.addChange(info.id, value, 0);
     return 0;
 }
 
@@ -354,6 +360,11 @@ int vst3_gui_setup_processing(Vst3GuiHandle* handle, double sample_rate, int blo
         processor->setProcessing(true);
         handle->processingSetUp = true;
 
+        int32 paramCount = handle->controller ? handle->controller->getParameterCount() : 0;
+        int32 paramBufSize = paramCount > 0 ? paramCount : 64;
+        handle->paramTransfer.setMaxParameters(paramBufSize);
+        handle->processParamChanges.setMaxParameters(paramBufSize);
+
         fprintf(stderr, "vst3_gui_setup_processing: OK (in=%d, out=%d, sr=%.0f, bs=%d)\n",
                 handle->inputChannels, handle->outputChannels, sample_rate, block_size);
         return 0;
@@ -386,6 +397,9 @@ int vst3_gui_process(Vst3GuiHandle* handle,
         handle->pendingMidiEvents.clear();
     }
 
+    handle->processParamChanges.clearQueue();
+    handle->paramTransfer.transferChangesTo(handle->processParamChanges);
+
     ProcessData data = {};
     data.processMode = kRealtime;
     data.symbolicSampleSize = kSample32;
@@ -395,6 +409,7 @@ int vst3_gui_process(Vst3GuiHandle* handle,
     data.inputs = (num_input_channels > 0) ? &inputBus : nullptr;
     data.outputs = (num_output_channels > 0) ? &outputBus : nullptr;
     data.inputEvents = &eventList;
+    data.inputParameterChanges = &handle->processParamChanges;
 
     tresult result;
     try {

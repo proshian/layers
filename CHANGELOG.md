@@ -1,3 +1,7 @@
+- 2026-03-24: fix: VST3 audio glitches — pre-allocate ParameterChanges to avoid heap alloc on audio thread, use actual device sample rate (41.2k loc)
+- 2026-03-24: fix: spacebar and MIDI keyboard now work when VST3 plugin GUI is open — use NSPanel instead of NSWindow (41.1k loc)
+- 2026-03-24: feat: take lanes MVP — TakeGroup data model, recording into takes, active take switching with undo/redo, overlap resolution skip for takes (41.1k loc)
+- 2026-03-24: fix: VST3 plugin GUI parameter changes now affect audio — forward params from controller to processor via ring buffer (40.7k loc)
 - 2026-03-24: feat: live group bounds recalculation during drag and resize (40.4k loc)
 - 2026-03-24: feat: auto-resize groups to fit member bounds on move, resize, nudge, and delete (40.4k loc)
 - 2026-03-24: feat: audio export — Export WAV button renders group members to stereo WAV with volume, pan, and fades (40.3k loc)

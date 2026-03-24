@@ -201,7 +201,7 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
         return nullptr;
     }
 
-    // 3. Set component handler
+    // 3. Set component handler (handle pointer set later in step 12)
     auto* componentHandler = new ComponentHandlerImpl();
     controller->setComponentHandler(componentHandler);
 
@@ -266,7 +266,7 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
 
     // 8. Create HWND
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    DWORD exStyle = 0;
+    DWORD exStyle = WS_EX_NOACTIVATE;
 
     RECT windowRect = { 0, 0, viewW, viewH };
     AdjustWindowRectEx(&windowRect, style, FALSE, exStyle);
@@ -322,8 +322,8 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
         return nullptr;
     }
 
-    // 11. Show window
-    ShowWindow(hwnd, SW_SHOW);
+    // 11. Show window (don't steal keyboard focus)
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     UpdateWindow(hwnd);
 
     // 12. Build handle
@@ -339,6 +339,7 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
     handle->isSingleComponent = isSingleComponent;
     handle->componentCP = componentCP;
     handle->controllerCP = controllerCP;
+    componentHandler->setHandle(handle);
 
     fprintf(stderr, "vst3_gui: opened GUI for '%s' (%dx%d)\n",
             title ? title : "?", viewW, viewH);
@@ -363,8 +364,7 @@ void vst3_gui_close(Vst3GuiHandle* handle) {
 void vst3_gui_show(Vst3GuiHandle* handle) {
     if (!handle || !handle->window) return;
     HWND hwnd = (HWND)handle->window;
-    ShowWindow(hwnd, SW_SHOW);
-    SetForegroundWindow(hwnd);
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     fprintf(stderr, "vst3_gui_show: window shown\n");
 }
 

@@ -57,7 +57,7 @@ private:
 
 void platform_close_window(Vst3GuiHandle* handle) {
     if (!handle || !handle->window) return;
-    NSWindow* window = (__bridge NSWindow*)handle->window;
+    NSPanel* window = (__bridge NSPanel*)handle->window;
     if ([window isVisible]) {
         [window orderOut:nil];
     }
@@ -75,7 +75,7 @@ void platform_destroy_window(Vst3GuiHandle* handle) {
 
     // Close and release window (transfers ownership back to ARC)
     if (handle->window) {
-        NSWindow* window = (__bridge_transfer NSWindow*)handle->window;
+        NSPanel* window = (__bridge_transfer NSPanel*)handle->window;
         [window setContentView:nil];
         [window close];
         handle->window = nullptr;
@@ -167,7 +167,7 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
         return nullptr;
     }
 
-    // 3. Set component handler
+    // 3. Set component handler (handle pointer set later in step 13)
     auto* componentHandler = new ComponentHandlerImpl();
     controller->setComponentHandler(componentHandler);
 
@@ -230,20 +230,23 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
     if (viewW < 100) viewW = 800;
     if (viewH < 100) viewH = 600;
 
-    // 8. Create NSWindow
+    // 8. Create NSPanel (floating, non-activating — doesn't steal keyboard focus)
     NSString* nsTitle = title ? [NSString stringWithUTF8String:title]
                               : @"VST3 Plugin";
 
     NSRect contentRect = NSMakeRect(200, 200, viewW, viewH);
     NSUInteger styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
-                         | NSWindowStyleMaskMiniaturizable;
+                         | NSWindowStyleMaskMiniaturizable
+                         | NSWindowStyleMaskNonactivatingPanel;
 
-    NSWindow* window = [[NSWindow alloc] initWithContentRect:contentRect
-                                                   styleMask:styleMask
-                                                     backing:NSBackingStoreBuffered
-                                                       defer:NO];
+    NSPanel* window = [[NSPanel alloc] initWithContentRect:contentRect
+                                                 styleMask:styleMask
+                                                   backing:NSBackingStoreBuffered
+                                                     defer:NO];
     [window setTitle:nsTitle];
     [window setReleasedWhenClosed:NO];
+    [window setFloatingPanel:YES];
+    [window setBecomesKeyOnlyIfNeeded:YES];
 
     // 9. Create container view
     NSView* containerView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, viewW, viewH)];
@@ -266,9 +269,9 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
         return nullptr;
     }
 
-    // 12. Show window
+    // 12. Show window (orderFront — don't steal keyboard focus)
     [window center];
-    [window makeKeyAndOrderFront:nil];
+    [window orderFront:nil];
 
     // 13. Build handle
     auto* handle = new Vst3GuiHandle();
@@ -283,6 +286,7 @@ Vst3GuiHandle* vst3_gui_open(const char* vst3_path, const char* uid_str, const c
     handle->isSingleComponent = isSingleComponent;
     handle->componentCP = componentCP;
     handle->controllerCP = controllerCP;
+    componentHandler->setHandle(handle);
 
     fprintf(stderr, "vst3_gui: opened GUI for '%s' (%gx%g)\n",
             title ? title : "?", viewW, viewH);
@@ -306,14 +310,14 @@ void vst3_gui_close(Vst3GuiHandle* handle) {
 
 void vst3_gui_show(Vst3GuiHandle* handle) {
     if (!handle || !handle->window) return;
-    NSWindow* window = (__bridge NSWindow*)handle->window;
-    [window makeKeyAndOrderFront:nil];
+    NSPanel* window = (__bridge NSPanel*)handle->window;
+    [window orderFront:nil];
     fprintf(stderr, "vst3_gui_show: window shown\n");
 }
 
 int vst3_gui_is_open(Vst3GuiHandle* handle) {
     if (!handle || !handle->window) return 0;
-    NSWindow* window = (__bridge NSWindow*)handle->window;
+    NSPanel* window = (__bridge NSPanel*)handle->window;
     return [window isVisible] ? 1 : 0;
 }
 

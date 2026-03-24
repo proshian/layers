@@ -431,6 +431,7 @@ impl App {
                 sample_offset_px: sw.sample_offset_px,
                 automation: AutomationData::from_stored(&sw.automation_volume, &sw.automation_pan),
                 effect_chain_id: None,
+                take_group: None,
             }))
             .collect();
 
@@ -636,6 +637,8 @@ impl App {
 
         // If plugins are already scanned, open vst3-gui instances for restored plugin blocks
         #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let (load_sr, load_bs) = (self.plugin_sample_rate(), self.settings.buffer_size as i32);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if self.plugin_registry.is_scanned() {
             for (_pb_id, pb) in &mut self.plugin_blocks {
                 let has_gui = pb.gui.lock().ok().map_or(false, |g| g.is_some());
@@ -647,7 +650,7 @@ impl App {
                     if !path.is_empty() {
                         if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &pb.plugin_id, &pb.plugin_name) {
                             gui.hide();
-                            gui.setup_processing(48000.0, self.settings.buffer_size as i32);
+                            gui.setup_processing(load_sr, load_bs);
                             if let Some(state) = &pb.pending_state {
                                 gui.set_state(state);
                                 println!("  Restored plugin state ({} bytes)", state.len());

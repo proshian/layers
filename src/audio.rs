@@ -99,6 +99,7 @@ struct PlaybackClip {
     buffer_offset_secs: f64,
     volume_automation: Vec<(f32, f32)>,
     pan_automation: Vec<(f32, f32)>,
+    chain_plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
 }
 
 pub struct AudioEffectRegion {
@@ -119,6 +120,7 @@ pub struct AudioInstrument {
     pub midi_events: Vec<TimedMidiEvent>,
     pub volume: f32,
     pub pan: f32,
+    pub chain_plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
 }
 
 /// Live computer-keyboard preview MIDI (drained once per output callback).
@@ -150,6 +152,7 @@ pub struct TimedMidiEvent {
 pub struct AudioEngine {
     _stream: cpal::Stream,
     device_name: String,
+    sample_rate: u32,
     playing: Arc<AtomicBool>,
     position_bits: Arc<AtomicU64>,
     clips: Arc<Mutex<Vec<PlaybackClip>>>,
@@ -356,11 +359,15 @@ impl AudioEngine {
                     // Mix all clips per-sample first (dry mix) with stereo pan
                     let mut dry_mix = vec![[0.0f32; 2]; frames];
                     if is_playing {
+                    // First pass: mix clips WITHOUT effect chains directly into dry_mix
                     for i in 0..frames {
                         let t = current_time + i as f64 / sr;
                         let mut mix_l = 0.0f32;
                         let mut mix_r = 0.0f32;
                         for clip in clips_ref.iter() {
+                            if !clip.chain_plugins.is_empty() {
+                                continue; // handled separately below
+                            }
                             let clip_t = t - clip.start_time_secs;
                             if clip_t >= 0.0 && clip_t < clip.duration_secs {
                                 let source_idx = ((clip_t + clip.buffer_offset_secs) * clip.effective_sample_rate) as usize;
@@ -397,6 +404,101 @@ impl AudioEngine {
                             }
                         }
                         dry_mix[i] = [mix_l, mix_r];
+                    }
+
+                    // Second pass: process clips WITH effect chains through their chain, then add to dry_mix
+                    for clip in clips_ref.iter() {
+                        if clip.chain_plugins.is_empty() {
+                            continue;
+                        }
+
+                        // Render this clip's dry audio into a per-clip stereo buffer
+                        let mut clip_dry = vec![[0.0f32; 2]; frames];
+                        for i in 0..frames {
+                            let t = current_time + i as f64 / sr;
+                            let clip_t = t - clip.start_time_secs;
+                            if clip_t >= 0.0 && clip_t < clip.duration_secs {
+                                let source_idx = ((clip_t + clip.buffer_offset_secs) * clip.effective_sample_rate) as usize;
+                                if source_idx < clip.buffer.len() {
+                                    let fg = clip_fade_gain(
+                                        clip_t,
+                                        clip.duration_secs,
+                                        clip.fade_in_secs,
+                                        clip.fade_out_secs,
+                                        clip.fade_in_curve,
+                                        clip.fade_out_curve,
+                                    );
+                                    let norm_t = if clip.duration_secs > 0.0 {
+                                        (clip_t / clip.duration_secs) as f32
+                                    } else {
+                                        0.0
+                                    };
+                                    let auto_vol = crate::automation::volume_value_to_gain(
+                                        crate::automation::interp_automation(
+                                            norm_t, &clip.volume_automation, 0.5,
+                                        ),
+                                    );
+                                    let auto_pan = crate::automation::interp_automation(
+                                        norm_t, &clip.pan_automation, clip.pan,
+                                    );
+                                    let sample = clip.buffer[source_idx] * fg * clip.volume * auto_vol;
+                                    let pan_angle = auto_pan * std::f32::consts::FRAC_PI_2;
+                                    let pan_l = pan_angle.cos();
+                                    let pan_r = pan_angle.sin();
+                                    clip_dry[i] = [sample * pan_l, sample * pan_r];
+                                }
+                            }
+                        }
+
+                        // Process through effect chain block-by-block
+                        for block_start in (0..frames).step_by(effect_block_size) {
+                            let block_end = (block_start + effect_block_size).min(frames);
+                            let block_len = block_end - block_start;
+
+                            // Fill input buffers from clip's dry audio
+                            for j in 0..block_len {
+                                fx_buf_l[j] = clip_dry[block_start + j][0];
+                                fx_buf_r[j] = clip_dry[block_start + j][1];
+                            }
+
+                            // Process through each plugin in the chain
+                            #[allow(unused_mut)]
+                            let (mut src_l, mut src_r, mut dst_l, mut dst_r) = (
+                                &mut fx_buf_l,
+                                &mut fx_buf_r,
+                                &mut fx_out_l,
+                                &mut fx_out_r,
+                            );
+
+                            for plugin_arc in &clip.chain_plugins {
+                                // Pre-fill dst with src as pass-through fallback (if try_lock fails)
+                                dst_l[..block_len].copy_from_slice(&src_l[..block_len]);
+                                dst_r[..block_len].copy_from_slice(&src_r[..block_len]);
+                                if let Ok(guard) = plugin_arc.try_lock() {
+                                    if let Some(ref gui) = *guard {
+                                        let inputs: Vec<&[f32]> =
+                                            vec![&src_l[..block_len], &src_r[..block_len]];
+                                        let mut outputs: Vec<&mut [f32]> = vec![
+                                            &mut dst_l[..block_len],
+                                            &mut dst_r[..block_len],
+                                        ];
+                                        gui.process(
+                                            &inputs,
+                                            &mut outputs,
+                                            block_len,
+                                        );
+                                    }
+                                }
+                                std::mem::swap(src_l, dst_l);
+                                std::mem::swap(src_r, dst_r);
+                            }
+
+                            // Add processed audio to dry_mix
+                            for j in 0..block_len {
+                                dry_mix[block_start + j][0] += src_l[j];
+                                dry_mix[block_start + j][1] += src_r[j];
+                            }
+                        }
                     }
 
                     // Process through effect regions if any are active
@@ -473,8 +575,8 @@ impl AudioEngine {
                                     );
 
                                     for plugin_mutex in &region.plugins {
-                                        dst_l[..block_len].fill(0.0);
-                                        dst_r[..block_len].fill(0.0);
+                                        dst_l[..block_len].copy_from_slice(&src_l[..block_len]);
+                                        dst_r[..block_len].copy_from_slice(&src_r[..block_len]);
                                         if let Ok(guard) = plugin_mutex.try_lock() {
                                             if let Some(ref gui) = *guard {
                                                 let inputs: Vec<&[f32]> =
@@ -611,6 +713,31 @@ impl AudioEngine {
                                         ];
 
                                         gui.process(&inputs, &mut outputs, block_len);
+
+                                        // Process through instrument's effect chain
+                                        if !region.chain_plugins.is_empty() {
+                                            fx_buf_l[..block_len].copy_from_slice(&inst_out_l[..block_len]);
+                                            fx_buf_r[..block_len].copy_from_slice(&inst_out_r[..block_len]);
+                                            #[allow(unused_mut)]
+                                            let (mut sl, mut sr, mut dl, mut dr) = (
+                                                &mut fx_buf_l, &mut fx_buf_r, &mut fx_out_l, &mut fx_out_r,
+                                            );
+                                            for plugin_arc in &region.chain_plugins {
+                                                dl[..block_len].copy_from_slice(&sl[..block_len]);
+                                                dr[..block_len].copy_from_slice(&sr[..block_len]);
+                                                if let Ok(g2) = plugin_arc.try_lock() {
+                                                    if let Some(ref fx_gui) = *g2 {
+                                                        let ins: Vec<&[f32]> = vec![&sl[..block_len], &sr[..block_len]];
+                                                        let mut outs: Vec<&mut [f32]> = vec![&mut dl[..block_len], &mut dr[..block_len]];
+                                                        fx_gui.process(&ins, &mut outs, block_len);
+                                                    }
+                                                }
+                                                std::mem::swap(sl, dl);
+                                                std::mem::swap(sr, dr);
+                                            }
+                                            inst_out_l[..block_len].copy_from_slice(&sl[..block_len]);
+                                            inst_out_r[..block_len].copy_from_slice(&sr[..block_len]);
+                                        }
 
                                         for j in 0..block_len {
                                             dry_mix[offset + j][0] += inst_out_l[j];
@@ -754,6 +881,7 @@ impl AudioEngine {
         Some(Self {
             _stream: stream,
             device_name: actual_device_name,
+            sample_rate,
             playing,
             position_bits,
             clips,
@@ -808,6 +936,10 @@ impl AudioEngine {
         }
     }
 
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
     pub fn is_playing(&self) -> bool {
         self.playing.load(Ordering::Relaxed)
     }
@@ -838,6 +970,7 @@ impl AudioEngine {
         sample_bpms: &[f32],
         project_bpm: f32,
         pitch_semitones: &[f32],
+        chain_plugins_per_clip: &[Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>],
     ) {
         let mut clips = self.clips.lock().unwrap();
         clips.clear();
@@ -884,6 +1017,7 @@ impl AudioEngine {
                 buffer_offset_secs: offset_secs,
                 volume_automation: vol_auto,
                 pan_automation: pan_auto,
+                chain_plugins: chain_plugins_per_clip.get(i).cloned().unwrap_or_default(),
             });
         }
     }
@@ -1504,8 +1638,8 @@ pub fn render_to_wav(
                 (&mut fx_buf_l, &mut fx_buf_r, &mut fx_out_l, &mut fx_out_r);
 
             for plugin_mutex in &region.plugins {
-                dst_l[..block_len].fill(0.0);
-                dst_r[..block_len].fill(0.0);
+                dst_l[..block_len].copy_from_slice(&src_l[..block_len]);
+                dst_r[..block_len].copy_from_slice(&src_r[..block_len]);
                 if let Ok(guard) = plugin_mutex.try_lock() {
                     if let Some(ref gui) = *guard {
                         let inputs: Vec<&[f32]> = vec![&src_l[..block_len], &src_r[..block_len]];

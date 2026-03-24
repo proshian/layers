@@ -24,6 +24,7 @@ set(VST3_SDK_SOURCES
     ${VST3_SDK_PATH}/public.sdk/source/vst/hosting/hostclasses.cpp
     ${VST3_SDK_PATH}/public.sdk/source/vst/hosting/connectionproxy.cpp
     ${VST3_SDK_PATH}/public.sdk/source/vst/hosting/pluginterfacesupport.cpp
+    ${VST3_SDK_PATH}/public.sdk/source/vst/hosting/parameterchanges.cpp
     ${VST3_SDK_PATH}/public.sdk/source/vst/utility/stringconvert.cpp
     ${VST3_SDK_PATH}/public.sdk/source/common/commonstringconvert.cpp
 )

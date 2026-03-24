@@ -1,6 +1,15 @@
 use super::*;
 
 impl App {
+    /// Get the actual audio device sample rate, falling back to 48000 if no engine.
+    #[cfg(feature = "native")]
+    pub(crate) fn plugin_sample_rate(&self) -> f64 {
+        self.audio_engine
+            .as_ref()
+            .map(|e| e.sample_rate() as f64)
+            .unwrap_or(48000.0)
+    }
+
     pub(crate) fn open_add_folder_dialog(&mut self) {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
             self.sample_browser.add_folder(folder);
@@ -54,6 +63,8 @@ impl App {
 
         // Reload any saved plugin blocks that were waiting for the scanner.
         #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let (reload_sr, reload_bs) = (self.plugin_sample_rate(), self.settings.buffer_size as i32);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         for pb in self.plugin_blocks.values_mut() {
             let has_gui = pb.gui.lock().ok().map_or(false, |g| g.is_some());
             if !has_gui {
@@ -64,7 +75,7 @@ impl App {
                 if !path.is_empty() {
                     if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &pb.plugin_id, &pb.plugin_name) {
                         gui.hide();
-                        gui.setup_processing(48000.0, self.settings.buffer_size as i32);
+                        gui.setup_processing(reload_sr, reload_bs);
                         if let Some(state) = &pb.pending_state {
                             gui.set_state(state);
                             println!("  Restored plugin state ({} bytes)", state.len());
@@ -96,7 +107,7 @@ impl App {
                 if !path.is_empty() {
                     if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &inst.plugin_id, &inst.plugin_name) {
                         gui.hide();
-                        gui.setup_processing(48000.0, self.settings.buffer_size as i32);
+                        gui.setup_processing(reload_sr, reload_bs);
                         if let Some(state) = &inst.pending_state {
                             gui.set_state(state);
                         }
@@ -134,7 +145,6 @@ impl App {
 
     pub(crate) fn add_plugin_block(&mut self, position: [f32; 2], plugin_id: &str, plugin_name: &str) {
         self.ensure_plugins_scanned();
-        let _sample_rate = 48000.0;
         let _block_size = self.settings.buffer_size;
 
         let plugin_path = self
@@ -157,7 +167,7 @@ impl App {
             let path = pb.plugin_path.to_string_lossy().to_string();
             if !path.is_empty() {
                 if let Some(gui) = vst3_gui::Vst3Gui::open(&path, plugin_id, plugin_name) {
-                    gui.setup_processing(_sample_rate, _block_size as i32);
+                    gui.setup_processing(self.plugin_sample_rate(), _block_size as i32);
                     println!("  Opened native GUI for '{}'", plugin_name);
                     if let Ok(mut g) = pb.gui.lock() {
                         *g = Some(gui);
@@ -175,7 +185,6 @@ impl App {
     /// Creates a new chain if the waveform doesn't have one yet.
     pub(crate) fn add_plugin_to_waveform_chain(&mut self, wf_id: EntityId, plugin_id: &str, plugin_name: &str) {
         self.ensure_plugins_scanned();
-        let _sample_rate = 48000.0;
         let _block_size = self.settings.buffer_size;
 
         let plugin_path = self
@@ -197,7 +206,7 @@ impl App {
             let path = slot.plugin_path.to_string_lossy().to_string();
             if !path.is_empty() {
                 if let Some(gui) = vst3_gui::Vst3Gui::open(&path, plugin_id, plugin_name) {
-                    gui.setup_processing(_sample_rate, _block_size as i32);
+                    gui.setup_processing(self.plugin_sample_rate(), _block_size as i32);
                     gui.hide();
                     println!("  Opened effect chain plugin '{}'", plugin_name);
                     if let Ok(mut g) = slot.gui.lock() {
@@ -234,13 +243,13 @@ impl App {
         self.open_right_window_for(wf_id);
         self.selected.clear();
         self.selected.push(HitTarget::Waveform(wf_id));
+        self.sync_audio_clips();
         println!("  Added '{}' to waveform effect chain", plugin_name);
         self.request_redraw();
     }
 
     pub(crate) fn add_plugin_to_instrument_chain(&mut self, inst_id: EntityId, plugin_id: &str, plugin_name: &str) {
         self.ensure_plugins_scanned();
-        let _sample_rate = 48000.0;
         let _block_size = self.settings.buffer_size;
 
         let plugin_path = self
@@ -262,7 +271,7 @@ impl App {
             let path = slot.plugin_path.to_string_lossy().to_string();
             if !path.is_empty() {
                 if let Some(gui) = vst3_gui::Vst3Gui::open(&path, plugin_id, plugin_name) {
-                    gui.setup_processing(_sample_rate, _block_size as i32);
+                    gui.setup_processing(self.plugin_sample_rate(), _block_size as i32);
                     gui.hide();
                     if let Ok(mut g) = slot.gui.lock() {
                         *g = Some(gui);
@@ -295,7 +304,68 @@ impl App {
         }
 
         self.update_right_window_for_instrument(inst_id);
+        self.sync_audio_clips();
         self.request_redraw();
+    }
+
+    pub(crate) fn add_plugin_to_group_chain(&mut self, group_id: EntityId, plugin_id: &str, plugin_name: &str) {
+        self.ensure_plugins_scanned();
+        let _block_size = self.settings.buffer_size;
+
+        let plugin_path = self
+            .plugin_registry
+            .plugins
+            .iter()
+            .find(|e| e.info.unique_id == plugin_id)
+            .map(|e| e.info.path.clone())
+            .unwrap_or_default();
+
+        let mut slot = effects::EffectChainSlot::new(
+            plugin_id.to_string(),
+            plugin_name.to_string(),
+            plugin_path,
+        );
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let path = slot.plugin_path.to_string_lossy().to_string();
+            if !path.is_empty() {
+                if let Some(gui) = vst3_gui::Vst3Gui::open(&path, plugin_id, plugin_name) {
+                    gui.setup_processing(self.plugin_sample_rate(), _block_size as i32);
+                    gui.hide();
+                    if let Ok(mut g) = slot.gui.lock() {
+                        *g = Some(gui);
+                    }
+                }
+            }
+        }
+
+        // Get or create effect chain for this group
+        let chain_id = if let Some(g) = self.groups.get(&group_id) {
+            g.effect_chain_id
+        } else {
+            return;
+        };
+
+        let chain_id = match chain_id {
+            Some(id) => id,
+            None => {
+                let id = new_id();
+                self.effect_chains.insert(id, effects::EffectChain::new());
+                if let Some(g) = self.groups.get_mut(&group_id) {
+                    g.effect_chain_id = Some(id);
+                }
+                id
+            }
+        };
+
+        if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
+            chain.slots.push(slot);
+        }
+
+        self.sync_audio_clips();
+        self.request_redraw();
+        println!("  Added '{}' to group effect chain", plugin_name);
     }
 
     pub(crate) fn add_plugin_to_selected_effect_region(&mut self, plugin_id: &str, plugin_name: &str) {
@@ -387,7 +457,7 @@ impl App {
             }
 
             if let Some(gui) = vst3_gui::Vst3Gui::open(&path, &uid, &name) {
-                gui.setup_processing(48000.0, self.settings.buffer_size as i32);
+                gui.setup_processing(self.plugin_sample_rate(), self.settings.buffer_size as i32);
                 if let Some(state) = saved_state {
                     if !state.is_empty() {
                         gui.set_state(&state);
@@ -462,7 +532,7 @@ impl App {
             let path_str = plugin_path.to_string_lossy().to_string();
             if !path_str.is_empty() {
                 if let Some(gui) = vst3_gui::Vst3Gui::open(&path_str, plugin_id, plugin_name) {
-                    if gui.setup_processing(48000.0, self.settings.buffer_size as i32) {
+                    if gui.setup_processing(self.plugin_sample_rate(), self.settings.buffer_size as i32) {
                         println!("  Set up audio processing for instrument '{}'", plugin_name);
                     } else {
                         println!("  Warning: audio processing setup failed for '{}'", plugin_name);
