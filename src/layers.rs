@@ -278,15 +278,23 @@ pub fn sync_tree(
 ) {
     let mut seen_ids: std::collections::HashSet<EntityId> = std::collections::HashSet::new();
 
-    // Phase 1: remove stale root nodes
+    // Collect all entity IDs that belong to a group — these should not appear as root nodes
+    let grouped_ids: std::collections::HashSet<EntityId> = groups.values()
+        .flat_map(|g| g.member_ids.iter().copied())
+        .collect();
+
+    // Phase 1: remove stale root nodes + remove root entries that now belong to a group
     tree.retain(|node| {
+        if node.kind != LayerNodeKind::Group && grouped_ids.contains(&node.entity_id) {
+            return false;
+        }
         match node.kind {
             LayerNodeKind::Instrument => instruments.contains_key(&node.entity_id),
             LayerNodeKind::Waveform => waveforms.contains_key(&node.entity_id),
             LayerNodeKind::EffectRegion => effect_regions.contains_key(&node.entity_id),
             LayerNodeKind::MidiClip => midi_clips.contains_key(&node.entity_id),
             LayerNodeKind::PluginBlock => plugin_blocks.contains_key(&node.entity_id),
-            LayerNodeKind::TextNote => true, // text notes not tracked in tree yet
+            LayerNodeKind::TextNote => true,
             LayerNodeKind::Group => groups.contains_key(&node.entity_id),
         }
     });

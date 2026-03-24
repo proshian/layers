@@ -656,9 +656,20 @@ impl App {
                             let is_dbl = now.duration_since(self.last_vol_knob_click_time).as_millis() < 400;
                             self.last_vol_knob_click_time = now;
                             if is_dbl {
-                                // Double-click resets volume to 0 dB
-                                let before = self.waveforms[&wf_id].clone();
-                                self.waveforms.get_mut(&wf_id).unwrap().volume = 1.0;
+                                // Double-click resets volume to 0 dB (all multi-selected clips)
+                                let multi_ids = self.right_window.as_ref()
+                                    .map(|rw| rw.multi_target_ids.clone()).unwrap_or_default();
+                                let mut ops = Vec::new();
+                                for &mid in &multi_ids {
+                                    if let Some(before) = self.waveforms.get(&mid).cloned() {
+                                        if let Some(wf) = self.waveforms.get_mut(&mid) {
+                                            wf.volume = 1.0;
+                                        }
+                                        if let Some(after) = self.waveforms.get(&mid).cloned() {
+                                            ops.push(crate::operations::Operation::UpdateWaveform { id: mid, before, after });
+                                        }
+                                    }
+                                }
                                 if let Some(rw) = &mut self.right_window {
                                     rw.volume = 1.0;
                                     rw.vol_dragging = false;
@@ -667,13 +678,21 @@ impl App {
                                     rw.pitch_focused = false;
                                     rw.sample_bpm_focused = false;
                                 }
-                                let after = self.waveforms[&wf_id].clone();
-                                self.push_op(crate::operations::Operation::UpdateWaveform { id: wf_id, before, after });
+                                if ops.len() == 1 {
+                                    self.push_op(ops.into_iter().next().unwrap());
+                                } else if ops.len() > 1 {
+                                    self.push_op(crate::operations::Operation::Batch(ops));
+                                }
                                 self.sync_audio_clips();
                                 self.request_redraw();
                                 return;
                             }
                             let start_value = ui::palette::gain_to_vol_fader_pos(rw.volume);
+                            let multi_ids = rw.multi_target_ids.clone();
+                            // Capture snapshots before borrowing right_window mutably
+                            let snapshots: Vec<_> = multi_ids.iter()
+                                .filter_map(|id| self.waveforms.get(id).map(|wf| (*id, wf.clone())))
+                                .collect();
                             if let Some(rw) = &mut self.right_window {
                                 rw.vol_dragging = true;
                                 rw.drag_start_y = self.mouse_pos[1];
@@ -682,6 +701,7 @@ impl App {
                                 rw.pan_knob_focused = false;
                                 rw.pitch_focused = false;
                                 rw.sample_bpm_focused = false;
+                                rw.drag_start_snapshots = snapshots;
                             }
                             let _ = wf_id;
                             self.request_redraw();

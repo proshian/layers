@@ -1294,19 +1294,25 @@ impl App {
     }
 
     pub(crate) fn update_right_window(&mut self) {
-        if let Some(HitTarget::Waveform(id)) = self.selected.first().copied() {
-            if let Some(wf) = self.waveforms.get(&id) {
+        // Collect all selected waveform IDs
+        let wf_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| {
+            if let HitTarget::Waveform(id) = t { Some(*id) } else { None }
+        }).collect();
+
+        if !wf_ids.is_empty() {
+            let first_id = wf_ids[0];
+            if let Some(wf) = self.waveforms.get(&first_id) {
                 // Preserve vol_entry when updating the same waveform so that
                 // click-to-edit isn't reset by the unconditional update_right_window
                 // call at the end of the mouse-released handler.
-                let (vol_entry, sample_bpm_entry, pitch_entry, vol_fader_focused, pan_knob_focused, pitch_focused, sample_bpm_focused) = if self.right_window.as_ref().map_or(false, |rw| rw.target_id() == id) {
+                let (vol_entry, sample_bpm_entry, pitch_entry, vol_fader_focused, pan_knob_focused, pitch_focused, sample_bpm_focused) = if self.right_window.as_ref().map_or(false, |rw| rw.target_id() == first_id) {
                     let rw = self.right_window.take().unwrap();
                     (rw.vol_entry, rw.sample_bpm_entry, rw.pitch_entry, rw.vol_fader_focused, rw.pan_knob_focused, rw.pitch_focused, rw.sample_bpm_focused)
                 } else {
                     (ui::value_entry::ValueEntry::new(), ui::value_entry::ValueEntry::new(), ui::value_entry::ValueEntry::new(), false, false, false, false)
                 };
                 self.right_window = Some(ui::right_window::RightWindow {
-                    target: ui::right_window::RightWindowTarget::Waveform(id),
+                    target: ui::right_window::RightWindowTarget::Waveform(first_id),
                     volume: wf.volume,
                     pan: wf.pan,
                     warp_mode: wf.warp_mode,
@@ -1327,6 +1333,8 @@ impl App {
                     pitch_focused,
                     sample_bpm_focused,
                     add_effect_hovered: false,
+                    multi_target_ids: wf_ids,
+                    drag_start_snapshots: Vec::new(),
                 });
                 return;
             }
@@ -1368,6 +1376,8 @@ impl App {
                 pitch_focused: false,
                 sample_bpm_focused: false,
                 add_effect_hovered: false,
+                multi_target_ids: vec![wf_id],
+                drag_start_snapshots: Vec::new(),
             });
         }
     }
@@ -1404,6 +1414,8 @@ impl App {
                 pitch_focused: false,
                 sample_bpm_focused: false,
                 add_effect_hovered: false,
+                multi_target_ids: Vec::new(),
+                drag_start_snapshots: Vec::new(),
             });
         }
     }

@@ -4,7 +4,7 @@ use crate::InstanceRaw;
 use crate::ui::palette::{gain_to_db, gain_to_vol_fader_pos, vol_fader_pos_to_gain,
     VOL_FADER_DB_MAX, VOL_FADER_DB_BOTTOM, VOL_FADER_P_ZERO, VOL_FADER_P_BOTTOM};
 use crate::ui::value_entry::ValueEntry;
-use crate::ui::waveform::WarpMode;
+use crate::ui::waveform::{WarpMode, WaveformView};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RightWindowTarget {
@@ -110,6 +110,10 @@ pub struct RightWindow {
     pub pitch_focused: bool,
     pub sample_bpm_focused: bool,
     pub add_effect_hovered: bool,
+    /// All selected waveform IDs (for multi-selection editing)
+    pub multi_target_ids: Vec<EntityId>,
+    /// Snapshots of waveforms at drag start (for batch undo)
+    pub drag_start_snapshots: Vec<(EntityId, WaveformView)>,
 }
 
 impl RightWindow {
@@ -125,6 +129,14 @@ impl RightWindow {
 
     pub fn is_instrument(&self) -> bool {
         matches!(self.target, RightWindowTarget::Instrument(_))
+    }
+
+    pub fn is_multi(&self) -> bool {
+        self.multi_target_ids.len() > 1
+    }
+
+    pub fn selection_count(&self) -> usize {
+        self.multi_target_ids.len()
     }
 
     pub fn panel_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
@@ -225,21 +237,21 @@ impl RightWindow {
     }
 
     pub fn hit_test_reverse_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() { return false; }
+        if self.is_instrument() || self.is_multi() { return false; }
         let (rp, rs) = Self::reverse_button_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     pub fn hit_test_warp_mode_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() { return false; }
+        if self.is_instrument() || self.is_multi() { return false; }
         let (rp, rs) = Self::warp_mode_button_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     pub fn hit_test_warp_mode_selector(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() { return false; }
+        if self.is_instrument() || self.is_multi() { return false; }
         if self.warp_mode == WarpMode::Off { return false; }
         let (rp, rs) = Self::warp_mode_selector_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -247,7 +259,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_sample_bpm_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() { return false; }
+        if self.is_instrument() || self.is_multi() { return false; }
         if self.warp_mode != WarpMode::RePitch { return false; }
         let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -255,7 +267,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_pitch_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() { return false; }
+        if self.is_instrument() || self.is_multi() { return false; }
         if self.warp_mode != WarpMode::Semitone { return false; }
         let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -552,8 +564,8 @@ impl RightWindow {
             out.push(InstanceRaw { position: [x1 - thick, y1 - bracket_len], size: [thick, bracket_len], color, border_radius: 0.0 });
         }
 
-        // Reverse / Warp / Pitch — waveform-only controls
-        if self.is_waveform() {
+        // Reverse / Warp / Pitch — waveform-only controls (hidden for multi-selection)
+        if self.is_waveform() && !self.is_multi() {
 
         // Reverse button
         let (rev_pos, rev_size) = Self::reverse_button_rect(screen_w, screen_h, scale);
@@ -741,9 +753,14 @@ impl RightWindow {
         let val_line = 16.0 * scale;
         let rw_w = RIGHT_WINDOW_WIDTH * scale;
 
-        // "INSPECTOR" header label
+        // "INSPECTOR" header label (with selection count for multi-selection)
+        let header_text = if self.is_multi() {
+            format!("{} CLIPS", self.selection_count())
+        } else {
+            "INSPECTOR".to_string()
+        };
         out.push(TextEntry {
-            text: "INSPECTOR".to_string(),
+            text: header_text,
             x: pp[0] + 12.0 * scale,
             y: 11.0 * scale,
             font_size: header_font,
@@ -885,8 +902,8 @@ impl RightWindow {
             center: true,
         });
 
-        // Reverse / Warp / Pitch text — waveform-only
-        if self.is_waveform() {
+        // Reverse / Warp / Pitch text — waveform-only (hidden for multi-selection)
+        if self.is_waveform() && !self.is_multi() {
         let (rev_pos, rev_size) = Self::reverse_button_rect(screen_w, screen_h, scale);
         out.push(TextEntry {
             text: "Reverse".to_string(),
