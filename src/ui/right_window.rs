@@ -111,6 +111,7 @@ pub struct RightWindow {
     pub pitch_focused: bool,
     pub sample_bpm_focused: bool,
     pub add_effect_hovered: bool,
+    pub export_button_hovered: bool,
     /// Group name (populated when target is Group)
     pub group_name: String,
     /// Group member count (populated when target is Group)
@@ -470,7 +471,7 @@ impl RightWindow {
             out.push(InstanceRaw {
                 position: ebp,
                 size: ebs,
-                color: if self.add_effect_hovered {
+                color: if self.export_button_hovered {
                     settings.theme.bg_elevated
                 } else {
                     crate::theme::with_alpha(settings.theme.bg_elevated, 0.85)
@@ -845,7 +846,7 @@ impl RightWindow {
                 font_size: 12.0 * scale,
                 line_height: 14.0 * scale,
                 max_width: ebs[0] - padding - icon_size - 6.0 * scale,
-                color: if self.add_effect_hovered {
+                color: if self.export_button_hovered {
                     crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255)
                 } else {
                     crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 180)

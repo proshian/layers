@@ -238,9 +238,13 @@ impl App {
                     .map_or(0, |c| c.slots.len());
                 rw.hit_test_add_effect_button(self.mouse_pos, slot_count, sw, sh, scale)
             };
-            if hovered != rw.add_effect_hovered {
+            let export_hovered = rw.hit_test_export_button(self.mouse_pos, sw, sh, scale);
+            let add_changed = hovered != rw.add_effect_hovered;
+            let export_changed = export_hovered != rw.export_button_hovered;
+            if add_changed || export_changed {
                 if let Some(rw) = &mut self.right_window {
-                    rw.add_effect_hovered = hovered;
+                    if add_changed { rw.add_effect_hovered = hovered; }
+                    if export_changed { rw.export_button_hovered = export_hovered; }
                 }
                 self.request_redraw();
             }
