@@ -300,7 +300,6 @@ pub(crate) struct Gpu {
     pub(crate) browser_text_generation: u64,
 
     cached_wf_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
-    cached_er_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_text_note_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_plugin_block_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_group_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
@@ -673,7 +672,6 @@ impl Gpu {
             browser_text_buffers: Vec::new(),
             browser_text_generation: 0,
             cached_wf_label_bufs: Vec::new(),
-            cached_er_label_bufs: Vec::new(),
             cached_text_note_bufs: Vec::new(),
             cached_plugin_block_bufs: Vec::new(),
             cached_group_label_bufs: Vec::new(),
@@ -707,9 +705,8 @@ impl Gpu {
         computer_keyboard_armed: bool,
         playback_position: f64,
         export_regions: &indexmap::IndexMap<crate::entity_id::EntityId, ExportRegion>,
-        effect_regions: &indexmap::IndexMap<crate::entity_id::EntityId, effects::EffectRegion>,
         plugin_blocks: &indexmap::IndexMap<crate::entity_id::EntityId, effects::PluginBlock>,
-        editing_effect_name: Option<(crate::entity_id::EntityId, &str)>,
+        _editing_effect_name: Option<(crate::entity_id::EntityId, &str)>,
         waveforms: &indexmap::IndexMap<crate::entity_id::EntityId, waveform::WaveformView>,
         editing_waveform_name: Option<(crate::entity_id::EntityId, &str)>,
         plugin_editor: Option<&plugin_editor::PluginEditorWindow>,
@@ -1183,95 +1180,6 @@ impl Gpu {
         let world_right = world_left + w / camera.zoom;
         let world_top = camera.position[1];
         let world_bottom = world_top + h / camera.zoom;
-
-        // Effect region name labels (cached shaping, positions recomputed each frame)
-        let mut old_er_cache = std::mem::take(&mut self.cached_er_label_bufs);
-        let mut new_er_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
-        let mut er_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        for (er_idx, er) in effect_regions.iter() {
-            let er_right = er.position[0] + er.size[0];
-            let er_bottom = er.position[1] + er.size[1];
-            if er_right < world_left
-                || er.position[0] > world_right
-                || er_bottom < world_top
-                || er.position[1] > world_bottom
-            {
-                continue;
-            }
-            let region_screen_w = er.size[0] * camera.zoom;
-            if region_screen_w < 30.0 {
-                continue;
-            }
-
-            let pad = 6.0 / camera.zoom;
-            let name_x_world = er.position[0] + pad;
-            let name_y_world = er.position[1] - 18.0 / camera.zoom;
-            let name_screen_x = (name_x_world - camera.position[0]) * camera.zoom;
-            let name_screen_y = (name_y_world - camera.position[1]) * camera.zoom;
-
-            if settings_window.is_some() || command_palette.is_some() {
-                continue;
-            }
-            if let Some((cm_pos, cm_size)) = ctx_menu_rect {
-                let max_text_w = (region_screen_w - 12.0 * scale).max(20.0);
-                let name_line = 14.0 * scale;
-                if name_screen_x + max_text_w > cm_pos[0]
-                    && name_screen_x < cm_pos[0] + cm_size[0]
-                    && name_screen_y + name_line > cm_pos[1]
-                    && name_screen_y < cm_pos[1] + cm_size[1]
-                {
-                    continue;
-                }
-            }
-
-            let display_name = if let Some((idx, ref text)) = editing_effect_name {
-                if idx == *er_idx {
-                    format!("{}|", text)
-                } else {
-                    er.name.clone()
-                }
-            } else {
-                er.name.clone()
-            };
-
-            let name_font = 10.0 * scale;
-            let name_line = 14.0 * scale;
-            let max_text_w = (region_screen_w - 12.0 * scale).max(20.0);
-
-            let key = TextLabelCacheKey {
-                text: display_name.clone(),
-                max_width_q: (max_text_w * 2.0) as i32,
-                font_size_q: (name_font * 2.0) as i32,
-            };
-            if let Some(pos) = old_er_cache.iter().position(|(k, _)| *k == key) {
-                new_er_cache.push(old_er_cache.swap_remove(pos));
-            } else {
-                let mut buf =
-                    TextBuffer::new(&mut self.font_system, Metrics::new(name_font, name_line));
-                buf.set_size(&mut self.font_system, Some(max_text_w), Some(name_line));
-                let attrs = Attrs::new()
-                    .family(Family::Name(".AppleSystemUIFont"))
-                    .weight(glyphon::Weight(500));
-                buf.set_text(
-                    &mut self.font_system,
-                    &display_name,
-                    attrs,
-                    Shaping::Advanced,
-                );
-                buf.shape_until_scroll(&mut self.font_system, false);
-                new_er_cache.push((key, buf));
-            }
-
-            let is_editing = editing_effect_name.map_or(false, |(idx, _)| idx == *er_idx);
-            let alpha = if is_editing { 255 } else { 180 };
-            er_label_meta.push((
-                name_screen_x,
-                name_screen_y,
-                TextColor::rgba(255, 255, 255, alpha),
-                full_bounds,
-            ));
-        }
-        self.cached_er_label_bufs = new_er_cache;
 
         // Waveform sample name labels (cached shaping, positions recomputed each frame)
         let browser_right = sample_browser.map_or(0.0, |b| b.panel_width(scale));
@@ -2250,11 +2158,6 @@ impl Gpu {
             .iter()
             .zip(wf_label_meta.iter())
             .map(|(e, m)| cached_label_area(e, m));
-        let er_areas = self
-            .cached_er_label_bufs
-            .iter()
-            .zip(er_label_meta.iter())
-            .map(|(e, m)| cached_label_area(e, m));
         let plugin_areas = self
             .cached_plugin_block_bufs
             .iter()
@@ -2300,7 +2203,7 @@ impl Gpu {
             .into_iter()
             .chain(other_areas)
             .chain(wf_areas)
-            .chain(er_areas)
+
             .chain(plugin_areas)
             .chain(group_areas)
             .chain(auto_dot_areas)

@@ -65,7 +65,6 @@ impl App {
                                             self.keyboard_instrument_id = Some(*id);
                                             None
                                         },
-                                        crate::layers::LayerNodeKind::EffectRegion => Some(HitTarget::EffectRegion(*id)),
                                         crate::layers::LayerNodeKind::PluginBlock => Some(HitTarget::PluginBlock(*id)),
                                         crate::layers::LayerNodeKind::MidiClip => Some(HitTarget::MidiClip(*id)),
                                         crate::layers::LayerNodeKind::TextNote => Some(HitTarget::TextNote(*id)),
@@ -112,7 +111,6 @@ impl App {
                 let hit = hit_test(
                     &self.objects,
                     &self.waveforms,
-                    &self.effect_regions,
                     &self.plugin_blocks,
                     &self.loop_regions,
                     &self.export_regions,
@@ -151,10 +149,6 @@ impl App {
                             .selected
                             .iter()
                             .any(|t| matches!(t, HitTarget::Waveform(_)));
-                        let has_effect_region = self
-                            .selected
-                            .iter()
-                            .any(|t| matches!(t, HitTarget::EffectRegion(_)));
                         let has_midi_clips = self
                             .selected
                             .iter()
@@ -175,7 +169,6 @@ impl App {
                             });
                         MenuContext::Selection {
                             has_waveforms,
-                            has_effect_region,
                             has_midi_clips,
                             current_waveform_color,
                             current_midi_color,
@@ -236,18 +229,6 @@ impl App {
                     if !still_on_entry {
                         self.sample_browser.editing_browser_name = None;
                         self.sample_browser.text_dirty = true;
-                        self.request_redraw();
-                    }
-                }
-                // Cancel canvas effect-region name editing if clicking outside that region
-                if let Some((id, _)) = &self.editing_effect_name.clone() {
-                    let world = self.camera.screen_to_world(self.mouse_pos);
-                    let still_on = self.effect_regions.get(id).map_or(false, |er| {
-                        world[0] >= er.position[0] && world[0] <= er.position[0] + er.size[0]
-                            && world[1] >= er.position[1] && world[1] <= er.position[1] + er.size[1]
-                    });
-                    if !still_on {
-                        self.editing_effect_name = None;
                         self.request_redraw();
                     }
                 }
@@ -1175,15 +1156,12 @@ impl App {
                                             LayerNodeKind::Waveform => self.waveforms.get(id)
                                                 .map(|wf| if !wf.audio.filename.is_empty() { wf.audio.filename.clone() } else { wf.filename.clone() })
                                                 .unwrap_or_default(),
-                                            LayerNodeKind::EffectRegion => self.effect_regions.get(id)
-                                                .map(|er| er.name.clone())
-                                                .unwrap_or_default(),
                                             LayerNodeKind::Group => self.groups.get(id)
                                                 .map(|g| g.name.clone())
                                                 .unwrap_or_default(),
                                             _ => String::new(),
                                         };
-                                        if matches!(kind, LayerNodeKind::Waveform | LayerNodeKind::EffectRegion | LayerNodeKind::Group) {
+                                        if matches!(kind, LayerNodeKind::Waveform | LayerNodeKind::Group) {
                                             self.sample_browser.editing_browser_name = Some((*id, *kind, initial_text));
                                             self.sample_browser.text_dirty = true;
                                             self.request_redraw();
@@ -1236,20 +1214,6 @@ impl App {
                                             }
                                             self.selected.clear();
                                             self.selected.push(HitTarget::Waveform(*id));
-                                            self.update_right_window();
-                                        }
-                                        crate::layers::LayerNodeKind::EffectRegion => {
-                                            if let Some(er) = self.effect_regions.get(id) {
-                                                let (sw, sh, _) = self.screen_info();
-                                                let cx = er.position[0] + er.size[0] * 0.5;
-                                                let cy = er.position[1] + er.size[1] * 0.5;
-                                                self.camera.position = [
-                                                    cx - sw * 0.5 / self.camera.zoom,
-                                                    cy - sh * 0.5 / self.camera.zoom,
-                                                ];
-                                            }
-                                            self.selected.clear();
-                                            self.selected.push(HitTarget::EffectRegion(*id));
                                             self.update_right_window();
                                         }
                                         crate::layers::LayerNodeKind::PluginBlock => {
@@ -1380,17 +1344,6 @@ impl App {
                     if let Some((anchor, nwse)) = hit_test_corner_resize(def.position, def.size, world, self.camera.zoom) {
                         let before = def.clone();
                         self.drag = DragState::ResizingComponentDef { comp_id: ci, anchor, nwse, before };
-                        self.update_cursor();
-                        self.request_redraw();
-                        return;
-                    }
-                }
-
-                // --- effect region corner resize ---
-                for (&i, er) in self.effect_regions.iter() {
-                    if let Some((anchor, nwse)) = hit_test_corner_resize(er.position, er.size, world, self.camera.zoom) {
-                        let before = er.clone();
-                        self.drag = DragState::ResizingEffectRegion { region_id: i, anchor, nwse, before };
                         self.update_cursor();
                         self.request_redraw();
                         return;
@@ -1706,7 +1659,6 @@ impl App {
                 let hit = hit_test(
                     &self.objects,
                     &self.waveforms,
-                    &self.effect_regions,
                     &self.plugin_blocks,
                     &self.loop_regions,
                     &self.export_regions,
@@ -2047,7 +1999,6 @@ impl App {
                             let hit2 = hit_test(
                                 &self.objects,
                                 &self.waveforms,
-                                &self.effect_regions,
                                 &self.plugin_blocks,
                                 &self.loop_regions,
                                 &self.export_regions,
@@ -2304,21 +2255,6 @@ impl App {
                 }
 
                 // --- finish resizing effect region ---
-                if matches!(self.drag, DragState::ResizingEffectRegion { .. }) {
-                    if let DragState::ResizingEffectRegion { region_id, before, .. } =
-                        std::mem::replace(&mut self.drag, DragState::None)
-                    {
-                        if let Some(after) = self.effect_regions.get(&region_id) {
-                            self.push_op(crate::operations::Operation::UpdateEffectRegion { id: region_id, before, after: after.clone() });
-                        }
-                        self.sync_audio_clips();
-                        self.update_hover();
-                        self.update_cursor();
-                        self.request_redraw();
-                        return;
-                    }
-                }
-
                 // InstrumentRegion resize drag removed — instruments are non-spatial now
 
                 // --- finish MIDI note drag/resize ---
@@ -2811,11 +2747,6 @@ impl App {
                                     ops.push(crate::operations::Operation::UpdateWaveform { id, before, after: after.clone() });
                                 }
                             }
-                            (HitTarget::EffectRegion(id), EntityBeforeState::EffectRegion(before)) => {
-                                if let Some(after) = self.effect_regions.get(&id) {
-                                    ops.push(crate::operations::Operation::UpdateEffectRegion { id, before, after: after.clone() });
-                                }
-                            }
                             (HitTarget::PluginBlock(id), EntityBeforeState::PluginBlock(before)) => {
                                 if let Some(after) = self.plugin_blocks.get(&id) {
                                     ops.push(crate::operations::Operation::DeletePluginBlock { id, data: before });
@@ -2880,7 +2811,7 @@ impl App {
                         self.sync_audio_clips();
                         // Update group bounds for any moved members
                         let moved_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t {
-                            HitTarget::Waveform(id) | HitTarget::MidiClip(id) | HitTarget::EffectRegion(id)
+                            HitTarget::Waveform(id) | HitTarget::MidiClip(id)
                             | HitTarget::TextNote(id) | HitTarget::Object(id) => Some(*id),
                             _ => None,
                         }).collect();
@@ -2922,7 +2853,6 @@ impl App {
                         let raw_targets = targets_in_rect(
                             &self.objects,
                             &self.waveforms,
-                            &self.effect_regions,
                             &self.plugin_blocks,
                             &self.loop_regions,
                             &self.export_regions,

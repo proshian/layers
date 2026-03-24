@@ -25,7 +25,6 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) screen_h: f32,
     pub(crate) objects: &'a IndexMap<EntityId, CanvasObject>,
     pub(crate) waveforms: &'a IndexMap<EntityId, WaveformView>,
-    pub(crate) effect_regions: &'a IndexMap<EntityId, effects::EffectRegion>,
     pub(crate) plugin_blocks: &'a IndexMap<EntityId, effects::PluginBlock>,
     pub(crate) hovered: Option<HitTarget>,
     pub(crate) selected: &'a HashSet<HitTarget>,
@@ -121,27 +120,6 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         }
     }
 
-
-    // --- effect regions (rendered behind everything) ---
-    for (&id, er) in ctx.effect_regions.iter() {
-        let er_right = er.position[0] + er.size[0];
-        let er_bottom = er.position[1] + er.size[1];
-        if er_right < world_left
-            || er.position[0] > world_right
-            || er_bottom < world_top
-            || er.position[1] > world_bottom
-        {
-            continue;
-        }
-        let is_sel = ctx.selected.contains(&HitTarget::EffectRegion(id));
-        let is_hov = ctx.hovered == Some(HitTarget::EffectRegion(id));
-        let is_active = ctx.playhead_world_x.map_or(false, |px| {
-            px >= er.position[0] && px <= er.position[0] + er.size[0]
-        });
-        out.extend(effects::build_effect_region_instances(
-            er, camera, is_hov, is_sel, is_active, &ctx.settings.theme,
-        ));
-    }
 
     // --- plugin blocks ---
     for (&id, pb) in ctx.plugin_blocks.iter() {
@@ -591,7 +569,6 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         let Some((pos, size)) = target_rect(
             ctx.objects,
             ctx.waveforms,
-            ctx.effect_regions,
             ctx.plugin_blocks,
             ctx.loop_regions,
             ctx.export_regions,
@@ -880,7 +857,6 @@ pub(crate) fn build_waveform_vertices(verts: &mut Vec<WaveformVertex>, ctx: &Ren
 pub(crate) fn target_rect(
     objects: &IndexMap<EntityId, CanvasObject>,
     waveforms: &IndexMap<EntityId, WaveformView>,
-    effect_regions: &IndexMap<EntityId, effects::EffectRegion>,
     plugin_blocks: &IndexMap<EntityId, effects::PluginBlock>,
     loop_regions: &IndexMap<EntityId, LoopRegion>,
     export_regions: &IndexMap<EntityId, ExportRegion>,
@@ -899,10 +875,6 @@ pub(crate) fn target_rect(
         HitTarget::Waveform(id) => {
             let w = waveforms.get(id)?;
             Some((w.position, w.size))
-        }
-        HitTarget::EffectRegion(id) => {
-            let e = effect_regions.get(id)?;
-            Some((e.position, e.size))
         }
         HitTarget::PluginBlock(id) => {
             let p = plugin_blocks.get(id)?;

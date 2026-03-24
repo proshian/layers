@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use indexmap::IndexMap;
 
-use crate::effects::{self, EffectRegion, PluginBlock};
+use crate::effects::{self, PluginBlock};
 use crate::entity_id::{EntityId, new_id};
 use crate::{App, HitTarget};
 
@@ -215,8 +215,6 @@ fn test_plugin_block_audio_processing() {
 
 #[test]
 fn test_plugin_block_bypass_excludes_from_region() {
-    let region = EffectRegion::new([0.0, 0.0], [500.0, 300.0]);
-
     let mut blocks: IndexMap<EntityId, PluginBlock> = IndexMap::new();
     let id_a = new_id();
     let id_b = new_id();
@@ -225,15 +223,13 @@ fn test_plugin_block_bypass_excludes_from_region() {
     blocks.insert(id_a, pb_a);
     blocks.insert(id_b, make_plugin_block(200.0, 50.0, "id-b", "PluginB"));
 
-    let chain = effects::collect_plugins_for_region(&region, &blocks);
+    let chain = effects::collect_plugins_for_rect([0.0, 0.0], [500.0, 300.0], &blocks);
     assert_eq!(chain.len(), 1, "only non-bypassed plugin should be in chain");
     assert_eq!(chain[0], id_b, "the second plugin block should be in the chain");
 }
 
 #[test]
 fn test_plugin_block_spatial_chain_ordering() {
-    let region = EffectRegion::new([0.0, 0.0], [800.0, 300.0]);
-
     let mut blocks: IndexMap<EntityId, PluginBlock> = IndexMap::new();
     let id_right = new_id();
     let id_left = new_id();
@@ -242,9 +238,8 @@ fn test_plugin_block_spatial_chain_ordering() {
     blocks.insert(id_left, make_plugin_block(100.0, 50.0, "id-b", "Left"));
     blocks.insert(id_mid, make_plugin_block(250.0, 50.0, "id-c", "Middle"));
 
-    let chain = effects::collect_plugins_for_region(&region, &blocks);
+    let chain = effects::collect_plugins_for_rect([0.0, 0.0], [800.0, 300.0], &blocks);
     assert_eq!(chain.len(), 3);
-    // Sorted by X: Left (x=100), Middle (x=250), Right (x=400)
     assert_eq!(chain, vec![id_left, id_mid, id_right]);
 }
 
@@ -286,27 +281,27 @@ fn test_plugin_block_undo_redo() {
 
 #[test]
 fn test_plugin_block_sync_audio_clips() {
+    use crate::group::Group;
+
     let mut app = App::new_headless();
 
-    let region = EffectRegion::new([0.0, 0.0], [500.0, 300.0]);
-    app.effect_regions.insert(new_id(), region);
+    let group_id = new_id();
+    let group = Group::new(group_id, "FX Group".to_string(), [0.0, 0.0], [500.0, 300.0], vec![]);
+    app.groups.insert(group_id, group);
     app.plugin_blocks.insert(new_id(), make_plugin_block(50.0, 50.0, "id-a", "PluginA"));
 
-    // sync_audio_clips should not panic even with no audio engine (headless)
     app.sync_audio_clips();
 }
 
 #[test]
 fn test_plugin_block_outside_region_not_collected() {
-    let region = EffectRegion::new([0.0, 0.0], [200.0, 200.0]);
-
     let mut blocks: IndexMap<EntityId, PluginBlock> = IndexMap::new();
     let id_in = new_id();
     let id_out = new_id();
     blocks.insert(id_in, make_plugin_block(50.0, 50.0, "id-a", "Inside"));
     blocks.insert(id_out, make_plugin_block(500.0, 500.0, "id-b", "Outside"));
 
-    let chain = effects::collect_plugins_for_region(&region, &blocks);
+    let chain = effects::collect_plugins_for_rect([0.0, 0.0], [200.0, 200.0], &blocks);
     assert_eq!(chain.len(), 1);
     assert_eq!(chain[0], id_in);
 }

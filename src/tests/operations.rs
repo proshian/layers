@@ -579,18 +579,6 @@ fn test_serde_roundtrip_create_midi_note() {
 }
 
 #[test]
-fn test_serde_roundtrip_effect_region() {
-    serde_roundtrip_op(Operation::CreateEffectRegion {
-        id: new_id(),
-        data: crate::effects::EffectRegion {
-            position: [0.0, 0.0],
-            size: [600.0, 250.0],
-            name: "FX Zone".to_string(),
-        },
-    });
-}
-
-#[test]
 fn test_serde_roundtrip_plugin_block() {
     serde_roundtrip_op(Operation::CreatePluginBlock {
         id: new_id(),

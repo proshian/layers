@@ -191,7 +191,6 @@ pub(crate) fn hit_test_fade_curve_dot(
 pub(crate) fn hit_test(
     objects: &IndexMap<EntityId, CanvasObject>,
     waveforms: &IndexMap<EntityId, WaveformView>,
-    effect_regions: &IndexMap<EntityId, effects::EffectRegion>,
     plugin_blocks: &IndexMap<EntityId, effects::PluginBlock>,
     loop_regions: &IndexMap<EntityId, LoopRegion>,
     export_regions: &IndexMap<EntityId, ExportRegion>,
@@ -265,11 +264,6 @@ pub(crate) fn hit_test(
             return Some(HitTarget::MidiClip(id));
         }
     }
-    for (&id, er) in effect_regions.iter().rev() {
-        if er.hit_test_border(world_pos, camera) {
-            return Some(HitTarget::EffectRegion(id));
-        }
-    }
     // InstrumentRegion hit-testing removed — instruments are non-spatial now
     for (&id, lr) in loop_regions.iter().rev() {
         if lr.hit_test_border(world_pos, camera) {
@@ -312,7 +306,6 @@ pub(crate) fn hit_test(
 pub(crate) fn targets_in_rect(
     objects: &IndexMap<EntityId, CanvasObject>,
     waveforms: &IndexMap<EntityId, WaveformView>,
-    effect_regions: &IndexMap<EntityId, effects::EffectRegion>,
     plugin_blocks: &IndexMap<EntityId, effects::PluginBlock>,
     loop_regions: &IndexMap<EntityId, LoopRegion>,
     export_regions: &IndexMap<EntityId, ExportRegion>,
@@ -356,11 +349,6 @@ pub(crate) fn targets_in_rect(
         }
         if rects_overlap(rect_pos, rect_size, wf.position, wf.size) {
             result.push(HitTarget::Waveform(id));
-        }
-    }
-    for (&id, er) in effect_regions.iter() {
-        if rects_overlap(rect_pos, rect_size, er.position, er.size) {
-            result.push(HitTarget::EffectRegion(id));
         }
     }
     for (&id, pb) in plugin_blocks.iter() {

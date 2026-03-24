@@ -1,4 +1,5 @@
 use crate::entity_id::new_id;
+use crate::effects;
 use crate::storage;
 use crate::ui::palette::CommandAction;
 use crate::{App, CanvasObject, HitTarget};
@@ -310,7 +311,6 @@ fn target_rect_returns_group_bounds() {
     let result = crate::ui::rendering::target_rect(
         &app.objects,
         &app.waveforms,
-        &app.effect_regions,
         &app.plugin_blocks,
         &app.loop_regions,
         &app.export_regions,
@@ -325,4 +325,51 @@ fn target_rect_returns_group_bounds() {
     let (pos, size) = result.expect("target_rect should return Some for groups");
     assert_eq!(pos, group.position);
     assert_eq!(size, group.size);
+}
+
+#[test]
+fn add_effects_area_creates_group() {
+    let mut app = App::new_headless();
+    assert_eq!(app.groups.len(), 0);
+
+    app.execute_command(CommandAction::AddEffectsArea);
+
+    assert_eq!(app.groups.len(), 1);
+    let group = app.groups.values().next().unwrap();
+    assert!(group.member_ids.is_empty());
+    assert!(group.size[0] > 0.0);
+    assert!(group.size[1] > 0.0);
+
+    assert_eq!(app.selected.len(), 1);
+    assert!(matches!(app.selected[0], HitTarget::Group(_)));
+}
+
+#[test]
+fn collect_plugins_for_rect_finds_overlapping_blocks() {
+    let mut blocks = indexmap::IndexMap::new();
+
+    let id1 = new_id();
+    blocks.insert(id1, effects::PluginBlock::new(
+        [50.0, 50.0], "p1".into(), "Plugin1".into(), std::path::PathBuf::new(),
+    ));
+    let id2 = new_id();
+    blocks.insert(id2, effects::PluginBlock::new(
+        [200.0, 50.0], "p2".into(), "Plugin2".into(), std::path::PathBuf::new(),
+    ));
+    let id3 = new_id();
+    let mut pb3 = effects::PluginBlock::new(
+        [100.0, 50.0], "p3".into(), "Plugin3".into(), std::path::PathBuf::new(),
+    );
+    pb3.bypass = true;
+    blocks.insert(id3, pb3);
+
+    let rect_pos = [0.0, 0.0];
+    let rect_size = [300.0, 200.0];
+    let result = effects::collect_plugins_for_rect(rect_pos, rect_size, &blocks);
+
+    assert_eq!(result.len(), 2);
+    assert!(result.contains(&id1));
+    assert!(result.contains(&id2));
+    assert!(!result.contains(&id3), "bypassed plugins should be excluded");
+    assert_eq!(result[0], id1, "should be sorted by X position");
 }

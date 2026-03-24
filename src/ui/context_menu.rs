@@ -26,7 +26,6 @@ pub enum MenuContext {
     Grid,
     Selection {
         has_waveforms: bool,
-        has_effect_region: bool,
         has_midi_clips: bool,
         current_waveform_color: Option<[f32; 4]>,
         current_midi_color: Option<[f32; 4]>,
@@ -346,21 +345,12 @@ impl ContextMenu {
             ],
             MenuContext::Selection {
                 has_waveforms,
-                has_effect_region,
                 has_midi_clips,
                 current_waveform_color,
                 current_midi_color,
             } => {
                 let mut entries = vec![];
-                if has_effect_region {
-                    entries.push(ContextMenuEntry::Item(ContextMenuItem {
-                        label: "Rename",
-                        shortcut: "⌘R",
-                        action: CommandAction::RenameEffectRegion,
-                        checked: false,
-                    }));
-                    entries.push(ContextMenuEntry::Separator);
-                } else if has_waveforms {
+                if has_waveforms {
                     entries.push(ContextMenuEntry::Item(ContextMenuItem {
                         label: "Rename",
                         shortcut: "⌘R",
@@ -511,15 +501,6 @@ impl ContextMenu {
                             label: "Rename",
                             shortcut: "",
                             action: CommandAction::RenameSample,
-                            checked: false,
-                        }));
-                        entries.push(ContextMenuEntry::Separator);
-                    }
-                    LayerNodeKind::EffectRegion => {
-                        entries.push(ContextMenuEntry::Item(ContextMenuItem {
-                            label: "Rename",
-                            shortcut: "",
-                            action: CommandAction::RenameEffectRegion,
                             checked: false,
                         }));
                         entries.push(ContextMenuEntry::Separator);

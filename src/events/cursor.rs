@@ -473,19 +473,6 @@ impl App {
             return;
         }
 
-        // Resizing effect region
-        if let DragState::ResizingEffectRegion { region_id, anchor, .. } = self.drag {
-            let world = self.camera.screen_to_world(self.mouse_pos);
-            let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
-            if let Some(er) = self.effect_regions.get_mut(&region_id) {
-                er.position = pos;
-                er.size = size;
-            }
-            self.mark_dirty();
-            self.request_redraw();
-            return;
-        }
-
         // Resizing MIDI clip
         if let DragState::ResizingMidiClip { clip_id, anchor, .. } = self.drag {
             let world = self.camera.screen_to_world(self.mouse_pos);
@@ -820,7 +807,6 @@ impl App {
                     if matches!(
                         target,
                         HitTarget::Waveform(_)
-                            | HitTarget::EffectRegion(_)
                             | HitTarget::LoopRegion(_)
                             | HitTarget::ExportRegion(_)
                             | HitTarget::ComponentDef(_)
@@ -853,7 +839,7 @@ impl App {
                 // Live group bounds update during drag
                 for (target, _) in &offsets {
                     match target {
-                        HitTarget::Waveform(id) | HitTarget::MidiClip(id) | HitTarget::EffectRegion(id)
+                        HitTarget::Waveform(id) | HitTarget::MidiClip(id)
                         | HitTarget::TextNote(id) | HitTarget::Object(id) => {
                             self.update_groups_containing(*id);
                         }
@@ -886,7 +872,6 @@ impl App {
                         self.selected = targets_in_rect(
                             &self.objects,
                             &self.waveforms,
-                            &self.effect_regions,
                             &self.plugin_blocks,
                             &self.loop_regions,
                             &self.export_regions,
@@ -1211,13 +1196,6 @@ impl App {
                             CursorIcon::NeswResize
                         }
                     }
-                    DragState::ResizingEffectRegion { nwse, .. } => {
-                        if *nwse {
-                            CursorIcon::NwseResize
-                        } else {
-                            CursorIcon::NeswResize
-                        }
-                    }
                     DragState::ResizingLoopRegion { nwse, .. } => {
                         if *nwse {
                             CursorIcon::NwseResize
@@ -1264,36 +1242,30 @@ impl App {
                                 ComponentDefHover::CornerNE(_) | ComponentDefHover::CornerSW(_) => {
                                     CursorIcon::NeswResize
                                 }
-                                ComponentDefHover::None => match self.effect_region_hover {
-                                    EffectRegionHover::CornerNW(_)
-                                    | EffectRegionHover::CornerSE(_) => CursorIcon::NwseResize,
-                                    EffectRegionHover::CornerNE(_)
-                                    | EffectRegionHover::CornerSW(_) => CursorIcon::NeswResize,
-                                    EffectRegionHover::None => match self.export_hover {
-                                        ExportHover::CornerNW(_) | ExportHover::CornerSE(_) => {
+                                ComponentDefHover::None => match self.export_hover {
+                                    ExportHover::CornerNW(_) | ExportHover::CornerSE(_) => {
+                                        CursorIcon::NwseResize
+                                    }
+                                    ExportHover::CornerNE(_) | ExportHover::CornerSW(_) => {
+                                        CursorIcon::NeswResize
+                                    }
+                                    ExportHover::RenderPill(_) => CursorIcon::Pointer,
+                                    ExportHover::None => match self.loop_hover {
+                                        LoopHover::CornerNW(_) | LoopHover::CornerSE(_) => {
                                             CursorIcon::NwseResize
                                         }
-                                        ExportHover::CornerNE(_) | ExportHover::CornerSW(_) => {
+                                        LoopHover::CornerNE(_) | LoopHover::CornerSW(_) => {
                                             CursorIcon::NeswResize
                                         }
-                                        ExportHover::RenderPill(_) => CursorIcon::Pointer,
-                                        ExportHover::None => match self.loop_hover {
-                                            LoopHover::CornerNW(_) | LoopHover::CornerSE(_) => {
-                                                CursorIcon::NwseResize
+                                        LoopHover::None => {
+                                            if matches!(self.hovered, Some(HitTarget::MidiClip(i)) if self.editing_midi_clip == Some(i)) {
+                                                CursorIcon::Default
+                                            } else if self.hovered.is_some() {
+                                                CursorIcon::Grab
+                                            } else {
+                                                CursorIcon::Default
                                             }
-                                            LoopHover::CornerNE(_) | LoopHover::CornerSW(_) => {
-                                                CursorIcon::NeswResize
-                                            }
-                                            LoopHover::None => {
-                                                if matches!(self.hovered, Some(HitTarget::MidiClip(i)) if self.editing_midi_clip == Some(i)) {
-                                                    CursorIcon::Default
-                                                } else if self.hovered.is_some() {
-                                                    CursorIcon::Grab
-                                                } else {
-                                                    CursorIcon::Default
-                                                }
-                                            }
-                                        },
+                                        }
                                     },
                                 },
                             }
@@ -1402,7 +1374,6 @@ impl App {
         let raw_hover = hit_test(
             &self.objects,
             &self.waveforms,
-            &self.effect_regions,
             &self.plugin_blocks,
             &self.loop_regions,
             &self.export_regions,
@@ -1443,31 +1414,6 @@ impl App {
             }
         }
 
-
-        self.effect_region_hover = EffectRegionHover::None;
-        for (&i, er) in self.effect_regions.iter() {
-            let handle_sz = 24.0 / self.camera.zoom;
-            let hs = handle_sz * 0.5;
-            let p = er.position;
-            let s = er.size;
-            if point_in_rect(world, [p[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
-                self.effect_region_hover = EffectRegionHover::CornerNW(i);
-                break;
-            } else if point_in_rect(world, [p[0] + s[0] - hs, p[1] - hs], [handle_sz, handle_sz]) {
-                self.effect_region_hover = EffectRegionHover::CornerNE(i);
-                break;
-            } else if point_in_rect(world, [p[0] - hs, p[1] + s[1] - hs], [handle_sz, handle_sz]) {
-                self.effect_region_hover = EffectRegionHover::CornerSW(i);
-                break;
-            } else if point_in_rect(
-                world,
-                [p[0] + s[0] - hs, p[1] + s[1] - hs],
-                [handle_sz, handle_sz],
-            ) {
-                self.effect_region_hover = EffectRegionHover::CornerSE(i);
-                break;
-            }
-        }
 
         self.export_hover = ExportHover::None;
         for (&i, er) in self.export_regions.iter() {

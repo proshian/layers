@@ -152,17 +152,14 @@ fn test_hit_test_priority_order() {
     instances.insert(inst_id, inst);
 
     let camera = Camera::new();
-    let empty_er = IndexMap::new();
     let empty_pb = IndexMap::new();
     let empty_lr = IndexMap::new();
     let empty_xr = IndexMap::new();
     let empty_mc = IndexMap::new();
 
-    // With instance present, should hit instance first
     let result = hit_test(
         &objects,
         &waveforms,
-        &empty_er,
         &empty_pb,
         &empty_lr,
         &empty_xr,
@@ -183,7 +180,6 @@ fn test_hit_test_priority_order() {
     let result = hit_test(
         &objects,
         &waveforms,
-        &empty_er,
         &empty_pb,
         &empty_lr,
         &empty_xr,
@@ -199,12 +195,10 @@ fn test_hit_test_priority_order() {
     );
     assert_eq!(result, Some(HitTarget::Waveform(wf_id)));
 
-    // Without waveform, object wins over component def
     let empty_wf: IndexMap<EntityId, WaveformView> = IndexMap::new();
     let result = hit_test(
         &objects,
         &empty_wf,
-        &empty_er,
         &empty_pb,
         &empty_lr,
         &empty_xr,
@@ -243,7 +237,6 @@ fn test_targets_in_rect_skips_component_waveforms() {
     components.insert(comp_id, comp);
 
     let empty_obj = IndexMap::new();
-    let empty_er = IndexMap::new();
     let empty_pb = IndexMap::new();
     let empty_lr = IndexMap::new();
     let empty_xr = IndexMap::new();
@@ -253,7 +246,6 @@ fn test_targets_in_rect_skips_component_waveforms() {
     let targets = targets_in_rect(
         &empty_obj,
         &waveforms,
-        &empty_er,
         &empty_pb,
         &empty_lr,
         &empty_xr,

@@ -49,7 +49,6 @@ impl App {
                     screen_h: h,
                     objects: &self.objects,
                     waveforms: &self.waveforms,
-                    effect_regions: &self.effect_regions,
                     plugin_blocks: &self.plugin_blocks,
                     hovered: self.hovered,
                     selected: &selected_set,
@@ -157,7 +156,7 @@ impl App {
             let selected_entity_ids: std::collections::HashSet<crate::entity_id::EntityId> = self.selected.iter()
                 .filter_map(|t| match t {
                     HitTarget::Waveform(id) |
-                    HitTarget::EffectRegion(id) | HitTarget::PluginBlock(id) |
+                    HitTarget::PluginBlock(id) |
                     HitTarget::MidiClip(id) | HitTarget::TextNote(id) |
                     HitTarget::Group(id) => Some(*id),
                     _ => None,
@@ -177,11 +176,8 @@ impl App {
                 computer_keyboard_armed,
                 playback_pos,
                 &self.export_regions,
-                &self.effect_regions,
                 &self.plugin_blocks,
-                self.editing_effect_name
-                    .as_ref()
-                    .map(|(idx, s)| (*idx, s.as_str())),
+                None,
                 &self.waveforms,
                 self.editing_waveform_name
                     .as_ref()

@@ -1023,20 +1023,6 @@ impl App {
                                         self.mark_dirty();
                                     }
                                 }
-                                LayerNodeKind::EffectRegion => {
-                                    if self.effect_regions.contains_key(&id) {
-                                        let before = self.effect_regions[&id].clone();
-                                        let name = if text.trim().is_empty() {
-                                            "effects".to_string()
-                                        } else {
-                                            text
-                                        };
-                                        self.effect_regions.get_mut(&id).unwrap().name = name;
-                                        let after = self.effect_regions[&id].clone();
-                                        self.push_op(crate::operations::Operation::UpdateEffectRegion { id, before, after });
-                                        self.mark_dirty();
-                                    }
-                                }
                                 LayerNodeKind::Group => {
                                     if self.groups.contains_key(&id) {
                                         let before = self.groups[&id].clone();
@@ -1084,61 +1070,6 @@ impl App {
                             text.push_str(ch.as_ref());
                         }
                         self.sample_browser.text_dirty = true;
-                        self.request_redraw();
-                        return;
-                    }
-                    _ => {}
-                }
-            }
-
-            // --- effect region name editing input ---
-            if self.editing_effect_name.is_some() {
-                match &event.logical_key {
-                    Key::Named(NamedKey::Escape) => {
-                        self.editing_effect_name = None;
-                        self.request_redraw();
-                        return;
-                    }
-                    Key::Named(NamedKey::Enter) => {
-                        if let Some((idx, text)) = self.editing_effect_name.take() {
-                            if self.effect_regions.contains_key(&idx) {
-                                let before = self.effect_regions[&idx].clone();
-                                let name = if text.trim().is_empty() {
-                                    "effects".to_string()
-                                } else {
-                                    text
-                                };
-                                self.effect_regions.get_mut(&idx).unwrap().name = name;
-                                let after = self.effect_regions[&idx].clone();
-                                self.push_op(crate::operations::Operation::UpdateEffectRegion { id: idx, before, after });
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
-                    Key::Named(NamedKey::Backspace) => {
-                        let cmd = self.cmd_held();
-                        if let Some((_, ref mut text)) = self.editing_effect_name {
-                            if cmd {
-                                text.clear();
-                            } else {
-                                text.pop();
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
-                    Key::Named(NamedKey::Space) => {
-                        if let Some((_, ref mut text)) = self.editing_effect_name {
-                            text.push(' ');
-                        }
-                        self.request_redraw();
-                        return;
-                    }
-                    Key::Character(ch) if !self.cmd_held() => {
-                        if let Some((_, ref mut text)) = self.editing_effect_name {
-                            text.push_str(ch.as_ref());
-                        }
                         self.request_redraw();
                         return;
                     }
@@ -1385,33 +1316,8 @@ impl App {
                 }
             }
 
-            // --- Enter on selected effect region: show overlapping plugin info ---
             #[cfg(feature = "native")]
             if matches!(event.logical_key, Key::Named(NamedKey::Enter)) {
-                if let Some(HitTarget::EffectRegion(idx)) = self.selected.first().copied() {
-                    if let Some(er) = self.effect_regions.get(&idx) {
-                        let block_ids = effects::collect_plugins_for_region(er, &self.plugin_blocks);
-                        if block_ids.is_empty() {
-                            println!("  Effect region {:?} has no overlapping plugins", idx);
-                        } else {
-                            println!("  Effect region {:?} plugin chain:", idx);
-                            for (j, &bi) in block_ids.iter().enumerate() {
-                                let pb = &self.plugin_blocks[&bi];
-                                let param_count = pb
-                                    .gui
-                                    .lock()
-                                    .ok()
-                                    .and_then(|g| g.as_ref().map(|gui| gui.parameter_count()))
-                                    .unwrap_or(0);
-                                println!(
-                                    "    [{}] {} ({} params)",
-                                    j, pb.plugin_name, param_count
-                                );
-                            }
-                        }
-                    }
-                    self.request_redraw();
-                }
                 // Double-click on plugin block: open GUI
                 if let Some(HitTarget::PluginBlock(idx)) = self.selected.first().copied() {
                     if self.plugin_blocks.contains_key(&idx) {
@@ -1607,7 +1513,6 @@ impl App {
                                     use crate::layers::LayerNodeKind;
                                     let browser_target = self.selected.iter().find_map(|t| match t {
                                         HitTarget::Waveform(id) => Some((*id, LayerNodeKind::Waveform)),
-                                        HitTarget::EffectRegion(id) => Some((*id, LayerNodeKind::EffectRegion)),
                                         _ => None,
                                     });
                                     if let Some((id, kind)) = browser_target {
@@ -1615,26 +1520,17 @@ impl App {
                                             LayerNodeKind::Waveform => self.waveforms.get(&id)
                                                 .map(|wf| if !wf.audio.filename.is_empty() { wf.audio.filename.clone() } else { wf.filename.clone() })
                                                 .unwrap_or_default(),
-                                            LayerNodeKind::EffectRegion => self.effect_regions.get(&id)
-                                                .map(|er| er.name.clone())
-                                                .unwrap_or_default(),
                                             _ => String::new(),
                                         };
                                         self.sample_browser.editing_browser_name = Some((id, kind, initial_text));
                                         self.sample_browser.text_dirty = true;
                                     }
                                 } else {
-                                    let has_er = self
-                                        .selected
-                                        .iter()
-                                        .any(|t| matches!(t, HitTarget::EffectRegion(_)));
                                     let has_wf = self
                                         .selected
                                         .iter()
                                         .any(|t| matches!(t, HitTarget::Waveform(_)));
-                                    if has_er {
-                                        self.execute_command(CommandAction::RenameEffectRegion);
-                                    } else if has_wf {
+                                    if has_wf {
                                         self.execute_command(CommandAction::RenameSample);
                                     } else {
                                         self.toggle_recording();
@@ -1806,7 +1702,6 @@ impl App {
             && self.editing_component.is_none()
             && self.editing_midi_clip.is_none()
             && !self.editing_bpm.is_editing()
-            && self.editing_effect_name.is_none()
             && self.editing_waveform_name.is_none()
             && !self
                 .right_window

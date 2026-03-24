@@ -41,19 +41,6 @@ pub(crate) struct PendingRemoteAudioFetch {
 impl App {
     pub(crate) fn save_project_state(&mut self) {
         if let Some(storage) = &self.storage {
-            let stored_regions: Vec<storage::StoredEffectRegion> = self
-                .effect_regions
-                .iter()
-                .map(|(id, er)| storage::StoredEffectRegion {
-                    id: id.to_string(),
-                    position: er.position,
-                    size: er.size,
-                    plugin_ids: Vec::new(),
-                    plugin_names: Vec::new(),
-                    name: er.name.clone(),
-                })
-                .collect();
-
             let stored_plugin_blocks: Vec<storage::StoredPluginBlock> = self
                 .plugin_blocks
                 .iter()
@@ -143,7 +130,7 @@ impl App {
                     .iter()
                     .map(|p| p.to_string_lossy().to_string())
                     .collect(),
-                effect_regions: stored_regions,
+                effect_regions: Vec::new(),
                 plugin_blocks: stored_plugin_blocks,
                 loop_regions: self
                     .loop_regions
@@ -322,7 +309,6 @@ impl App {
         self.objects = IndexMap::new();
         self.waveforms.clear();
         self.audio_clips.clear();
-        self.effect_regions.clear();
         self.plugin_blocks.clear();
         self.components.clear();
         self.component_instances.clear();
@@ -335,7 +321,6 @@ impl App {
         self.loop_regions.clear();
         self.editing_component = None;
         self.editing_group = None;
-        self.editing_effect_name = None;
         self.editing_waveform_name = None;
         self.editing_bpm.cancel();
         self.dragging_bpm = None;
@@ -484,15 +469,6 @@ impl App {
             }
         }
 
-        self.effect_regions = storage::effect_regions_from_stored(state.effect_regions)
-            .into_iter()
-            .map(|(id, ser)| {
-                let mut region = effects::EffectRegion::new(ser.position, ser.size);
-                region.name = ser.name;
-                (id, region)
-            })
-            .collect();
-
         self.plugin_blocks = storage::plugin_blocks_from_stored(state.plugin_blocks)
             .into_iter()
             .map(|(id, spb)| {
@@ -612,7 +588,6 @@ impl App {
                 &self.instruments,
                 &self.midi_clips,
                 &self.waveforms,
-                &self.effect_regions,
                 &self.plugin_blocks,
                 &self.groups,
             );
@@ -626,7 +601,6 @@ impl App {
         self.selected_midi_notes.clear();
         self.editing_component = None;
         self.editing_group = None;
-        self.editing_effect_name = None;
         self.editing_waveform_name = None;
         self.editing_bpm.cancel();
         self.dragging_bpm = None;

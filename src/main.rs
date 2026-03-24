@@ -256,7 +256,6 @@ struct App {
     arrow_nudge_overlap_temp_splits: Vec<EntityId>,
     current_project_name: String,
     effect_chains: IndexMap<EntityId, effects::EffectChain>,
-    effect_regions: IndexMap<EntityId, effects::EffectRegion>,
     plugin_blocks: IndexMap<EntityId, effects::PluginBlock>,
     components: IndexMap<EntityId, component::ComponentDef>,
     component_instances: IndexMap<EntityId, component::ComponentInstance>,
@@ -268,7 +267,6 @@ struct App {
     loop_hover: LoopHover,
     select_area: Option<SelectArea>,
     component_def_hover: ComponentDefHover,
-    effect_region_hover: EffectRegionHover,
     groups: IndexMap<EntityId, group::Group>,
     group_hover: GroupHover,
     text_notes: IndexMap<EntityId, text_note::TextNote>,
@@ -283,7 +281,6 @@ struct App {
     cmd_velocity_hover_note: Option<(EntityId, usize)>,
     editing_component: Option<EntityId>,
     editing_group: Option<EntityId>,
-    editing_effect_name: Option<(EntityId, String)>,
     editing_waveform_name: Option<(EntityId, String)>,
     bpm: f32,
     editing_bpm: ui::value_entry::ValueEntry,
@@ -394,7 +391,6 @@ impl App {
             arrow_nudge_overlap_temp_splits: Vec::new(),
             current_project_name: project_name.into(),
             effect_chains: IndexMap::new(),
-            effect_regions: IndexMap::new(),
             plugin_blocks: IndexMap::new(),
             components: IndexMap::new(),
             component_instances: IndexMap::new(),
@@ -406,7 +402,6 @@ impl App {
             loop_hover: LoopHover::None,
             select_area: None,
             component_def_hover: ComponentDefHover::None,
-            effect_region_hover: EffectRegionHover::None,
             groups: IndexMap::new(),
             group_hover: GroupHover::None,
             text_notes: IndexMap::new(),
@@ -421,7 +416,6 @@ impl App {
             cmd_velocity_hover_note: None,
             editing_component: None,
             editing_group: None,
-            editing_effect_name: None,
             editing_waveform_name: None,
             bpm: 120.0,
             editing_bpm: ui::value_entry::ValueEntry::new(),
@@ -509,7 +503,7 @@ impl App {
     /// If `target` is a member of a non-entered group, return the group's HitTarget instead.
     fn redirect_to_group(&self, target: HitTarget) -> HitTarget {
         let entity_id = match target {
-            HitTarget::Waveform(id) | HitTarget::MidiClip(id) | HitTarget::EffectRegion(id)
+            HitTarget::Waveform(id) | HitTarget::MidiClip(id)
             | HitTarget::TextNote(id) | HitTarget::Object(id) | HitTarget::LoopRegion(id)
             | HitTarget::ExportRegion(id) | HitTarget::ComponentDef(id)
             | HitTarget::ComponentInstance(id) | HitTarget::PluginBlock(id) => id,
@@ -551,7 +545,6 @@ impl App {
             &self.instruments,
             &self.midi_clips,
             &self.waveforms,
-            &self.effect_regions,
             &self.plugin_blocks,
             &self.groups,
         );
@@ -560,7 +553,6 @@ impl App {
             &self.instruments,
             &self.midi_clips,
             &self.waveforms,
-            &self.effect_regions,
             &self.plugin_blocks,
             &self.groups,
         );
@@ -623,11 +615,6 @@ impl App {
             er.position[0] *= scale;
             er.position[1] *= scale;
             er.size[0] *= scale;
-        }
-        for efr in self.effect_regions.values_mut() {
-            efr.position[0] *= scale;
-            efr.position[1] *= scale;
-            efr.size[0] *= scale;
         }
         // Keep overlap snapshots in sync so live restore uses the correct scale.
         for snap in self.bpm_drag_overlap_snapshots.values_mut() {
@@ -736,7 +723,6 @@ impl App {
             browser_width,
             browser_visible,
             browser_expanded,
-            stored_effect_regions,
             stored_plugin_blocks,
             stored_loop_regions,
             stored_components,
@@ -749,11 +735,10 @@ impl App {
         ) = match loaded {
             Some(state) => {
                 println!(
-                    "  Loaded project '{}' ({} objects, {} waveforms, {} effect regions)",
+                    "  Loaded project '{}' ({} objects, {} waveforms)",
                     state.name,
                     state.objects.len(),
                     state.waveforms.len(),
-                    state.effect_regions.len(),
                 );
                 let cam = Camera {
                     position: state.camera_position,
@@ -870,7 +855,6 @@ impl App {
                     bw,
                     state.browser_visible,
                     Some(expanded),
-                    storage::effect_regions_from_stored(state.effect_regions),
                     storage::plugin_blocks_from_stored(state.plugin_blocks),
                     storage::loop_regions_from_stored(state.loop_regions),
                     storage::components_from_stored(state.components),
@@ -893,7 +877,6 @@ impl App {
                     260.0,
                     false,
                     None,
-                    Vec::new(),  // stored_effect_regions
                     Vec::new(),  // stored_plugin_blocks
                     Vec::new(),  // stored_loop_regions
                     Vec::new(),  // stored_components
@@ -986,18 +969,8 @@ impl App {
 
         let plugin_registry = effects::PluginRegistry::new();
 
-        // Restore effect region geometry
-        let restored_effect_regions: IndexMap<EntityId, effects::EffectRegion> = stored_effect_regions
-            .into_iter()
-            .map(|(id, ser)| {
-                let mut region = effects::EffectRegion::new(ser.position, ser.size);
-                region.name = ser.name;
-                (id, region)
-            })
-            .collect();
-
         // Restore plugin blocks; instances will be loaded lazily on first scan
-        let mut restored_plugin_blocks: IndexMap<EntityId, effects::PluginBlock> = stored_plugin_blocks
+        let restored_plugin_blocks: IndexMap<EntityId, effects::PluginBlock> = stored_plugin_blocks
             .into_iter()
             .map(|(id, spb)| {
                 let mut pb = effects::PluginBlock::new(
@@ -1020,35 +993,6 @@ impl App {
                 (id, pb)
             })
             .collect();
-
-        // Migration: if old project had plugins in regions but no plugin_blocks, generate them
-        if restored_plugin_blocks.is_empty() {
-            if let Some(s) = &storage {
-                if let Some(raw_state) = s.load_project_state() {
-                    for ser in raw_state.effect_regions.iter() {
-                        if ser.plugin_ids.is_empty() {
-                            continue;
-                        }
-                        let region_pos = ser.position;
-                        let mut x_offset = 10.0;
-                        for (pid, pname) in ser.plugin_ids.iter().zip(ser.plugin_names.iter()) {
-                            let pos = [region_pos[0] + x_offset, region_pos[1] + 10.0];
-                            let pb = effects::PluginBlock::new(
-                                pos,
-                                pid.clone(),
-                                pname.clone(),
-                                std::path::PathBuf::new(),
-                            );
-                            restored_plugin_blocks.insert(entity_id::new_id(), pb);
-                            x_offset += effects::PLUGIN_BLOCK_DEFAULT_SIZE[0] + 10.0;
-                        }
-                    }
-                    if !restored_plugin_blocks.is_empty() {
-                        println!("  Migrated {} plugin blocks from old region format", restored_plugin_blocks.len());
-                    }
-                }
-            }
-        }
 
         let restored_loop_regions: IndexMap<EntityId, LoopRegion> = stored_loop_regions
             .into_iter()
@@ -1114,7 +1058,6 @@ impl App {
                 &IndexMap::new(), // no instruments in old format yet
                 &restored_midi_clips,
                 &waveforms,
-                &restored_effect_regions,
                 &restored_plugin_blocks,
                 &IndexMap::new(), // no groups in old format
             );
@@ -1168,7 +1111,6 @@ impl App {
             arrow_nudge_overlap_temp_splits: Vec::new(),
             current_project_name: project_name,
             effect_chains: IndexMap::new(),
-            effect_regions: restored_effect_regions,
             plugin_blocks: restored_plugin_blocks,
             components: restored_components,
             component_instances: restored_instances,
@@ -1180,7 +1122,6 @@ impl App {
             loop_hover: LoopHover::None,
             select_area: None,
             component_def_hover: ComponentDefHover::None,
-            effect_region_hover: EffectRegionHover::None,
             groups: IndexMap::new(),
             group_hover: GroupHover::None,
             text_notes: restored_text_notes,
@@ -1195,7 +1136,6 @@ impl App {
             cmd_velocity_hover_note: None,
             editing_component: None,
             editing_group: None,
-            editing_effect_name: None,
             editing_waveform_name: None,
             bpm: loaded_bpm,
             editing_bpm: ui::value_entry::ValueEntry::new(),
@@ -1361,7 +1301,6 @@ impl App {
         let targets: Vec<HitTarget> = member_ids.iter().filter_map(|id| {
             if self.waveforms.contains_key(id) { Some(HitTarget::Waveform(*id)) }
             else if self.midi_clips.contains_key(id) { Some(HitTarget::MidiClip(*id)) }
-            else if self.effect_regions.contains_key(id) { Some(HitTarget::EffectRegion(*id)) }
             else if self.text_notes.contains_key(id) { Some(HitTarget::TextNote(*id)) }
             else if self.objects.contains_key(id) { Some(HitTarget::Object(*id)) }
             else if self.loop_regions.contains_key(id) { Some(HitTarget::LoopRegion(*id)) }
@@ -1371,7 +1310,7 @@ impl App {
         }).collect();
         if let Some((pos, size)) = group::bounding_box_of_selection(
             &targets,
-            &self.waveforms, &self.midi_clips, &self.effect_regions,
+            &self.waveforms, &self.midi_clips,
             &self.text_notes, &self.objects, &self.loop_regions,
             &self.export_regions, &self.components, &self.component_instances,
         ) {
@@ -1871,15 +1810,15 @@ impl App {
             engine.update_group_buses(group_buses);
 
             let regions: Vec<audio::AudioEffectRegion> = self
-                .effect_regions
+                .groups
                 .values()
-                .map(|er| {
-                    let block_ids = effects::collect_plugins_for_region(er, &self.plugin_blocks);
+                .map(|g| {
+                    let block_ids = effects::collect_plugins_for_rect(g.position, g.size, &self.plugin_blocks);
                     audio::AudioEffectRegion {
-                        x_start_px: er.position[0],
-                        x_end_px: er.position[0] + er.size[0],
-                        y_start: er.position[1],
-                        y_end: er.position[1] + er.size[1],
+                        x_start_px: g.position[0],
+                        x_end_px: g.position[0] + g.size[0],
+                        y_start: g.position[1],
+                        y_end: g.position[1] + g.size[1],
                         plugins: block_ids
                             .iter()
                             .filter_map(|id| self.plugin_blocks.get(id))
@@ -1934,11 +1873,12 @@ impl App {
             ([center[0] - w * 0.5, center[1] - h * 0.5], [w, h])
         };
         let id = new_id();
-        let er = effects::EffectRegion::new(pos, size);
-        self.effect_regions.insert(id, er.clone());
-        self.push_op(operations::Operation::CreateEffectRegion { id, data: er });
+        let name = format!("Group {}", self.groups.len() + 1);
+        let group = crate::group::Group::new(id, name, pos, size, vec![]);
+        self.groups.insert(id, group.clone());
+        self.push_op(operations::Operation::CreateGroup { id, data: group });
         self.selected.clear();
-        self.selected.push(HitTarget::EffectRegion(id));
+        self.selected.push(HitTarget::Group(id));
         self.request_redraw();
     }
 
@@ -2314,12 +2254,11 @@ impl App {
         let wf_y_end = wf_y + wf.size[1];
 
         let mut plugins = Vec::new();
-        for er in self.effect_regions.values() {
-            let ey = er.position[1];
-            let ey_end = ey + er.size[1];
-            // Check vertical overlap
+        for g in self.groups.values() {
+            let ey = g.position[1];
+            let ey_end = ey + g.size[1];
             if wf_y < ey_end && wf_y_end > ey {
-                let block_ids = effects::collect_plugins_for_region(er, &self.plugin_blocks);
+                let block_ids = effects::collect_plugins_for_rect(g.position, g.size, &self.plugin_blocks);
                 for id in &block_ids {
                     if let Some(pb) = self.plugin_blocks.get(id) {
                         plugins.push(pb.gui.clone());
@@ -2661,15 +2600,15 @@ impl App {
             .collect();
 
         let effect_regions: Vec<audio::AudioEffectRegion> = self
-            .effect_regions
+            .groups
             .values()
-            .map(|er| {
-                let block_ids = effects::collect_plugins_for_region(er, &self.plugin_blocks);
+            .map(|g| {
+                let block_ids = effects::collect_plugins_for_rect(g.position, g.size, &self.plugin_blocks);
                 audio::AudioEffectRegion {
-                    x_start_px: er.position[0],
-                    x_end_px: er.position[0] + er.size[0],
-                    y_start: er.position[1],
-                    y_end: er.position[1] + er.size[1],
+                    x_start_px: g.position[0],
+                    x_end_px: g.position[0] + g.size[0],
+                    y_start: g.position[1],
+                    y_end: g.position[1] + g.size[1],
                     plugins: block_ids
                         .iter()
                         .filter_map(|id| self.plugin_blocks.get(id))
@@ -2716,7 +2655,6 @@ impl App {
         match target {
             HitTarget::Object(i) => { if let Some(o) = self.objects.get_mut(i) { o.position = pos; } }
             HitTarget::Waveform(i) => { if let Some(w) = self.waveforms.get_mut(i) { w.position = pos; } }
-            HitTarget::EffectRegion(i) => { if let Some(e) = self.effect_regions.get_mut(i) { e.position = pos; } }
             HitTarget::PluginBlock(i) => { if let Some(p) = self.plugin_blocks.get_mut(i) { p.position = pos; } }
             HitTarget::LoopRegion(i) => { if let Some(l) = self.loop_regions.get_mut(i) { l.position = pos; } }
             HitTarget::ExportRegion(i) => { if let Some(e) = self.export_regions.get_mut(i) { e.position = pos; } }
@@ -2755,7 +2693,6 @@ impl App {
                 for mid in &member_ids {
                     if let Some(wf) = self.waveforms.get_mut(mid) { wf.position[0] += dx; wf.position[1] += dy; }
                     else if let Some(mc) = self.midi_clips.get_mut(mid) { mc.position[0] += dx; mc.position[1] += dy; }
-                    else if let Some(er) = self.effect_regions.get_mut(mid) { er.position[0] += dx; er.position[1] += dy; }
                     else if let Some(tn) = self.text_notes.get_mut(mid) { tn.position[0] += dx; tn.position[1] += dy; }
                     else if let Some(obj) = self.objects.get_mut(mid) { obj.position[0] += dx; obj.position[1] += dy; }
                     else if let Some(lr) = self.loop_regions.get_mut(mid) { lr.position[0] += dx; lr.position[1] += dy; }
@@ -2770,7 +2707,6 @@ impl App {
         match target {
             HitTarget::Object(i) => self.objects.get(i).map(|o| o.position).unwrap_or([0.0; 2]),
             HitTarget::Waveform(i) => self.waveforms.get(i).map(|w| w.position).unwrap_or([0.0; 2]),
-            HitTarget::EffectRegion(i) => self.effect_regions.get(i).map(|e| e.position).unwrap_or([0.0; 2]),
             HitTarget::PluginBlock(i) => self.plugin_blocks.get(i).map(|p| p.position).unwrap_or([0.0; 2]),
             HitTarget::LoopRegion(i) => self.loop_regions.get(i).map(|l| l.position).unwrap_or([0.0; 2]),
             HitTarget::ExportRegion(i) => self.export_regions.get(i).map(|e| e.position).unwrap_or([0.0; 2]),
@@ -2786,7 +2722,6 @@ impl App {
         match target {
             HitTarget::Object(i) => self.objects.get(i).map(|o| o.size).unwrap_or([50.0; 2]),
             HitTarget::Waveform(i) => self.waveforms.get(i).map(|w| w.size).unwrap_or([50.0; 2]),
-            HitTarget::EffectRegion(i) => self.effect_regions.get(i).map(|e| e.size).unwrap_or([50.0; 2]),
             HitTarget::PluginBlock(i) => self.plugin_blocks.get(i).map(|p| p.size).unwrap_or([50.0; 2]),
             HitTarget::LoopRegion(i) => self.loop_regions.get(i).map(|l| l.size).unwrap_or([50.0; 2]),
             HitTarget::ExportRegion(i) => self.export_regions.get(i).map(|e| e.size).unwrap_or([50.0; 2]),
@@ -2860,14 +2795,6 @@ impl App {
                             self.objects.insert(nid, obj.clone());
                             copy_ops.push(operations::Operation::CreateObject { id: nid, data: obj });
                             new_selected.push(HitTarget::Object(nid));
-                        }
-                    }
-                    HitTarget::EffectRegion(i) => {
-                        if let Some(er) = self.effect_regions.get(&i).cloned() {
-                            let nid = new_id();
-                            self.effect_regions.insert(nid, er.clone());
-                            copy_ops.push(operations::Operation::CreateEffectRegion { id: nid, data: er });
-                            new_selected.push(HitTarget::EffectRegion(nid));
                         }
                     }
                     HitTarget::PluginBlock(i) => {
@@ -2970,7 +2897,6 @@ impl App {
             match t {
                 HitTarget::Object(id) => self.objects.get(id).map(|o| (*t, EntityBeforeState::Object(o.clone()))),
                 HitTarget::Waveform(id) => self.waveforms.get(id).map(|w| (*t, EntityBeforeState::Waveform(w.clone()))),
-                HitTarget::EffectRegion(id) => self.effect_regions.get(id).map(|e| (*t, EntityBeforeState::EffectRegion(e.clone()))),
                 HitTarget::PluginBlock(id) => self.plugin_blocks.get(id).map(|p| (*t, EntityBeforeState::PluginBlock(p.snapshot()))),
                 HitTarget::LoopRegion(id) => self.loop_regions.get(id).map(|l| (*t, EntityBeforeState::LoopRegion(l.clone()))),
                 HitTarget::ExportRegion(id) => self.export_regions.get(id).map(|x| (*t, EntityBeforeState::ExportRegion(x.clone()))),
@@ -2998,9 +2924,6 @@ impl App {
             } else if let Some(mc) = self.midi_clips.get(mid) {
                 let t = HitTarget::MidiClip(*mid);
                 if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::MidiClip(mc.clone()))); }
-            } else if let Some(er) = self.effect_regions.get(mid) {
-                let t = HitTarget::EffectRegion(*mid);
-                if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::EffectRegion(er.clone()))); }
             } else if let Some(tn) = self.text_notes.get(mid) {
                 let t = HitTarget::TextNote(*mid);
                 if !existing_ids.contains(&t) { before_states.push((t, EntityBeforeState::TextNote(tn.clone()))); }
@@ -3047,11 +2970,6 @@ impl App {
                     (HitTarget::Waveform(id), EntityBeforeState::Waveform(before)) => {
                         if let Some(after) = self.waveforms.get(&id) {
                             ops.push(crate::operations::Operation::UpdateWaveform { id, before, after: after.clone() });
-                        }
-                    }
-                    (HitTarget::EffectRegion(id), EntityBeforeState::EffectRegion(before)) => {
-                        if let Some(after) = self.effect_regions.get(&id) {
-                            ops.push(crate::operations::Operation::UpdateEffectRegion { id, before, after: after.clone() });
                         }
                     }
                     (HitTarget::PluginBlock(id), EntityBeforeState::PluginBlock(before)) => {
@@ -3124,7 +3042,7 @@ impl App {
             self.sync_audio_clips();
             // Update group bounds for any nudged members
             let nudged_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t {
-                HitTarget::Waveform(id) | HitTarget::MidiClip(id) | HitTarget::EffectRegion(id)
+                HitTarget::Waveform(id) | HitTarget::MidiClip(id)
                 | HitTarget::TextNote(id) | HitTarget::Object(id) => Some(*id),
                 _ => None,
             }).collect();
@@ -3152,7 +3070,6 @@ impl App {
                 match t {
                     HitTarget::Object(id) => self.objects.get(id).map(|o| (*t, EntityBeforeState::Object(o.clone()))),
                     HitTarget::Waveform(id) => self.waveforms.get(id).map(|w| (*t, EntityBeforeState::Waveform(w.clone()))),
-                    HitTarget::EffectRegion(id) => self.effect_regions.get(id).map(|e| (*t, EntityBeforeState::EffectRegion(e.clone()))),
                     HitTarget::PluginBlock(id) => self.plugin_blocks.get(id).map(|p| (*t, EntityBeforeState::PluginBlock(p.snapshot()))),
                     HitTarget::LoopRegion(id) => self.loop_regions.get(id).map(|l| (*t, EntityBeforeState::LoopRegion(l.clone()))),
                     HitTarget::ExportRegion(id) => self.export_regions.get(id).map(|x| (*t, EntityBeforeState::ExportRegion(x.clone()))),

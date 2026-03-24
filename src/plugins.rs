@@ -368,38 +368,7 @@ impl App {
         println!("  Added '{}' to group effect chain", plugin_name);
     }
 
-    pub(crate) fn add_plugin_to_selected_effect_region(&mut self, plugin_id: &str, plugin_name: &str) {
-        let region_id = self.selected.iter().find_map(|t| {
-            if let HitTarget::EffectRegion(id) = t {
-                Some(*id)
-            } else {
-                None
-            }
-        });
-        let Some(region_id) = region_id else {
-            println!("  No effect region selected, cannot add plugin");
-            return;
-        };
-        let Some(region) = self.effect_regions.get(&region_id) else {
-            return;
-        };
-
-        let existing = effects::collect_plugins_for_region(region, &self.plugin_blocks);
-        let position = if let Some(&last_id) = existing.last() {
-            if let Some(last) = self.plugin_blocks.get(&last_id) {
-                [
-                    last.position[0] + last.size[0] + 10.0,
-                    last.position[1],
-                ]
-            } else {
-                [region.position[0] + 10.0, region.position[1] + 30.0]
-            }
-        } else {
-            [region.position[0] + 10.0, region.position[1] + 30.0]
-        };
-
-        self.add_plugin_block(position, plugin_id, plugin_name);
-    }
+    pub(crate) fn add_plugin_to_selected_effect_region(&mut self, _plugin_id: &str, _plugin_name: &str) {}
 
     /// Open the VST3 GUI for a specific slot in an effect chain.
     pub(crate) fn open_effect_chain_slot_gui(&mut self, chain_id: EntityId, slot_idx: usize) {

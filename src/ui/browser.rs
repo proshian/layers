@@ -1019,7 +1019,6 @@ impl SampleBrowser {
                     let dot_color = match &entry.kind {
                         EntryKind::LayerNode { kind, color, .. } => match kind {
                             LayerNodeKind::Instrument => settings.theme.pill_instrument,
-                            LayerNodeKind::EffectRegion => settings.theme.pill_effect,
                             LayerNodeKind::PluginBlock => settings.theme.pill_effect,
                             LayerNodeKind::TextNote => settings.theme.category_dot,
                             LayerNodeKind::Group => settings.theme.component_border_color,
@@ -1305,7 +1304,6 @@ impl SampleBrowser {
                             LayerNodeKind::Instrument => crate::theme::RuntimeTheme::text_u8(theme.text_primary, 230),
                             LayerNodeKind::MidiClip => crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 230),
                             LayerNodeKind::Waveform => crate::theme::RuntimeTheme::text_u8(theme.text_primary, 240),
-                            LayerNodeKind::EffectRegion => crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 240),
                             LayerNodeKind::PluginBlock => crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 230),
                             LayerNodeKind::TextNote => crate::theme::RuntimeTheme::text_u8(theme.text_dim, 255),
                             LayerNodeKind::Group => crate::theme::RuntimeTheme::text_u8(theme.text_primary, 230),

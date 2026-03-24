@@ -7,7 +7,6 @@ impl App {
             match t {
                 HitTarget::Object(id) => { if let Some(d) = self.objects.get(id) { ops.push(operations::Operation::CreateObject { id: *id, data: d.clone() }); } }
                 HitTarget::Waveform(id) => { if let Some(d) = self.waveforms.get(id) { let ac = self.audio_clips.get(id).cloned(); ops.push(operations::Operation::CreateWaveform { id: *id, data: d.clone(), audio_clip: ac.map(|c| (*id, c)) }); } }
-                HitTarget::EffectRegion(id) => { if let Some(d) = self.effect_regions.get(id) { ops.push(operations::Operation::CreateEffectRegion { id: *id, data: d.clone() }); } }
                 HitTarget::PluginBlock(id) => { if let Some(d) = self.plugin_blocks.get(id) { ops.push(operations::Operation::CreatePluginBlock { id: *id, data: d.snapshot() }); } }
                 HitTarget::LoopRegion(id) => { if let Some(d) = self.loop_regions.get(id) { ops.push(operations::Operation::CreateLoopRegion { id: *id, data: d.clone() }); } }
                 HitTarget::ExportRegion(id) => { if let Some(d) = self.export_regions.get(id) { ops.push(operations::Operation::CreateExportRegion { id: *id, data: d.clone() }); } }
@@ -31,7 +30,6 @@ impl App {
         let hit = hit_test(
             &self.objects,
             &self.waveforms,
-            &self.effect_regions,
             &self.plugin_blocks,
             &self.loop_regions,
             &self.export_regions,
@@ -404,15 +402,6 @@ impl App {
                         new_selected.push(HitTarget::Waveform(nid));
                     }
                 }
-                HitTarget::EffectRegion(i) => {
-                    if let Some(er) = self.effect_regions.get(&i).cloned() {
-                        let mut er = er;
-                        er.position[0] += er.size[0];
-                        let nid = new_id();
-                        self.effect_regions.insert(nid, er);
-                        new_selected.push(HitTarget::EffectRegion(nid));
-                    }
-                }
                 HitTarget::PluginBlock(i) => {
                     if let Some(pb) = self.plugin_blocks.get(&i).cloned() {
                         let mut pb = pb;
@@ -532,11 +521,6 @@ impl App {
                         self.clipboard.items.push(ClipboardItem::Waveform(wf.clone(), clip));
                     }
                 }
-                HitTarget::EffectRegion(i) => {
-                    if let Some(er) = self.effect_regions.get(i) {
-                        self.clipboard.items.push(ClipboardItem::EffectRegion(er.clone()));
-                    }
-                }
                 HitTarget::PluginBlock(i) => {
                     if let Some(pb) = self.plugin_blocks.get(i) {
                         self.clipboard.items.push(ClipboardItem::PluginBlock(pb.clone()));
@@ -647,7 +631,6 @@ impl App {
             let pos = match item {
                 ClipboardItem::Object(o) => o.position,
                 ClipboardItem::Waveform(w, _) => w.position,
-                ClipboardItem::EffectRegion(e) => e.position,
                 ClipboardItem::PluginBlock(pb) => pb.position,
                 ClipboardItem::LoopRegion(l) => l.position,
                 ClipboardItem::ExportRegion(x) => x.position,
@@ -688,13 +671,6 @@ impl App {
                         self.audio_clips.insert(nid, c);
                     }
                     new_selected.push(HitTarget::Waveform(nid));
-                }
-                ClipboardItem::EffectRegion(mut e) => {
-                    e.position[0] += dx;
-                    e.position[1] += dy;
-                    let nid = new_id();
-                    self.effect_regions.insert(nid, e);
-                    new_selected.push(HitTarget::EffectRegion(nid));
                 }
                 ClipboardItem::PluginBlock(mut pb) => {
                     pb.position[0] += dx;
@@ -796,7 +772,6 @@ impl App {
         let mut del_ops: Vec<operations::Operation> = Vec::new();
         let obj_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::Object(i) => Some(*i), _ => None }).collect();
         let wf_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::Waveform(i) => Some(*i), _ => None }).collect();
-        let er_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::EffectRegion(i) => Some(*i), _ => None }).collect();
         let pb_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::PluginBlock(i) => Some(*i), _ => None }).collect();
         let lr_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::LoopRegion(i) => Some(*i), _ => None }).collect();
         let xr_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ExportRegion(i) => Some(*i), _ => None }).collect();
@@ -831,7 +806,6 @@ impl App {
             self.waveforms.shift_remove(&id);
             self.audio_clips.shift_remove(&id);
         }
-        for &id in &er_ids { if let Some(d) = self.effect_regions.get(&id) { del_ops.push(operations::Operation::DeleteEffectRegion { id, data: d.clone() }); } self.effect_regions.shift_remove(&id); }
         for &id in &pb_ids { if let Some(d) = self.plugin_blocks.get(&id) { del_ops.push(operations::Operation::DeletePluginBlock { id, data: d.snapshot() }); } self.plugin_blocks.shift_remove(&id); }
         for &id in &lr_ids { if let Some(d) = self.loop_regions.get(&id) { del_ops.push(operations::Operation::DeleteLoopRegion { id, data: d.clone() }); } self.loop_regions.shift_remove(&id); }
         for &id in &xr_ids { if let Some(d) = self.export_regions.get(&id) { del_ops.push(operations::Operation::DeleteExportRegion { id, data: d.clone() }); } self.export_regions.shift_remove(&id); }
@@ -843,7 +817,7 @@ impl App {
         }
 
         // Remove deleted entities from group member lists and update bounds
-        let all_deleted: Vec<EntityId> = [&obj_ids, &wf_ids, &er_ids, &pb_ids, &lr_ids, &xr_ids, &mc_ids, &tn_ids]
+        let all_deleted: Vec<EntityId> = [&obj_ids, &wf_ids, &pb_ids, &lr_ids, &xr_ids, &mc_ids, &tn_ids]
             .iter().flat_map(|v| v.iter().copied()).collect();
         let mut groups_to_update: Vec<EntityId> = Vec::new();
         for (gid, group) in self.groups.iter_mut() {

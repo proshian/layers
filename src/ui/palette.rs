@@ -32,7 +32,6 @@ pub enum CommandAction {
     CreateInstance,
     GoToComponent,
     OpenSettings,
-    RenameEffectRegion,
     RenameSample,
     ToggleSnapToGrid,
     ToggleVerticalSnap,

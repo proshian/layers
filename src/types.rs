@@ -27,7 +27,6 @@ pub struct CanvasObject {
 pub(crate) enum HitTarget {
     Object(EntityId),
     Waveform(EntityId),
-    EffectRegion(EntityId),
     PluginBlock(EntityId),
     LoopRegion(EntityId),
     ExportRegion(EntityId),
@@ -90,12 +89,6 @@ pub(crate) enum DragState {
         anchor: [f32; 2],
         nwse: bool,
         before: component::ComponentDef,
-    },
-    ResizingEffectRegion {
-        region_id: EntityId,
-        anchor: [f32; 2],
-        nwse: bool,
-        before: effects::EffectRegion,
     },
     ResizingLoopRegion {
         region_id: EntityId,
@@ -216,7 +209,6 @@ pub(crate) enum DragState {
 pub(crate) enum EntityBeforeState {
     Object(CanvasObject),
     Waveform(WaveformView),
-    EffectRegion(effects::EffectRegion),
     PluginBlock(effects::PluginBlockSnapshot),
     LoopRegion(LoopRegion),
     ExportRegion(ExportRegion),
@@ -229,15 +221,6 @@ pub(crate) enum EntityBeforeState {
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum ComponentDefHover {
-    None,
-    CornerNW(EntityId),
-    CornerNE(EntityId),
-    CornerSW(EntityId),
-    CornerSE(EntityId),
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum EffectRegionHover {
     None,
     CornerNW(EntityId),
     CornerNE(EntityId),
@@ -267,7 +250,6 @@ pub(crate) enum GroupHover {
 pub(crate) enum ClipboardItem {
     Object(CanvasObject),
     Waveform(WaveformView, Option<AudioClipData>),
-    EffectRegion(effects::EffectRegion),
     PluginBlock(effects::PluginBlock),
     LoopRegion(LoopRegion),
     ExportRegion(ExportRegion),

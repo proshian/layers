@@ -26,7 +26,6 @@ pub(crate) fn bounding_box_of_selection(
     targets: &[HitTarget],
     waveforms: &indexmap::IndexMap<EntityId, crate::ui::waveform::WaveformView>,
     midi_clips: &indexmap::IndexMap<EntityId, crate::midi::MidiClip>,
-    effect_regions: &indexmap::IndexMap<EntityId, crate::effects::EffectRegion>,
     text_notes: &indexmap::IndexMap<EntityId, crate::text_note::TextNote>,
     objects: &indexmap::IndexMap<EntityId, crate::CanvasObject>,
     loop_regions: &indexmap::IndexMap<EntityId, crate::regions::LoopRegion>,
@@ -44,7 +43,6 @@ pub(crate) fn bounding_box_of_selection(
         let pos_size = match target {
             HitTarget::Waveform(id) => waveforms.get(id).map(|w| (w.position, w.size)),
             HitTarget::MidiClip(id) => midi_clips.get(id).map(|m| (m.position, m.size)),
-            HitTarget::EffectRegion(id) => effect_regions.get(id).map(|e| (e.position, e.size)),
             HitTarget::TextNote(id) => text_notes.get(id).map(|t| (t.position, t.size)),
             HitTarget::Object(id) => objects.get(id).map(|o| (o.position, o.size)),
             HitTarget::LoopRegion(id) => loop_regions.get(id).map(|l| (l.position, l.size)),

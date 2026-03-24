@@ -29,9 +29,6 @@ impl App {
                         self.selected.push(HitTarget::Waveform(id));
                     }
                 }
-                for &id in self.effect_regions.keys() {
-                    self.selected.push(HitTarget::EffectRegion(id));
-                }
                 for &id in self.loop_regions.keys() {
                     self.selected.push(HitTarget::LoopRegion(id));
                 }
@@ -99,21 +96,6 @@ impl App {
                     } else {
                         Some(SettingsWindow::new())
                     };
-                }
-            }
-            CommandAction::RenameEffectRegion => {
-                let selected_er = self.selected.iter().find_map(|t| {
-                    if let HitTarget::EffectRegion(i) = t {
-                        Some(*i)
-                    } else {
-                        None
-                    }
-                });
-                if let Some(er_id) = selected_er {
-                    if let Some(er) = self.effect_regions.get(&er_id) {
-                        let current = er.name.clone();
-                        self.editing_effect_name = Some((er_id, current));
-                    }
                 }
             }
             CommandAction::RenameSample => {
@@ -398,7 +380,7 @@ impl App {
                 if let Some(target) = self.selected.first() {
                     let id = match target {
                         HitTarget::Waveform(id) |
-                        HitTarget::EffectRegion(id) | HitTarget::MidiClip(id) |
+                        HitTarget::MidiClip(id) |
                         HitTarget::PluginBlock(id) => Some(*id),
                         _ => None,
                     };
@@ -414,7 +396,7 @@ impl App {
                 if let Some(target) = self.selected.first() {
                     let id = match target {
                         HitTarget::Waveform(id) |
-                        HitTarget::EffectRegion(id) | HitTarget::MidiClip(id) |
+                        HitTarget::MidiClip(id) |
                         HitTarget::PluginBlock(id) => Some(*id),
                         _ => None,
                     };
@@ -468,7 +450,6 @@ impl App {
                         &targets,
                         &self.waveforms,
                         &self.midi_clips,
-                        &self.effect_regions,
                         &self.text_notes,
                         &self.objects,
                         &self.loop_regions,
@@ -479,7 +460,6 @@ impl App {
                         let member_ids: Vec<crate::entity_id::EntityId> = targets.iter().filter_map(|t| match t {
                             HitTarget::Object(id)
                             | HitTarget::Waveform(id)
-                            | HitTarget::EffectRegion(id)
                             | HitTarget::PluginBlock(id)
                             | HitTarget::LoopRegion(id)
                             | HitTarget::ExportRegion(id)
@@ -515,8 +495,6 @@ impl App {
                                 self.selected.push(HitTarget::Object(*mid));
                             } else if self.waveforms.contains_key(mid) {
                                 self.selected.push(HitTarget::Waveform(*mid));
-                            } else if self.effect_regions.contains_key(mid) {
-                                self.selected.push(HitTarget::EffectRegion(*mid));
                             } else if self.midi_clips.contains_key(mid) {
                                 self.selected.push(HitTarget::MidiClip(*mid));
                             } else if self.text_notes.contains_key(mid) {
