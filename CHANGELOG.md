@@ -1,3 +1,6 @@
+- 2026-03-24: fix: groups now persist on project save/load (41.3k loc)
+- 2026-03-24: ui: move Export WAV button to bottom of right panel for groups (41.3k loc)
+- 2026-03-24: refactor: extract collect_chain_plugins helper and group membership lookup, fix indentation (41.2k loc)
 - 2026-03-24: feat: group name rendered inside bounds like waveform labels, not as small badge above (41.2k loc)
 - 2026-03-24: feat: group renaming via double-click in layers browser, same as waveform/effect region rename (41.2k loc)
 - 2026-03-24: fix: VST3 audio glitches — pre-allocate ParameterChanges to avoid heap alloc on audio thread, use actual device sample rate (41.2k loc)

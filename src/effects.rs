@@ -187,6 +187,8 @@ impl PluginGuiStub {
     pub fn send_midi_note_off(&self, _note: u8, _velocity: u8, _channel: u8, _sample_offset: i32) {}
     pub fn audio_input_channels(&self) -> usize { 0 }
     pub fn audio_output_channels(&self) -> usize { 0 }
+    pub fn get_latency_samples(&self) -> u32 { 0 }
+    pub fn latency_changed(&self) -> bool { false }
 }
 
 #[derive(Clone)]

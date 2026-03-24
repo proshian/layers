@@ -69,6 +69,13 @@ int vst3_gui_send_midi(Vst3GuiHandle* handle,
 int vst3_gui_get_audio_input_channels(Vst3GuiHandle* handle);
 int vst3_gui_get_audio_output_channels(Vst3GuiHandle* handle);
 
+// Query plugin-reported latency in samples (valid after setup_processing).
+int vst3_gui_get_latency_samples(Vst3GuiHandle* handle);
+
+// Poll whether the plugin signalled a latency change since last check.
+// Returns 1 and resets the flag, or 0 if unchanged.
+int vst3_gui_latency_changed(Vst3GuiHandle* handle);
+
 // --- Plugin scanning ---
 
 // Opaque scan result handle.

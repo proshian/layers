@@ -23,3 +23,4 @@ mod effect_chains;
 mod settings;
 mod groups;
 mod takes;
+mod latency_compensation;

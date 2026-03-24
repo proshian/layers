@@ -1531,7 +1531,7 @@ impl RightWindow {
     pub fn export_button_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
         let margin = 8.0 * scale;
-        let btn_y = pp[1] + Self::GROUP_EXPORT_BTN_Y * scale;
+        let btn_y = pp[1] + ps[1] - EFFECT_ADD_BUTTON_H * scale - margin;
         ([pp[0] + margin, btn_y], [ps[0] - margin * 2.0, EFFECT_ADD_BUTTON_H * scale])
     }
 

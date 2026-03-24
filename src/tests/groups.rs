@@ -1,4 +1,5 @@
 use crate::entity_id::new_id;
+use crate::storage;
 use crate::ui::palette::CommandAction;
 use crate::{App, CanvasObject, HitTarget};
 
@@ -188,4 +189,47 @@ fn rename_group_via_browser_inline_edit() {
     // Redo should restore the new name
     app.redo_op();
     assert_eq!(app.groups[&group_id].name, "My Custom Group");
+}
+
+#[test]
+fn group_roundtrip_serialization() {
+    let mut app = App::new_headless();
+
+    let id1 = new_id();
+    let id2 = new_id();
+    app.objects.insert(id1, CanvasObject {
+        position: [10.0, 20.0],
+        size: [100.0, 50.0],
+        color: [1.0, 0.0, 0.0, 1.0],
+        border_radius: 0.0,
+    });
+    app.objects.insert(id2, CanvasObject {
+        position: [200.0, 30.0],
+        size: [80.0, 60.0],
+        color: [0.0, 1.0, 0.0, 1.0],
+        border_radius: 0.0,
+    });
+
+    app.selected.push(HitTarget::Object(id1));
+    app.selected.push(HitTarget::Object(id2));
+    app.execute_command(CommandAction::CreateGroup);
+    assert_eq!(app.groups.len(), 1);
+
+    let group_id = app.groups.keys().next().copied().unwrap();
+    let original = app.groups[&group_id].clone();
+
+    // Roundtrip through storage
+    let stored = storage::groups_to_stored(&app.groups);
+    assert_eq!(stored.len(), 1);
+
+    let restored = storage::groups_from_stored(stored);
+    assert_eq!(restored.len(), 1);
+
+    let restored_group = &restored[&group_id];
+    assert_eq!(restored_group.id, original.id);
+    assert_eq!(restored_group.name, original.name);
+    assert_eq!(restored_group.position, original.position);
+    assert_eq!(restored_group.size, original.size);
+    assert_eq!(restored_group.member_ids, original.member_ids);
+    assert_eq!(restored_group.effect_chain_id, original.effect_chain_id);
 }

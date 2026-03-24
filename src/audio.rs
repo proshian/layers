@@ -100,6 +100,7 @@ struct PlaybackClip {
     volume_automation: Vec<(f32, f32)>,
     pan_automation: Vec<(f32, f32)>,
     chain_plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
+    chain_latency_samples: u32,
 }
 
 pub struct AudioEffectRegion {
@@ -121,6 +122,8 @@ pub struct AudioInstrument {
     pub volume: f32,
     pub pan: f32,
     pub chain_plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
+    /// Total latency of synth + chain plugins, used to pre-send MIDI events
+    pub total_latency_samples: u32,
 }
 
 /// Live computer-keyboard preview MIDI (drained once per output callback).
@@ -413,11 +416,13 @@ impl AudioEngine {
                         }
 
                         // Render this clip's dry audio into a per-clip stereo buffer
+                        // Pre-read by chain latency so output aligns after plugin delay
+                        let latency_offset_secs = clip.chain_latency_samples as f64 / sr;
                         let mut clip_dry = vec![[0.0f32; 2]; frames];
                         for i in 0..frames {
                             let t = current_time + i as f64 / sr;
-                            let clip_t = t - clip.start_time_secs;
-                            if clip_t >= 0.0 && clip_t < clip.duration_secs {
+                            let clip_t = t - clip.start_time_secs + latency_offset_secs;
+                            if clip_t >= 0.0 && clip_t < clip.duration_secs + latency_offset_secs {
                                 let source_idx = ((clip_t + clip.buffer_offset_secs) * clip.effective_sample_rate) as usize;
                                 if source_idx < clip.buffer.len() {
                                     let fg = clip_fade_gain(
@@ -652,6 +657,8 @@ impl AudioEngine {
                         for region in inst_guard.iter() {
                             let region_start_secs = region.x_start_px as f64 / PIXELS_PER_SECOND as f64;
                             let region_end_secs = region.x_end_px as f64 / PIXELS_PER_SECOND as f64;
+                            // Pre-send MIDI by total latency so output aligns with timeline
+                            let inst_latency_secs = region.total_latency_samples as f64 / sr;
 
                             let mut offset = 0;
                             while offset < frames {
@@ -659,7 +666,7 @@ impl AudioEngine {
                                 let t_start = current_time + offset as f64 / sr;
                                 let t_end = t_start + block_len as f64 / sr;
                                 let in_region = is_playing
-                                    && t_end > region_start_secs
+                                    && t_end > region_start_secs - inst_latency_secs
                                     && t_start < region_end_secs;
 
                                 if let Ok(gui_guard) = region.gui.try_lock() {
@@ -667,8 +674,10 @@ impl AudioEngine {
                                         // Send scheduled MIDI events only when playing within region
                                         if in_region {
                                             for ev in &region.midi_events {
-                                                if ev.time_secs >= t_start && ev.time_secs < t_end {
-                                                    let so = ((ev.time_secs - t_start) * sr) as i32;
+                                                // Shift MIDI events earlier by latency so output aligns
+                                                let adjusted_time = ev.time_secs - inst_latency_secs;
+                                                if adjusted_time >= t_start && adjusted_time < t_end {
+                                                    let so = ((adjusted_time - t_start) * sr) as i32;
                                                     if ev.is_note_on {
                                                         gui.send_midi_note_on(ev.note, ev.velocity, 0, so);
                                                     } else {
@@ -971,6 +980,7 @@ impl AudioEngine {
         project_bpm: f32,
         pitch_semitones: &[f32],
         chain_plugins_per_clip: &[Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>],
+        chain_latencies: &[u32],
     ) {
         let mut clips = self.clips.lock().unwrap();
         clips.clear();
@@ -1018,6 +1028,7 @@ impl AudioEngine {
                 volume_automation: vol_auto,
                 pan_automation: pan_auto,
                 chain_plugins: chain_plugins_per_clip.get(i).cloned().unwrap_or_default(),
+                chain_latency_samples: chain_latencies.get(i).copied().unwrap_or(0),
             });
         }
     }

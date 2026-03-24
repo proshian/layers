@@ -7,6 +7,13 @@ tresult PLUGIN_API ComponentHandlerImpl::performEdit(ParamID id, ParamValue valu
     return kResultOk;
 }
 
+tresult PLUGIN_API ComponentHandlerImpl::restartComponent(int32 flags) {
+    if (handle && (flags & kLatencyChanged)) {
+        handle->latencyChanged.store(true, std::memory_order_release);
+    }
+    return kResultOk;
+}
+
 Steinberg::Vst::HostApplication& getHostApp() {
     static Steinberg::Vst::HostApplication sHostApp;
     return sHostApp;
@@ -482,6 +489,16 @@ int vst3_gui_get_audio_input_channels(Vst3GuiHandle* handle) {
 int vst3_gui_get_audio_output_channels(Vst3GuiHandle* handle) {
     if (!handle) return 0;
     return handle->outputChannels;
+}
+
+int vst3_gui_get_latency_samples(Vst3GuiHandle* handle) {
+    if (!handle || !handle->processor) return 0;
+    return (int)handle->processor->getLatencySamples();
+}
+
+int vst3_gui_latency_changed(Vst3GuiHandle* handle) {
+    if (!handle) return 0;
+    return handle->latencyChanged.exchange(false, std::memory_order_acq_rel) ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------

@@ -41,7 +41,7 @@ public:
     tresult PLUGIN_API beginEdit(ParamID /*id*/) override { return kResultOk; }
     tresult PLUGIN_API performEdit(ParamID id, ParamValue valueNormalized) override;
     tresult PLUGIN_API endEdit(ParamID /*id*/) override { return kResultOk; }
-    tresult PLUGIN_API restartComponent(int32 /*flags*/) override { return kResultOk; }
+    tresult PLUGIN_API restartComponent(int32 flags) override;
 
     tresult PLUGIN_API queryInterface(const TUID _iid, void** obj) override {
         if (FUnknownPrivate::iidEqual(_iid, IComponentHandler::iid) ||
@@ -127,6 +127,7 @@ struct Vst3GuiHandle {
     std::mutex midiMutex;
     Steinberg::Vst::ParameterChangeTransfer paramTransfer;
     Steinberg::Vst::ParameterChanges processParamChanges;  // pre-allocated, reused each process() call
+    std::atomic<bool> latencyChanged{false};
 };
 
 // --- Common helpers ---

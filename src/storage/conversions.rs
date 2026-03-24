@@ -253,3 +253,46 @@ pub fn text_notes_from_stored(
         })
         .collect()
 }
+
+pub fn groups_to_stored(
+    map: &IndexMap<EntityId, crate::group::Group>,
+) -> Vec<StoredGroup> {
+    map.iter()
+        .map(|(id, g)| StoredGroup {
+            id: entity_id_to_string(*id),
+            name: g.name.clone(),
+            position: g.position,
+            size: g.size,
+            member_ids: g.member_ids.iter().map(|mid| entity_id_to_string(*mid)).collect(),
+            effect_chain_id: g.effect_chain_id.map(|eid| entity_id_to_string(eid)).unwrap_or_default(),
+        })
+        .collect()
+}
+
+pub fn groups_from_stored(
+    stored: Vec<StoredGroup>,
+) -> IndexMap<EntityId, crate::group::Group> {
+    stored
+        .into_iter()
+        .map(|s| {
+            let id = if s.id.is_empty() {
+                new_id()
+            } else {
+                entity_id_from_string(&s.id)
+            };
+            let g = crate::group::Group {
+                id,
+                name: s.name,
+                position: s.position,
+                size: s.size,
+                member_ids: s.member_ids.iter().map(|mid| entity_id_from_string(mid)).collect(),
+                effect_chain_id: if s.effect_chain_id.is_empty() {
+                    None
+                } else {
+                    Some(entity_id_from_string(&s.effect_chain_id))
+                },
+            };
+            (id, g)
+        })
+        .collect()
+}

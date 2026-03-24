@@ -174,6 +174,18 @@ surreal_derive! {
 
 surreal_derive! {
     #[derive(Clone)]
+    pub struct StoredGroup {
+        pub id: String,
+        pub name: String,
+        pub position: [f32; 2],
+        pub size: [f32; 2],
+        pub member_ids: Vec<String>,
+        pub effect_chain_id: String,
+    }
+}
+
+surreal_derive! {
+    #[derive(Clone)]
     pub struct ProjectState {
         pub version: u32,
         pub name: String,
@@ -194,6 +206,7 @@ surreal_derive! {
         pub midi_clips: Vec<StoredMidiClip>,
         pub layer_tree: Vec<StoredLayerNode>,
         pub text_notes: Vec<StoredTextNote>,
+        pub groups: Vec<StoredGroup>,
     }
 }
 

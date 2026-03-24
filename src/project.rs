@@ -181,6 +181,7 @@ impl App {
                 }).collect(),
                 layer_tree: layers::tree_to_stored(&self.layer_tree),
                 text_notes: storage::text_notes_to_stored(&self.text_notes),
+                groups: storage::groups_to_stored(&self.groups),
             };
             storage.save_project_state(state);
 
@@ -601,6 +602,8 @@ impl App {
                 disabled: false,
             }))
             .collect();
+
+        self.groups = storage::groups_from_stored(state.groups);
 
         {
             let mut tree = layers::tree_from_stored(&state.layer_tree);

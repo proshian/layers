@@ -38,6 +38,8 @@ extern "C" {
     ) -> i32;
     fn vst3_gui_get_audio_input_channels(handle: *mut std::ffi::c_void) -> i32;
     fn vst3_gui_get_audio_output_channels(handle: *mut std::ffi::c_void) -> i32;
+    fn vst3_gui_get_latency_samples(handle: *mut std::ffi::c_void) -> i32;
+    fn vst3_gui_latency_changed(handle: *mut std::ffi::c_void) -> i32;
 
     // Scanning
     fn vst3_gui_scan() -> *mut std::ffi::c_void;
@@ -229,6 +231,17 @@ impl Vst3Gui {
     pub fn audio_output_channels(&self) -> usize {
         let n = unsafe { vst3_gui_get_audio_output_channels(self.handle) };
         if n < 0 { 0 } else { n as usize }
+    }
+
+    /// Get the plugin's reported latency in samples (valid after setup_processing).
+    pub fn get_latency_samples(&self) -> u32 {
+        let n = unsafe { vst3_gui_get_latency_samples(self.handle) };
+        if n < 0 { 0 } else { n as u32 }
+    }
+
+    /// Poll whether the plugin signalled a latency change since last check.
+    pub fn latency_changed(&self) -> bool {
+        unsafe { vst3_gui_latency_changed(self.handle) != 0 }
     }
 }
 

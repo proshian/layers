@@ -1637,9 +1637,67 @@ impl App {
         self.request_redraw();
     }
 
+    /// Build a member → group lookup map.
+    #[cfg(feature = "native")]
+    fn build_group_membership(&self) -> std::collections::HashMap<EntityId, EntityId> {
+        let mut map = std::collections::HashMap::new();
+        for (&gid, group) in &self.groups {
+            for &mid in &group.member_ids {
+                map.insert(mid, gid);
+            }
+        }
+        map
+    }
+
+    /// Collect non-bypassed effect chain plugin handles for an entity,
+    /// including its own chain and its parent group's chain (if any).
+    #[cfg(feature = "native")]
+    #[cfg(feature = "native")]
+    fn collect_chain_latency(
+        chain_plugins: &[std::sync::Arc<std::sync::Mutex<Option<effects::PluginGuiHandle>>>],
+    ) -> u32 {
+        chain_plugins.iter().filter_map(|p| {
+            p.lock().ok().and_then(|g| g.as_ref().map(|gui| gui.get_latency_samples()))
+        }).sum()
+    }
+
+    fn collect_chain_plugins(
+        &self,
+        entity_id: EntityId,
+        own_chain_id: Option<EntityId>,
+        group_of: &std::collections::HashMap<EntityId, EntityId>,
+    ) -> Vec<std::sync::Arc<std::sync::Mutex<Option<effects::PluginGuiHandle>>>> {
+        let mut out = Vec::new();
+        if let Some(chain_id) = own_chain_id {
+            if let Some(chain) = self.effect_chains.get(&chain_id) {
+                for slot in &chain.slots {
+                    if !slot.bypass {
+                        out.push(slot.gui.clone());
+                    }
+                }
+            }
+        }
+        if let Some(&group_id) = group_of.get(&entity_id) {
+            if let Some(group) = self.groups.get(&group_id) {
+                if let Some(chain_id) = group.effect_chain_id {
+                    if let Some(chain) = self.effect_chains.get(&chain_id) {
+                        for slot in &chain.slots {
+                            if !slot.bypass {
+                                out.push(slot.gui.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     #[cfg(feature = "native")]
     fn sync_audio_clips(&self) {
         if let Some(engine) = &self.audio_engine {
+            let group_of = self.build_group_membership();
+
             let mut positions: Vec<[f32; 2]> = Vec::new();
             let mut sizes: Vec<[f32; 2]> = Vec::new();
             let mut clips: Vec<&AudioClipData> = Vec::new();
@@ -1656,6 +1714,7 @@ impl App {
             let mut sample_bpms: Vec<f32> = Vec::new();
             let mut pitch_semitones_vec: Vec<f32> = Vec::new();
             let mut chain_plugins_per_clip: Vec<Vec<std::sync::Arc<std::sync::Mutex<Option<effects::PluginGuiHandle>>>>> = Vec::new();
+            let mut chain_latencies: Vec<u32> = Vec::new();
 
             for (&wf_id, wf) in self.waveforms.iter() {
                 if wf.disabled {
@@ -1681,33 +1740,9 @@ impl App {
                 sample_bpms.push(wf.sample_bpm);
                 pitch_semitones_vec.push(wf.pitch_semitones);
 
-                // Collect effect chain plugins for this waveform
-                let mut chain_plugins = Vec::new();
-                if let Some(chain_id) = wf.effect_chain_id {
-                    if let Some(chain) = self.effect_chains.get(&chain_id) {
-                        for slot in &chain.slots {
-                            if !slot.bypass {
-                                chain_plugins.push(slot.gui.clone());
-                            }
-                        }
-                    }
-                }
-                // Also append group-level effect chain (waveform chain → group chain)
-                for group in self.groups.values() {
-                    if group.member_ids.contains(&wf_id) {
-                        if let Some(chain_id) = group.effect_chain_id {
-                            if let Some(chain) = self.effect_chains.get(&chain_id) {
-                                for slot in &chain.slots {
-                                    if !slot.bypass {
-                                        chain_plugins.push(slot.gui.clone());
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-                chain_plugins_per_clip.push(chain_plugins);
+                let plugins = self.collect_chain_plugins(wf_id, wf.effect_chain_id, &group_of);
+                chain_latencies.push(Self::collect_chain_latency(&plugins));
+                chain_plugins_per_clip.push(plugins);
             }
 
             // Add virtual clips for each component instance
@@ -1735,18 +1770,9 @@ impl App {
                                 warp_modes.push(match wf.warp_mode { ui::waveform::WarpMode::RePitch => 1, _ => 0 });
                                 sample_bpms.push(wf.sample_bpm);
 
-                                // Collect effect chain plugins for component instance waveform
-                                let mut cp = Vec::new();
-                                if let Some(chain_id) = wf.effect_chain_id {
-                                    if let Some(chain) = self.effect_chains.get(&chain_id) {
-                                        for slot in &chain.slots {
-                                            if !slot.bypass {
-                                                cp.push(slot.gui.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                                chain_plugins_per_clip.push(cp);
+                                let plugins = self.collect_chain_plugins(wf_id, wf.effect_chain_id, &group_of);
+                                chain_latencies.push(Self::collect_chain_latency(&plugins));
+                                chain_plugins_per_clip.push(plugins);
                             }
                         }
                     }
@@ -1754,7 +1780,7 @@ impl App {
             }
 
             let owned_clips: Vec<AudioClipData> = clips.iter().map(|c| (*c).clone()).collect();
-            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &warp_modes, &sample_bpms, self.bpm, &pitch_semitones_vec, &chain_plugins_per_clip);
+            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &warp_modes, &sample_bpms, self.bpm, &pitch_semitones_vec, &chain_plugins_per_clip, &chain_latencies);
 
             let regions: Vec<audio::AudioEffectRegion> = self
                 .effect_regions
@@ -1933,6 +1959,7 @@ impl App {
     #[cfg(feature = "native")]
     fn sync_instrument_regions(&self) {
         if let Some(engine) = &self.audio_engine {
+            let group_of = self.build_group_membership();
             let mut audio_instruments = Vec::new();
 
             // Build from lightweight instruments (new path)
@@ -1973,32 +2000,11 @@ impl App {
                     x_max = 0.0;
                 }
                 midi_events.sort_by(|a, b| a.time_secs.partial_cmp(&b.time_secs).unwrap());
-                // Collect effect chain plugins for this instrument
-                let mut inst_chain_plugins = Vec::new();
-                if let Some(chain_id) = inst.effect_chain_id {
-                    if let Some(chain) = self.effect_chains.get(&chain_id) {
-                        for slot in &chain.slots {
-                            if !slot.bypass {
-                                inst_chain_plugins.push(slot.gui.clone());
-                            }
-                        }
-                    }
-                }
-                // Also append group-level effect chain
-                for group in self.groups.values() {
-                    if group.member_ids.contains(&inst_id) {
-                        if let Some(chain_id) = group.effect_chain_id {
-                            if let Some(chain) = self.effect_chains.get(&chain_id) {
-                                for slot in &chain.slots {
-                                    if !slot.bypass {
-                                        inst_chain_plugins.push(slot.gui.clone());
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
+                let inst_chain_plugins = self.collect_chain_plugins(inst_id, inst.effect_chain_id, &group_of);
+                let synth_latency = inst.gui.lock().ok()
+                    .and_then(|g| g.as_ref().map(|gui| gui.get_latency_samples()))
+                    .unwrap_or(0);
+                let chain_latency = Self::collect_chain_latency(&inst_chain_plugins);
                 audio_instruments.push(audio::AudioInstrument {
                     id: inst_id,
                     x_start_px: x_min,
@@ -2010,6 +2016,7 @@ impl App {
                     volume: inst.volume,
                     pan: inst.pan,
                     chain_plugins: inst_chain_plugins,
+                    total_latency_samples: synth_latency + chain_latency,
                 });
             }
 
@@ -3180,8 +3187,8 @@ impl App {
             disabled: true, // disabled until loaded
             sample_offset_px: 0.0,
             automation: AutomationData::new(),
-        effect_chain_id: None,
-        take_group: None,
+            effect_chain_id: None,
+            take_group: None,
         };
         self.waveforms.insert(wf_id, placeholder);
         self.pending_audio_loads_count += 1;
@@ -3235,8 +3242,8 @@ impl App {
                 disabled: false,
                 sample_offset_px: 0.0,
                 automation: AutomationData::new(),
-            effect_chain_id: None,
-            take_group: None,
+                effect_chain_id: None,
+                take_group: None,
             };
             let ac_data = AudioClipData {
                 samples: loaded.samples.clone(),
