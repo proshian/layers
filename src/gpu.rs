@@ -881,13 +881,16 @@ impl Gpu {
 
         // Browser text: shape ALL entries once, positions computed each frame
         if let Some(br) = sample_browser {
-            if br.text_generation != self.browser_text_generation {
+            if br.visible && br.text_generation != self.browser_text_generation {
                 self.browser_text_buffers.clear();
                 for te in &br.cached_text {
                     let buf = shape_text_entry(&mut self.font_system, te);
                     self.browser_text_buffers.push(buf);
                 }
                 self.browser_text_generation = br.text_generation;
+            } else if !br.visible && !self.browser_text_buffers.is_empty() {
+                self.browser_text_buffers.clear();
+                self.browser_text_generation = 0;
             }
         } else if !self.browser_text_buffers.is_empty() {
             self.browser_text_buffers.clear();
@@ -984,8 +987,17 @@ impl Gpu {
             }
         }
 
-        // Browser search clear icon
+        // Browser toggle icon (≡ when visible, › when collapsed) and search clear icon
         if let Some(br) = sample_browser {
+            let ie = br.get_toggle_icon_entry(&settings.theme, scale, h);
+            let buf = shape_icon_entry(&mut self.font_system, &ie);
+            text_buffers.push(buf);
+            text_meta.push((
+                ie.x,
+                ie.y,
+                TextColor::rgba(ie.color[0], ie.color[1], ie.color[2], ie.color[3]),
+                full_bounds,
+            ));
             if let Some(ie) = br.get_search_clear_icon_entry(&settings.theme, scale) {
                 let buf = shape_icon_entry(&mut self.font_system, &ie);
                 text_buffers.push(buf);
@@ -1119,7 +1131,7 @@ impl Gpu {
 
         // Export region "Render" label with duration (world-space -> screen-space)
         for (_er_id, er) in export_regions {
-            if settings_window.is_none() && command_palette.is_none() {
+            if settings_window.is_none() && command_palette.is_none() && export_window.is_none() {
                 let pill_world_x = er.position[0] + 4.0 / camera.zoom;
                 let pill_world_y = er.position[1] + 4.0 / camera.zoom;
                 let pill_screen_x = (pill_world_x - camera.position[0]) * camera.zoom;
@@ -1180,7 +1192,7 @@ impl Gpu {
             if !lr.enabled {
                 continue;
             }
-            if settings_window.is_none() && command_palette.is_none() {
+            if settings_window.is_none() && command_palette.is_none() && export_window.is_none() {
                 let pill_world_x = lr.position[0] + 4.0 / camera.zoom;
                 let pill_world_y = camera.position[1] + 8.0 / camera.zoom;
                 let pill_screen_x = (pill_world_x - camera.position[0]) * camera.zoom;
@@ -1356,7 +1368,7 @@ impl Gpu {
         let mut old_tn_cache = std::mem::take(&mut self.cached_text_note_bufs);
         let mut new_tn_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut tn_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        if settings_window.is_none() && command_palette.is_none() {
+        if settings_window.is_none() && command_palette.is_none() && export_window.is_none() {
             for (_tn_id, tn) in text_notes.iter() {
                 let tn_right = tn.position[0] + tn.size[0];
                 let tn_bottom = tn.position[1] + tn.size[1];
@@ -1524,7 +1536,7 @@ impl Gpu {
         let mut old_grp_cache = std::mem::take(&mut self.cached_group_label_bufs);
         let mut new_grp_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut grp_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        if settings_window.is_none() && command_palette.is_none() {
+        if settings_window.is_none() && command_palette.is_none() && export_window.is_none() {
             for (_grp_id, grp) in groups.iter() {
                 let grp_right = grp.position[0] + grp.size[0];
                 let grp_bottom = grp.position[1] + grp.size[1];
@@ -1589,7 +1601,7 @@ impl Gpu {
         let mut old_auto_cache = std::mem::take(&mut self.cached_auto_dot_bufs);
         let mut new_auto_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut auto_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        if automation_mode && settings_window.is_none() && command_palette.is_none() {
+        if automation_mode && settings_window.is_none() && command_palette.is_none() && export_window.is_none() {
             for (_wf_id, wf) in waveforms.iter() {
                 if hidden_take_children.contains(_wf_id) { continue; }
                 let wf_right = wf.position[0] + wf.size[0];
@@ -1673,7 +1685,7 @@ impl Gpu {
         let mut new_lane_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut lane_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
         self.auto_lane_close_rects.clear();
-        if automation_mode && settings_window.is_none() && command_palette.is_none() {
+        if automation_mode && settings_window.is_none() && command_palette.is_none() && export_window.is_none() {
             for (wf_id, wf) in waveforms.iter() {
                 if hidden_take_children.contains(wf_id) { continue; }
                 let wf_right = wf.position[0] + wf.size[0];
@@ -1756,7 +1768,7 @@ impl Gpu {
         let mut old_midi_cache = std::mem::take(&mut self.cached_midi_note_label_bufs);
         let mut new_midi_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut midi_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        if settings_window.is_none() && command_palette.is_none() {
+        if settings_window.is_none() && command_palette.is_none() && export_window.is_none() {
             let browser_right_px = sample_browser.map_or(0.0, |b| b.panel_width(scale));
 
             for (mc_idx, mc) in midi_clips.iter() {
@@ -1865,7 +1877,7 @@ impl Gpu {
         let mut old_pn_cache = std::mem::take(&mut self.cached_midi_per_note_bufs);
         let mut new_pn_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut pn_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        if settings_window.is_none() && command_palette.is_none() {
+        if settings_window.is_none() && command_palette.is_none() && export_window.is_none() {
             for (mc_idx, mc) in midi_clips.iter() {
                 let mc_right = mc.position[0] + mc.size[0];
                 let mc_bottom = mc.position[1] + mc.size[1];
@@ -2049,9 +2061,10 @@ impl Gpu {
         );
 
         let mut browser_text_areas: Vec<TextArea> = Vec::new();
-        if let Some(br) = sample_browser {
+        if let Some(br) = sample_browser.filter(|b| b.visible) {
             let panel_w = br.panel_width(scale);
             let header_h = browser::HEADER_HEIGHT * scale;
+            let content_top_h = br.content_top(scale);
             // Overlay rects that clip browser text (settings window, command palette)
             let sw_rect = settings_window.map(|sw| sw.win_rect(w, h, scale));
             let cp_rect = command_palette.map(|cp| cp.palette_rect(w, h, scale));
@@ -2073,11 +2086,11 @@ impl Gpu {
                 } else {
                     te.y - br.scroll_offset
                 };
-                if !is_header && (actual_y + te.line_height < header_h || actual_y > h) {
+                if !is_header && (actual_y + te.line_height < content_top_h || actual_y > h) {
                     continue;
                 }
-                let clip_top = if actual_y < header_h {
-                    header_h
+                let clip_top = if actual_y < content_top_h {
+                    content_top_h
                 } else {
                     actual_y
                 };

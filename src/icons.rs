@@ -11,3 +11,6 @@ pub const CLOSE: &str = "\u{E5CD}";
 pub const LOCK: &str = "\u{E897}";
 pub const SEARCH: &str = "\u{E8B6}";
 pub const ADD: &str = "\u{E145}";
+pub const MENU: &str = "\u{E5D2}";
+pub const CHEVRON_LEFT: &str = "\u{E5CB}";
+pub const CHEVRON_RIGHT: &str = "\u{E5CC}";
