@@ -1,3 +1,8 @@
+- feat: Plug-Ins settings tab — Rescan button, VST3 system/custom folder toggles, Browse button, Multiple/Auto-Hide/Auto-Open plugin window toggles; all persisted via settings.json (43.7k loc)
+- fix: browser list text no longer scrolls through the search bar — clip boundary now uses content_top (header + search bar height) (43.2k loc)
+- fix: export window now hides background labels (group/sample names); Escape closes export window (43.2k loc)
+- 2026-03-25: feat: browser toggle — ◄/► in search bar row (Ableton style); ◄ collapses to 20px strip, ► reopens; no macOS traffic light overlap (43.1k loc)
+- fix: text note resize now snaps to grid like other elements (43.1k loc)
 - fix: VST instrument in group with effects no longer glitches — same plugin was processed twice; instruments now route through group bus (43.0k loc)
 - fix: canvas marquee selection now auto-includes instruments when their paired MIDI clip is selected (42.9k loc)
 - fix: instruments now included when grouping selection — fixed shift-select in layers panel, SelectAll (Cmd+A), and ungroup restore (42.9k loc)
