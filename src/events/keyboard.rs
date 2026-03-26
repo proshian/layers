@@ -1379,6 +1379,15 @@ impl App {
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::Space) => {
+                    // Stop sample preview if playing (takes priority)
+                    #[cfg(feature = "native")]
+                    if let Some(engine) = &self.audio_engine {
+                        if engine.is_preview_playing() {
+                            engine.stop_preview();
+                            self.request_redraw();
+                            return;
+                        }
+                    }
                     if self.is_recording() {
                         self.toggle_recording();
                         self.request_redraw();
@@ -1401,6 +1410,54 @@ impl App {
                             }
                             engine.toggle_playback();
                             self.request_redraw();
+                        }
+                    }
+                }
+                Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown)
+                    if self.sample_browser.visible
+                    && self.sample_browser.active_category == ui::browser::BrowserCategory::Samples
+                    && !self.sample_browser.entries.is_empty() =>
+                {
+                    let down = matches!(event.logical_key, Key::Named(NamedKey::ArrowDown));
+                    let entries = &self.sample_browser.entries;
+                    let cur = self.sample_browser.selected_entry;
+                    let new_idx = if down {
+                        // Move to next entry (from current+1, or from 0 if none)
+                        let start = cur.map_or(0, |i| i + 1);
+                        (start..entries.len()).next()
+                    } else {
+                        // Move to previous entry
+                        let start = cur.unwrap_or(0);
+                        if start > 0 { Some(start - 1) } else { None }
+                    };
+                    if let Some(idx) = new_idx {
+                        self.sample_browser.selected_entry = Some(idx);
+                        let (_, sh, scale) = self.screen_info();
+                        self.sample_browser.scroll_to_entry(idx, sh, scale);
+                        self.sample_browser.text_dirty = true;
+
+                        // Auto-play if it's an audio file and auto_preview is on
+                        let entry = &self.sample_browser.entries[idx];
+                        if matches!(entry.kind, ui::browser::EntryKind::File) {
+                            let ext = entry.path.extension()
+                                .map(|e| e.to_string_lossy().to_lowercase())
+                                .unwrap_or_default();
+                            if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+                                self.load_browser_preview(&entry.path.clone());
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                Key::Named(NamedKey::ArrowRight) if self.sample_browser.selected_entry.is_some() => {
+                    // Right arrow with a selected sample: replay preview from start
+                    #[cfg(feature = "native")]
+                    if let Some(engine) = &self.audio_engine {
+                        if self.sample_browser.preview_audio.is_some() {
+                            engine.seek_preview(0.0);
+                            self.request_redraw();
+                            return;
                         }
                     }
                 }

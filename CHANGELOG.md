@@ -1,3 +1,6 @@
+- 2026-03-26: fix: preview strip layout — filename label above waveform with spacing, taller strip (68px), drag from preview onto canvas (45.0k loc)
+- 2026-03-26: feat: browser arrow key navigation — Up/Down moves selection through samples with auto-play, auto-scroll, Right arrow replays from start; selected entry highlight; waveform uses channel_triangles rendering; centered headphones icon (45.0k loc)
+- 2026-03-26: feat: browser sample preview — click sample to show waveform strip at bottom, headphones toggle for auto-play, one-shot playback with playhead animation, spacebar stops preview, click-to-seek in preview waveform (44.8k loc)
 - 2026-03-26: fix: S/M buttons repositioned below pan knob bracket; browser hit-test migrated to shared solo_mute module; removed dead solo_mute_button_rects; browser toggle now syncs right panel (43.7k loc)
 - 2026-03-26: feat: S/M buttons in right inspector panel below volume/pan; extracted shared solo_mute.rs render helper used by both layers panel and right panel (43.7k loc)
 - 2026-03-26: fix: solo/mute — fix group bus not muted via keyboard path, fix multi-select solo toggle, deduplicate audibility logic, extract button rect helper (43.5k loc)

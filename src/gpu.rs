@@ -694,6 +694,7 @@ impl Gpu {
         camera: &Camera,
         world_instances: &[InstanceRaw],
         waveform_vertices: &[WaveformVertex],
+        preview_waveform_vertices: &[WaveformVertex],
         command_palette: Option<&CommandPalette>,
         context_menu: Option<&ContextMenu>,
         sample_browser: Option<&browser::SampleBrowser>,
@@ -762,12 +763,23 @@ impl Gpu {
         );
 
         let wf_vert_count = waveform_vertices.len().min(MAX_WAVEFORM_VERTICES);
-        if wf_vert_count > 0 {
-            self.queue.write_buffer(
-                &self.waveform_vertex_buffer,
-                0,
-                bytemuck::cast_slice(&waveform_vertices[..wf_vert_count]),
-            );
+        let preview_wf_count = preview_waveform_vertices.len().min(MAX_WAVEFORM_VERTICES.saturating_sub(wf_vert_count));
+        if wf_vert_count > 0 || preview_wf_count > 0 {
+            if wf_vert_count > 0 {
+                self.queue.write_buffer(
+                    &self.waveform_vertex_buffer,
+                    0,
+                    bytemuck::cast_slice(&waveform_vertices[..wf_vert_count]),
+                );
+            }
+            if preview_wf_count > 0 {
+                let offset = (wf_vert_count * std::mem::size_of::<WaveformVertex>()) as u64;
+                self.queue.write_buffer(
+                    &self.waveform_vertex_buffer,
+                    offset,
+                    bytemuck::cast_slice(&preview_waveform_vertices[..preview_wf_count]),
+                );
+            }
         }
 
         // Build overlay instances: browser panel + drag ghost + command palette
@@ -2065,6 +2077,11 @@ impl Gpu {
             let panel_w = br.panel_width(scale);
             let header_h = browser::HEADER_HEIGHT * scale;
             let content_top_h = br.content_top(scale);
+            let content_bottom_h = if br.preview_audio.is_some() {
+                h - browser::PREVIEW_STRIP_HEIGHT * scale
+            } else {
+                h
+            };
             // Overlay rects that clip browser text (settings window, command palette)
             let sw_rect = settings_window.map(|sw| sw.win_rect(w, h, scale));
             let cp_rect = command_palette.map(|cp| cp.palette_rect(w, h, scale));
@@ -2086,7 +2103,7 @@ impl Gpu {
                 } else {
                     te.y - br.scroll_offset
                 };
-                if !is_header && (actual_y + te.line_height < content_top_h || actual_y > h) {
+                if !is_header && (actual_y + te.line_height < content_top_h || actual_y > content_bottom_h) {
                     continue;
                 }
                 let clip_top = if actual_y < content_top_h {
@@ -2132,7 +2149,11 @@ impl Gpu {
                         left: 0,
                         top: clip_top as i32,
                         right: clip_right,
-                        bottom: (actual_y + te.line_height) as i32,
+                        bottom: if is_header {
+                            (actual_y + te.line_height) as i32
+                        } else {
+                            ((actual_y + te.line_height) as i32).min(content_bottom_h as i32)
+                        },
                     },
                     custom_glyphs: &[],
                 });
@@ -2300,6 +2321,14 @@ impl Gpu {
                     0,
                     world_count as u32..(world_count + overlay_count) as u32,
                 );
+            }
+
+            // Preview waveform (screen-space, drawn on top of overlay/browser panel)
+            if preview_wf_count > 0 {
+                pass.set_pipeline(&self.waveform_pipeline);
+                pass.set_bind_group(0, &self.screen_camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.waveform_vertex_buffer.slice(..));
+                pass.draw(wf_vert_count as u32..(wf_vert_count + preview_wf_count) as u32, 0..1);
             }
 
             self.text_renderer

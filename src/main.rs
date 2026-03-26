@@ -207,6 +207,14 @@ enum PendingAudioLoad {
     },
     /// Load failed — remove placeholder.
     Failed { wf_id: EntityId },
+    /// Browser preview sample loaded.
+    PreviewLoaded {
+        path: std::path::PathBuf,
+        audio: std::sync::Arc<ui::waveform::AudioData>,
+        left_samples: std::sync::Arc<Vec<f32>>,
+        right_samples: std::sync::Arc<Vec<f32>>,
+        sample_rate: u32,
+    },
 }
 
 struct App {
@@ -327,6 +335,7 @@ struct App {
     last_reconnect_time: Option<TimeInstant>,
     cached_instances: Vec<InstanceRaw>,
     cached_wf_verts: Vec<WaveformVertex>,
+    cached_preview_wf_verts: Vec<WaveformVertex>,
     render_generation: u64,
     last_rendered_generation: u64,
     last_rendered_camera_pos: [f32; 2],
@@ -502,6 +511,7 @@ impl App {
             last_reconnect_time: None,
             cached_instances: Vec::new(),
             cached_wf_verts: Vec::new(),
+            cached_preview_wf_verts: Vec::new(),
             render_generation: 1,
             last_rendered_generation: 0,
             last_rendered_camera_pos: [f32::NAN, f32::NAN],
@@ -1226,6 +1236,7 @@ impl App {
             last_reconnect_time: None,
             cached_instances: Vec::with_capacity(2048),
             cached_wf_verts: Vec::with_capacity(32768),
+            cached_preview_wf_verts: Vec::new(),
             render_generation: 1,
             last_rendered_generation: 0,
             last_rendered_camera_pos: [f32::NAN, f32::NAN],
@@ -2770,6 +2781,8 @@ impl App {
     #[cfg(not(feature = "native"))]
     fn drop_audio_from_browser(&mut self, _path: &std::path::Path) {}
     #[cfg(not(feature = "native"))]
+    fn load_browser_preview(&mut self, _path: &std::path::Path) {}
+    #[cfg(not(feature = "native"))]
     fn poll_pending_audio_loads(&mut self) {}
     #[cfg(not(feature = "native"))]
     fn ensure_plugins_scanned(&mut self) {}
@@ -3393,6 +3406,49 @@ impl App {
     /// Spawn audio loading on a background thread. A placeholder waveform
     /// (empty audio) is placed on the canvas immediately so the user sees
     /// feedback. When decoding finishes the placeholder is filled in by
+    #[cfg(feature = "native")]
+    fn load_browser_preview(&mut self, path: &std::path::Path) {
+        // Stop any currently playing preview
+        if let Some(engine) = &self.audio_engine {
+            engine.stop_preview();
+        }
+
+        let path_owned = path.to_owned();
+        self.sample_browser.preview_path = Some(path_owned.clone());
+        self.sample_browser.preview_audio = None;
+        self.sample_browser.text_dirty = true;
+
+        let tx = self.pending_audio_tx.clone();
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        std::thread::spawn(move || {
+            let Some(loaded) = load_audio_file(&path_owned) else {
+                return;
+            };
+            let left_peaks = std::sync::Arc::new(WaveformPeaks::build(&loaded.left_samples));
+            let right_peaks = std::sync::Arc::new(WaveformPeaks::build(&loaded.right_samples));
+            let audio = std::sync::Arc::new(AudioData {
+                left_samples: loaded.left_samples.clone(),
+                right_samples: loaded.right_samples.clone(),
+                left_peaks,
+                right_peaks,
+                sample_rate: loaded.sample_rate,
+                filename,
+            });
+            let _ = tx.send(PendingAudioLoad::PreviewLoaded {
+                path: path_owned,
+                audio,
+                left_samples: loaded.left_samples,
+                right_samples: loaded.right_samples,
+                sample_rate: loaded.sample_rate,
+            });
+        });
+    }
+
     /// `poll_pending_audio_loads`.
     #[cfg(feature = "native")]
     fn drop_audio_from_browser(&mut self, path: &std::path::Path) {
@@ -3592,6 +3648,19 @@ impl App {
                         ui::toast::ToastKind::Error,
                     );
                     self.pending_audio_loads_count = self.pending_audio_loads_count.saturating_sub(1);
+                }
+                PendingAudioLoad::PreviewLoaded { path, audio, left_samples, right_samples, sample_rate } => {
+                    // Only apply if this is still the requested preview
+                    if self.sample_browser.preview_path.as_ref() == Some(&path) {
+                        self.sample_browser.preview_audio = Some(audio);
+                        self.sample_browser.text_dirty = true;
+                        if self.sample_browser.auto_preview {
+                            #[cfg(feature = "native")]
+                            if let Some(engine) = &self.audio_engine {
+                                engine.play_preview(left_samples, right_samples, sample_rate);
+                            }
+                        }
+                    }
                 }
             }
             any = true;

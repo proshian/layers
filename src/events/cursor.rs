@@ -429,6 +429,20 @@ impl App {
             return;
         }
 
+        // Promote pending browser drag to real drag after threshold
+        if let DragState::PendingBrowserDrag { ref path, ref filename, start_mouse } = self.drag {
+            let dx = self.mouse_pos[0] - start_mouse[0];
+            let dy = self.mouse_pos[1] - start_mouse[1];
+            if dx * dx + dy * dy > 9.0 { // 3px threshold
+                self.drag = DragState::DraggingFromBrowser {
+                    path: path.clone(),
+                    filename: filename.clone(),
+                };
+            }
+            self.request_redraw();
+            return;
+        }
+
         // If dragging from browser or plugin, just request redraw for ghost
         if matches!(
             self.drag,

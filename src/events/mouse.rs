@@ -188,6 +188,25 @@ impl App {
 
         MouseButton::Left => match state {
             ElementState::Pressed => {
+                // Stop sample preview when clicking anywhere except the preview strip
+                #[cfg(feature = "native")]
+                {
+                    let (_, sh, scale) = self.screen_info();
+                    let in_preview_strip = self.sample_browser.visible
+                        && self.sample_browser.preview_audio.is_some()
+                        && {
+                            let strip = self.sample_browser.preview_strip_rect(sh, scale);
+                            self.mouse_pos[0] <= strip[0] + strip[2]
+                                && self.mouse_pos[1] >= strip[1]
+                        };
+                    if !in_preview_strip {
+                        if let Some(engine) = &self.audio_engine {
+                            if engine.is_preview_playing() {
+                                engine.stop_preview();
+                            }
+                        }
+                    }
+                }
                 // Handle browser toggle button click (≡ in header or collapsed strip)
                 {
                     let (_, _, scale) = self.screen_info();
@@ -1182,6 +1201,42 @@ impl App {
                         {
                             #[cfg(feature = "native")]
                             self.open_add_folder_dialog();
+                        } else if self.sample_browser.preview_audio.is_some() && {
+                            let strip = self.sample_browser.preview_strip_rect(sh, scale);
+                            self.mouse_pos[1] >= strip[1]
+                        } {
+                            // Click is in the preview strip area
+                            let toggle_rect = self.sample_browser.preview_toggle_rect(sh, scale);
+                            let wf_rect = self.sample_browser.preview_waveform_rect(sh, scale);
+                            let [mx, my] = self.mouse_pos;
+                            if mx >= toggle_rect[0] && mx <= toggle_rect[0] + toggle_rect[2]
+                                && my >= toggle_rect[1] && my <= toggle_rect[1] + toggle_rect[3]
+                            {
+                                self.sample_browser.auto_preview = !self.sample_browser.auto_preview;
+                                self.sample_browser.text_dirty = true;
+                            } else if mx >= wf_rect[0] && mx <= wf_rect[0] + wf_rect[2]
+                                && my >= wf_rect[1] && my <= wf_rect[1] + wf_rect[3]
+                            {
+                                let norm = ((mx - wf_rect[0]) / wf_rect[2]).clamp(0.0, 1.0) as f64;
+                                #[cfg(feature = "native")]
+                                if let Some(engine) = &self.audio_engine {
+                                    engine.seek_preview(norm);
+                                }
+                                // Set up pending drag so user can drag preview to canvas
+                                if let Some(ref path) = self.sample_browser.preview_path {
+                                    let filename = path.file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .to_string();
+                                    self.drag = DragState::PendingBrowserDrag {
+                                        path: path.clone(),
+                                        filename,
+                                        start_mouse: self.mouse_pos,
+                                    };
+                                }
+                            }
+                            self.request_redraw();
+                            return;
                         } else if let Some(idx) =
                             self.sample_browser.item_at(self.mouse_pos, sh, scale)
                         {
@@ -1197,10 +1252,12 @@ impl App {
                                         .map(|e| e.to_string_lossy().to_lowercase())
                                         .unwrap_or_default();
                                     if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
-                                        self.drag = DragState::DraggingFromBrowser {
+                                        self.drag = DragState::PendingBrowserDrag {
                                             path: entry.path.clone(),
                                             filename: entry.name.clone(),
+                                            start_mouse: self.mouse_pos,
                                         };
+                                        self.sample_browser.selected_entry = Some(idx);
                                     }
                                 }
                                 ui::browser::EntryKind::Plugin { unique_id, is_instrument } => {
@@ -2792,6 +2849,22 @@ impl App {
                             }
                         }
                     }
+                    self.request_redraw();
+                    return;
+                }
+
+                // --- drop from browser to canvas ---
+                // --- pending browser drag released = click → trigger preview ---
+                if let DragState::PendingBrowserDrag { ref path, .. } = self.drag {
+                    // Only load if not already previewing this file (avoid restarting on preview strip click)
+                    let already_loaded = self.sample_browser.preview_path.as_ref() == Some(path)
+                        && self.sample_browser.preview_audio.is_some();
+                    if !already_loaded {
+                        let path = path.clone();
+                        self.load_browser_preview(&path);
+                    }
+                    self.drag = DragState::None;
+                    self.update_hover();
                     self.request_redraw();
                     return;
                 }

@@ -274,7 +274,7 @@ impl RightWindow {
     fn solo_mute_layout(screen_w: f32, screen_h: f32, scale: f32, y_extra: f32) -> super::solo_mute::SoloMuteLayout {
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
         let cx = pp[0] + ps[0] * 0.5;
-        let cy = pp[1] + HEADER_HEIGHT * scale + SOLO_MUTE_Y_OFFSET * scale + y_extra;
+        let cy = pp[1] + (HEADER_HEIGHT + SOLO_MUTE_Y_OFFSET + y_extra) * scale;
         super::solo_mute::layout_centered(cx, cy, scale)
     }
 

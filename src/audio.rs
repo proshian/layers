@@ -161,6 +161,15 @@ pub struct KeyboardPreviewState {
     pub pending: VecDeque<KeyboardPreviewEvent>,
 }
 
+/// One-shot sample preview for the browser audition feature.
+pub struct PreviewClip {
+    pub left: Arc<Vec<f32>>,
+    pub right: Arc<Vec<f32>>,
+    pub source_sample_rate: u32,
+    pub position: f64, // fractional sample position (for resampling)
+    pub playing: bool,
+}
+
 pub struct TimedMidiEvent {
     pub time_secs: f64,
     pub note: u8,
@@ -192,6 +201,9 @@ pub struct AudioEngine {
     monitor_effect_plugins: Arc<Mutex<Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>>>,
     monitor_input_channels: Arc<AtomicUsize>,
     monitor_input_sample_rate: Arc<AtomicU64>,
+    preview_clip: Arc<Mutex<Option<PreviewClip>>>,
+    preview_playing: Arc<AtomicBool>,
+    preview_position_bits: Arc<AtomicU64>,
 }
 
 fn store_f64(atomic: &AtomicU64, value: f64) {
@@ -349,6 +361,9 @@ impl AudioEngine {
             Arc::new(Mutex::new(Vec::new()));
         let monitor_input_channels = Arc::new(AtomicUsize::new(1));
         let monitor_input_sample_rate = Arc::new(AtomicU64::new(sample_rate as u64));
+        let preview_clip: Arc<Mutex<Option<PreviewClip>>> = Arc::new(Mutex::new(None));
+        let preview_playing = Arc::new(AtomicBool::new(false));
+        let preview_position_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
 
         let p = playing.clone();
         let pos = position_bits.clone();
@@ -370,6 +385,9 @@ impl AudioEngine {
         let mon_fx = monitor_effect_plugins.clone();
         let mon_in_ch = monitor_input_channels.clone();
         let mon_in_sr = monitor_input_sample_rate.clone();
+        let preview_c = preview_clip.clone();
+        let preview_p = preview_playing.clone();
+        let preview_pos = preview_position_bits.clone();
         let sr = sample_rate as f64;
 
         let mut fx_buf_l = vec![0.0f32; effect_block_size];
@@ -435,7 +453,8 @@ impl AudioEngine {
                         .map_or(false, |g| !g.is_empty());
 
                     let mon_active = mon_en.load(Ordering::Relaxed);
-                    if !is_playing && !has_instruments && !mon_active {
+                    let preview_active = preview_p.load(Ordering::Relaxed);
+                    if !is_playing && !has_instruments && !mon_active && !preview_active {
                         data.fill(0.0);
                         store_f64(&rms, 0.0);
                         return;
@@ -1047,6 +1066,45 @@ impl AudioEngine {
                         }
                     }
 
+                    // Mix browser preview clip into dry_mix
+                    if preview_active {
+                        if let Ok(mut preview_guard) = preview_c.try_lock() {
+                            if let Some(ref mut pv) = *preview_guard {
+                                if pv.playing {
+                                    let ratio = pv.source_sample_rate as f64 / sr;
+                                    let total_samples = pv.left.len();
+                                    for i in 0..frames {
+                                        let idx = pv.position as usize;
+                                        if idx >= total_samples {
+                                            pv.playing = false;
+                                            preview_p.store(false, Ordering::Relaxed);
+                                            break;
+                                        }
+                                        let next = (idx + 1).min(total_samples - 1);
+                                        let frac = (pv.position - idx as f64) as f32;
+                                        let l = pv.left[idx] + (pv.left[next] - pv.left[idx]) * frac;
+                                        let r = if !pv.right.is_empty() {
+                                            let ri = idx.min(pv.right.len() - 1);
+                                            let rn = (ri + 1).min(pv.right.len() - 1);
+                                            pv.right[ri] + (pv.right[rn] - pv.right[ri]) * frac
+                                        } else {
+                                            l
+                                        };
+                                        dry_mix[i][0] += l;
+                                        dry_mix[i][1] += r;
+                                        pv.position += ratio;
+                                    }
+                                    let norm = if total_samples > 0 {
+                                        pv.position / total_samples as f64
+                                    } else {
+                                        1.0
+                                    };
+                                    store_f64(&preview_pos, norm.min(1.0));
+                                }
+                            }
+                        }
+                    }
+
                     // Write final output (stereo)
                     for i in 0..frames {
                         let base = i * channels;
@@ -1116,6 +1174,9 @@ impl AudioEngine {
             monitor_effect_plugins,
             monitor_input_channels,
             monitor_input_sample_rate,
+            preview_clip,
+            preview_playing,
+            preview_position_bits,
         })
     }
 
@@ -1166,6 +1227,49 @@ impl AudioEngine {
 
     pub fn position_seconds(&self) -> f64 {
         load_f64(&self.position_bits)
+    }
+
+    pub fn play_preview(&self, left: Arc<Vec<f32>>, right: Arc<Vec<f32>>, sample_rate: u32) {
+        if let Ok(mut g) = self.preview_clip.lock() {
+            *g = Some(PreviewClip {
+                left,
+                right,
+                source_sample_rate: sample_rate,
+                position: 0.0,
+                playing: true,
+            });
+        }
+        self.preview_playing.store(true, Ordering::Relaxed);
+        store_f64(&self.preview_position_bits, 0.0);
+    }
+
+    pub fn stop_preview(&self) {
+        if let Ok(mut g) = self.preview_clip.lock() {
+            if let Some(ref mut clip) = *g {
+                clip.playing = false;
+            }
+        }
+        self.preview_playing.store(false, Ordering::Relaxed);
+    }
+
+    pub fn is_preview_playing(&self) -> bool {
+        self.preview_playing.load(Ordering::Relaxed)
+    }
+
+    pub fn preview_position(&self) -> f64 {
+        load_f64(&self.preview_position_bits)
+    }
+
+    pub fn seek_preview(&self, normalized: f64) {
+        if let Ok(mut g) = self.preview_clip.lock() {
+            if let Some(ref mut clip) = *g {
+                let total = clip.left.len() as f64;
+                clip.position = (normalized * total).clamp(0.0, total);
+                clip.playing = true;
+            }
+        }
+        self.preview_playing.store(true, Ordering::Relaxed);
+        store_f64(&self.preview_position_bits, normalized.clamp(0.0, 1.0));
     }
 
     pub fn update_clips(

@@ -55,6 +55,11 @@ pub(crate) enum DragState {
         overlap_snapshots: IndexMap<EntityId, WaveformView>,
         overlap_temp_splits: Vec<EntityId>,
     },
+    PendingBrowserDrag {
+        path: PathBuf,
+        filename: String,
+        start_mouse: [f32; 2],
+    },
     DraggingFromBrowser {
         path: PathBuf,
         filename: String,

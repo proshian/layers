@@ -7,6 +7,12 @@ impl App {
         self.update_recording_waveform();
         self.poll_pending_audio_loads();
         self.poll_export_progress();
+
+        // Keep redrawing while sample preview is playing (animates playhead)
+        #[cfg(feature = "native")]
+        if self.audio_engine.as_ref().map_or(false, |e| e.is_preview_playing()) {
+            self.request_redraw();
+        }
         if let Some(gpu) = &mut self.gpu {
             let w = gpu.config.width as f32;
             let h = gpu.config.height as f32;
@@ -31,6 +37,12 @@ impl App {
             let hover_changed = self.hovered != self.last_rendered_hovered;
             let sel_changed = self.selected.len() != self.last_rendered_selected_len;
             let gen_changed = self.render_generation != self.last_rendered_generation;
+            let preview_playing = {
+                #[cfg(feature = "native")]
+                { self.audio_engine.as_ref().map_or(false, |e| e.is_preview_playing()) }
+                #[cfg(not(feature = "native"))]
+                { false }
+            };
             let needs_rebuild = camera_moved
                 || hover_changed
                 || sel_changed
@@ -38,7 +50,8 @@ impl App {
                 || playhead_world_x.is_some()
                 || sel_rect.is_some()
                 || self.file_hovering
-                || self.network.is_connected();
+                || self.network.is_connected()
+                || preview_playing;
 
             // Collect child take IDs whose parent has expanded=false
             let hidden_take_children: HashSet<EntityId> = self.waveforms.iter()
@@ -107,6 +120,29 @@ impl App {
             if self.sample_browser.visible {
                 self.sample_browser.get_text_entries(&self.settings.theme, h, gpu.scale_factor);
             }
+
+            // Build preview waveform vertices (screen-space, every frame when playing)
+            self.cached_preview_wf_verts.clear();
+            if let Some(ref audio) = self.sample_browser.preview_audio {
+                if self.sample_browser.visible {
+                    let [wf_x, wf_y, wf_w, wf_h] = self.sample_browser.preview_waveform_rect(h, gpu.scale_factor);
+                    let progress = {
+                        #[cfg(feature = "native")]
+                        { self.audio_engine.as_ref().map_or(0.0, |e| e.preview_position() as f32) }
+                        #[cfg(not(feature = "native"))]
+                        { 0.0f32 }
+                    };
+                    let accent = self.settings.theme.accent;
+                    let color = [accent[0], accent[1], accent[2], 0.8];
+                    self.cached_preview_wf_verts = ui::waveform::build_preview_waveform_triangles(
+                        &audio.left_peaks,
+                        wf_x, wf_y, wf_w, wf_h,
+                        color,
+                        progress,
+                    );
+                }
+            }
+
             let browser_ref = Some(&self.sample_browser);
 
             let drag_ghost =
@@ -174,6 +210,7 @@ impl App {
                 &self.camera,
                 &self.cached_instances,
                 &self.cached_wf_verts,
+                &self.cached_preview_wf_verts,
                 self.command_palette.as_ref(),
                 self.context_menu.as_ref(),
                 browser_ref,

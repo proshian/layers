@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant as TimeInstant;
@@ -26,6 +27,8 @@ const ADD_BUTTON_SIZE: f32 = 20.0;
 const COLLAPSED_WIDTH: f32 = 20.0;
 /// Width of the toggle `◄` button in the search bar row.
 const TOGGLE_BTN_SIZE: f32 = 20.0;
+/// Height of the sample preview strip at the bottom of the browser.
+pub const PREVIEW_STRIP_HEIGHT: f32 = 52.0;
 
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -145,6 +148,16 @@ pub struct SampleBrowser {
     pub layer_drop_indicator: Option<(usize, usize, bool)>,
     /// Whether the browser toggle button (≡ in header or collapsed strip) is hovered.
     pub toggle_hovered: bool,
+    /// Audio data for the currently previewed sample (waveform display).
+    pub preview_audio: Option<Arc<super::waveform::AudioData>>,
+    /// Path of the currently previewed sample.
+    pub preview_path: Option<PathBuf>,
+    /// Whether auto-preview (headphones) is enabled — click plays the sample.
+    pub auto_preview: bool,
+    /// Whether the headphones toggle button is hovered.
+    pub preview_toggle_hovered: bool,
+    /// Index of the selected entry in the Samples tab (for preview highlight).
+    pub selected_entry: Option<usize>,
 }
 
 impl SampleBrowser {
@@ -184,6 +197,11 @@ impl SampleBrowser {
             search_clear_hovered: false,
             layer_drop_indicator: None,
             toggle_hovered: false,
+            preview_audio: None,
+            preview_path: None,
+            auto_preview: true,
+            preview_toggle_hovered: false,
+            selected_entry: None,
         }
     }
 
@@ -415,7 +433,23 @@ impl SampleBrowser {
     }
 
     fn visible_height(&self, screen_h: f32, scale: f32) -> f32 {
-        screen_h - self.content_top(scale)
+        let preview_h = if self.preview_audio.is_some() {
+            PREVIEW_STRIP_HEIGHT * scale
+        } else {
+            0.0
+        };
+        screen_h - self.content_top(scale) - preview_h
+    }
+
+    #[cfg(test)]
+    pub fn visible_height_for_test(&self, screen_h: f32, scale: f32) -> f32 {
+        self.visible_height(screen_h, scale)
+    }
+
+    pub fn preview_strip_rect(&self, screen_h: f32, scale: f32) -> [f32; 4] {
+        let strip_h = PREVIEW_STRIP_HEIGHT * scale;
+        let w = self.width * scale;
+        [0.0, screen_h - strip_h, w, strip_h]
     }
 
     fn max_scroll(&self, screen_h: f32, scale: f32) -> f32 {
@@ -429,6 +463,21 @@ impl SampleBrowser {
     pub fn clamp_scroll_for_screen(&mut self, screen_h: f32, scale: f32) {
         let max = self.max_scroll(screen_h, scale);
         self.scroll_offset = self.scroll_offset.clamp(0.0, max);
+    }
+
+    /// Scroll to ensure the given entry index is visible in the content area.
+    pub fn scroll_to_entry(&mut self, idx: usize, screen_h: f32, scale: f32) {
+        let item_h = ITEM_HEIGHT * scale;
+        let entry_top = idx as f32 * item_h;
+        let entry_bot = entry_top + item_h;
+        let vis_h = self.visible_height(screen_h, scale);
+
+        if entry_top < self.scroll_offset {
+            self.scroll_offset = entry_top;
+        } else if entry_bot > self.scroll_offset + vis_h {
+            self.scroll_offset = entry_bot - vis_h;
+        }
+        self.clamp_scroll_for_screen(screen_h, scale);
     }
 
     /// Trackpad: apply delta directly (OS provides momentum)
@@ -726,6 +775,14 @@ impl SampleBrowser {
         } else {
             self.item_at(pos, screen_h, scale)
         };
+        // Preview toggle hover
+        if self.preview_audio.is_some() {
+            let [bx, by, bw, bh] = self.preview_toggle_rect(screen_h, scale);
+            self.preview_toggle_hovered = pos[0] >= bx && pos[0] <= bx + bw
+                && pos[1] >= by && pos[1] <= by + bh;
+        } else {
+            self.preview_toggle_hovered = false;
+        }
     }
 
     pub fn build_instances(&self, settings: &crate::settings::Settings, _screen_w: f32, screen_h: f32, scale: f32, selected_ids: &std::collections::HashSet<crate::entity_id::EntityId>) -> Vec<InstanceRaw> {
@@ -1158,6 +1215,16 @@ impl SampleBrowser {
                     }
                 }
                 EntryKind::Dir | EntryKind::File => {
+                    // Selected highlight (like Layers tab)
+                    if self.selected_entry == Some(i) {
+                        let a = settings.theme.accent;
+                        out.push(InstanceRaw {
+                            position: [cx, y],
+                            size: [content_w, item_h],
+                            color: [a[0], a[1], a[2], 0.22],
+                            border_radius: 0.0,
+                        });
+                    }
                     // Hover
                     if self.hovered_entry == Some(i) {
                         out.push(InstanceRaw {
@@ -1279,7 +1346,86 @@ impl SampleBrowser {
             });
         }
 
+        // --- Preview strip at bottom ---
+        if self.preview_audio.is_some() {
+            let [strip_x, strip_y, strip_w, strip_h] = self.preview_strip_rect(screen_h, scale);
+
+            // Strip background
+            out.push(InstanceRaw {
+                position: [strip_x, strip_y],
+                size: [strip_w, strip_h],
+                color: settings.theme.bg_surface,
+                border_radius: 0.0,
+            });
+
+            // Separator line above strip
+            out.push(InstanceRaw {
+                position: [strip_x, strip_y],
+                size: [strip_w, 1.0 * scale],
+                color: crate::theme::with_alpha(settings.theme.text_primary, 0.07),
+                border_radius: 0.0,
+            });
+
+            // Headphones toggle button (left side)
+            let btn_size = 20.0 * scale;
+            let btn_x = strip_x + 8.0 * scale;
+            let btn_y = strip_y + (strip_h - btn_size) * 0.5;
+            let btn_radius = btn_size * 0.5;
+            let btn_color = if self.auto_preview {
+                settings.theme.accent
+            } else {
+                crate::theme::with_alpha(settings.theme.text_primary, 0.15)
+            };
+            out.push(InstanceRaw {
+                position: [btn_x, btn_y],
+                size: [btn_size, btn_size],
+                color: btn_color,
+                border_radius: btn_radius,
+            });
+            if self.preview_toggle_hovered {
+                out.push(InstanceRaw {
+                    position: [btn_x, btn_y],
+                    size: [btn_size, btn_size],
+                    color: [1.0, 1.0, 1.0, 0.08],
+                    border_radius: btn_radius,
+                });
+            }
+
+            // Waveform background rect (right of button, full height with padding)
+            let wf_x = btn_x + btn_size + 8.0 * scale;
+            let wf_w = strip_w - (wf_x - strip_x) - 8.0 * scale;
+            let wf_h = strip_h - 12.0 * scale;
+            let wf_y = strip_y + 6.0 * scale;
+            out.push(InstanceRaw {
+                position: [wf_x, wf_y],
+                size: [wf_w, wf_h],
+                color: [0.0, 0.0, 0.0, 0.3],
+                border_radius: 2.0 * scale,
+            });
+        }
+
         out
+    }
+
+    /// Returns the rect [x, y, w, h] of the preview waveform area (inside the strip).
+    pub fn preview_waveform_rect(&self, screen_h: f32, scale: f32) -> [f32; 4] {
+        let [strip_x, strip_y, strip_w, strip_h] = self.preview_strip_rect(screen_h, scale);
+        let btn_size = 20.0 * scale;
+        let btn_x = strip_x + 8.0 * scale;
+        let wf_x = btn_x + btn_size + 8.0 * scale;
+        let wf_w = strip_w - (wf_x - strip_x) - 8.0 * scale;
+        let wf_h = strip_h - 12.0 * scale;
+        let wf_y = strip_y + 6.0 * scale;
+        [wf_x, wf_y, wf_w, wf_h]
+    }
+
+    /// Returns the rect [x, y, w, h] of the headphones toggle button.
+    pub fn preview_toggle_rect(&self, screen_h: f32, scale: f32) -> [f32; 4] {
+        let [strip_x, strip_y, _, strip_h] = self.preview_strip_rect(screen_h, scale);
+        let btn_size = 20.0 * scale;
+        let btn_x = strip_x + 8.0 * scale;
+        let btn_y = strip_y + (strip_h - btn_size) * 0.5;
+        [btn_x, btn_y, btn_size, btn_size]
     }
 
     pub fn get_text_entries(&mut self, theme: &crate::theme::RuntimeTheme, screen_h: f32, scale: f32) -> &[TextEntry] {
@@ -1489,6 +1635,44 @@ impl SampleBrowser {
                     });
                 }
             }
+        }
+
+        // --- Preview strip text ---
+        if let Some(ref audio) = self.preview_audio {
+            let [strip_x, strip_y, strip_w, strip_h] = self.preview_strip_rect(_screen_h, scale);
+            let strip_bounds = Some([strip_x, strip_y, strip_x + strip_w, strip_y + strip_h]);
+
+            let [btn_x, btn_y, btn_size, _] = self.preview_toggle_rect(_screen_h, scale);
+            let font_sz = 10.0 * scale;
+            let line_h = 12.0 * scale;
+            // Headphones icon "🎧" on the toggle button — centered
+            out.push(TextEntry {
+                text: "🎧".to_string(),
+                x: btn_x,
+                y: btn_y + (btn_size - line_h) * 0.5,
+                font_size: font_sz,
+                line_height: line_h,
+                max_width: btn_size,
+                color: [255, 255, 255, if self.auto_preview { 255 } else { 140 }],
+                weight: 400,
+                bounds: strip_bounds,
+                center: true,
+            });
+
+            // Filename label (inside waveform, top-left with padding — like canvas)
+            let [wf_x, wf_y, wf_w, _] = self.preview_waveform_rect(_screen_h, scale);
+            out.push(TextEntry {
+                text: audio.filename.clone(),
+                x: wf_x + 6.0 * scale,
+                y: wf_y + 4.0 * scale,
+                font_size: 9.0 * scale,
+                line_height: 11.0 * scale,
+                max_width: wf_w - 12.0 * scale,
+                color: crate::theme::RuntimeTheme::text_u8(theme.text_primary, 200),
+                weight: 400,
+                bounds: strip_bounds,
+                center: false,
+            });
         }
 
         out
