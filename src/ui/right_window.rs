@@ -650,7 +650,7 @@ impl RightWindow {
         // Solo/Mute buttons (all entity types except MainLayer)
         if !self.is_master() {
             let sm_layout = Self::solo_mute_layout(screen_w, screen_h, scale, self.y_extra());
-            out.extend(super::solo_mute::build_instances(&sm_layout, self.is_soloed, self.is_muted, false, &settings.theme, scale));
+            out.extend(super::solo_mute::build_instances(&sm_layout, self.is_soloed, self.is_muted, false, true, &settings.theme, scale));
         }
 
         // Reverse / Warp / Pitch — waveform-only controls (hidden for multi-selection)
@@ -1057,7 +1057,7 @@ impl RightWindow {
         // Solo/Mute button text (all entity types except MainLayer)
         if !self.is_master() {
             let sm_layout = Self::solo_mute_layout(screen_w, screen_h, scale, self.y_extra());
-            out.extend(super::solo_mute::build_text_entries(&sm_layout, self.is_soloed, self.is_muted, theme, scale));
+            out.extend(super::solo_mute::build_text_entries(&sm_layout, self.is_soloed, self.is_muted, true, theme, scale));
         }
 
         // Reverse / Warp / Pitch text — waveform-only (hidden for multi-selection)

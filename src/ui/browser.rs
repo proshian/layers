@@ -66,6 +66,7 @@ pub enum EntryKind {
     ProjectInstrument { id: EntityId },
     LayerNode { id: EntityId, kind: LayerNodeKind, has_children: bool, expanded: bool, color: [f32; 4], is_soloed: bool, is_muted: bool },
     Master,
+    EmptyState,
 }
 
 #[derive(Clone)]
@@ -159,6 +160,8 @@ pub struct SampleBrowser {
     pub preview_toggle_hovered: bool,
     /// Index of the selected entry in the Samples tab (for preview highlight).
     pub selected_entry: Option<usize>,
+    /// Whether the Master ("Main") entry is currently selected.
+    pub master_selected: bool,
 }
 
 impl SampleBrowser {
@@ -203,6 +206,7 @@ impl SampleBrowser {
             auto_preview: true,
             preview_toggle_hovered: false,
             selected_entry: None,
+            master_selected: false,
         }
     }
 
@@ -359,6 +363,14 @@ impl SampleBrowser {
                             is_muted: row.is_muted,
                         },
                         depth: if searching { 0 } else { row.depth },
+                    });
+                }
+                if self.layer_rows.is_empty() && !searching {
+                    self.entries.push(BrowserEntry {
+                        path: PathBuf::new(),
+                        name: String::new(),
+                        kind: EntryKind::EmptyState,
+                        depth: 1,
                     });
                 }
             }
@@ -738,14 +750,8 @@ impl SampleBrowser {
             return None;
         }
         let y = pos[1] - top;
-        // "Library" label gap
-        let section_gap = SIDEBAR_SECTION_GAP * scale;
         let item_h = SIDEBAR_ITEM_HEIGHT * scale;
-        let content_y = y - section_gap;
-        if content_y < 0.0 {
-            return None;
-        }
-        let idx = (content_y / item_h) as usize;
+        let idx = (y / item_h) as usize;
         SIDEBAR_CATEGORIES.get(idx).copied()
     }
 
@@ -757,13 +763,8 @@ impl SampleBrowser {
             return None;
         }
         let y = pos[1] - top;
-        let section_gap = SIDEBAR_SECTION_GAP * scale;
         let item_h = SIDEBAR_ITEM_HEIGHT * scale;
-        let content_y = y - section_gap;
-        if content_y < 0.0 {
-            return None;
-        }
-        let idx = (content_y / item_h) as usize;
+        let idx = (y / item_h) as usize;
         if idx < SIDEBAR_CATEGORIES.len() {
             Some(idx)
         } else {
@@ -988,10 +989,9 @@ impl SampleBrowser {
 
         // --- Sidebar items ---
         let sb_item_h = SIDEBAR_ITEM_HEIGHT * scale;
-        let section_gap = SIDEBAR_SECTION_GAP * scale;
 
         for (i, cat) in SIDEBAR_CATEGORIES.iter().enumerate() {
-            let y = ct + section_gap + i as f32 * sb_item_h;
+            let y = ct + i as f32 * sb_item_h;
 
             // Active highlight
             if *cat == self.active_category {
@@ -1124,6 +1124,7 @@ impl SampleBrowser {
                         border_radius: dot_sz * 0.5,
                     });
                 }
+                EntryKind::EmptyState => {}
                 EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } | EntryKind::Master => {
                     let indent = entry.depth as f32 * INDENT_PX * scale;
                     out.push(InstanceRaw {
@@ -1137,7 +1138,9 @@ impl SampleBrowser {
                         EntryKind::ProjectInstrument { id } => Some(*id),
                         _ => None,
                     };
-                    if entry_entity_id.map_or(false, |id| selected_ids.contains(&id)) {
+                    let is_selected = entry_entity_id.map_or(false, |id| selected_ids.contains(&id))
+                        || (matches!(entry.kind, EntryKind::Master) && self.master_selected);
+                    if is_selected {
                         let a = settings.theme.accent;
                         out.push(InstanceRaw {
                             position: [cx, y],
@@ -1193,26 +1196,28 @@ impl SampleBrowser {
                         }
                     }
                     }
-                    // Category dot
-                    let dot_sz = 5.0 * scale;
-                    let dot_offset = indent + 20.0 * scale;
-                    let dot_x = cx + dot_offset;
-                    let dot_y = y + (item_h - dot_sz) * 0.5;
-                    let dot_color = match &entry.kind {
-                        EntryKind::LayerNode { kind, color, .. } => match kind {
-                            LayerNodeKind::Instrument => settings.theme.pill_instrument,
-                            LayerNodeKind::TextNote => settings.theme.category_dot,
-                            LayerNodeKind::Group => settings.theme.component_border_color,
-                            _ => *color,
-                        },
-                        _ => settings.theme.pill_instrument,
-                    };
-                    out.push(InstanceRaw {
-                        position: [dot_x, dot_y],
-                        size: [dot_sz, dot_sz],
-                        color: dot_color,
-                        border_radius: dot_sz * 0.5,
-                    });
+                    // Category dot (not for Master)
+                    if !matches!(entry.kind, EntryKind::Master) {
+                        let dot_sz = 5.0 * scale;
+                        let dot_offset = indent + 20.0 * scale;
+                        let dot_x = cx + dot_offset;
+                        let dot_y = y + (item_h - dot_sz) * 0.5;
+                        let dot_color = match &entry.kind {
+                            EntryKind::LayerNode { kind, color, .. } => match kind {
+                                LayerNodeKind::Instrument => settings.theme.pill_instrument,
+                                LayerNodeKind::TextNote => settings.theme.category_dot,
+                                LayerNodeKind::Group => settings.theme.component_border_color,
+                                _ => *color,
+                            },
+                            _ => settings.theme.pill_instrument,
+                        };
+                        out.push(InstanceRaw {
+                            position: [dot_x, dot_y],
+                            size: [dot_sz, dot_sz],
+                            color: dot_color,
+                            border_radius: dot_sz * 0.5,
+                        });
+                    }
                     // Solo/Mute buttons (right-aligned) — only for Waveform, Instrument, Group
                     if let EntryKind::LayerNode { kind, is_soloed, is_muted, .. } = &entry.kind {
                         if matches!(kind, LayerNodeKind::Waveform | LayerNodeKind::Instrument | LayerNodeKind::Group) {
@@ -1220,7 +1225,8 @@ impl SampleBrowser {
                             let row_cy = y + item_h * 0.5;
                             let layout = super::solo_mute::layout_right_aligned(row_right, row_cy, scale);
                             let is_hovered = self.hovered_entry == Some(i);
-                            out.extend(super::solo_mute::build_instances(&layout, *is_soloed, *is_muted, is_hovered, &settings.theme, scale));
+                            let visible = *is_soloed || *is_muted || is_hovered;
+                            out.extend(super::solo_mute::build_instances(&layout, *is_soloed, *is_muted, is_hovered, visible, &settings.theme, scale));
                         }
                     }
                 }
@@ -1503,12 +1509,11 @@ impl SampleBrowser {
 
         // --- Sidebar category labels (fixed, not scrolled) ---
         let sb_item_h = SIDEBAR_ITEM_HEIGHT * scale;
-        let section_gap = SIDEBAR_SECTION_GAP * scale;
         let font_sz = 12.0 * scale;
         let line_h = 15.0 * scale;
 
         for (i, cat) in SIDEBAR_CATEGORIES.iter().enumerate() {
-            let y = ct + section_gap + i as f32 * sb_item_h;
+            let y = ct + i as f32 * sb_item_h;
             let is_active = *cat == self.active_category;
             let color = if is_active {
                 crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255)
@@ -1570,9 +1575,26 @@ impl SampleBrowser {
                         center: false,
                     });
                 }
+                EntryKind::EmptyState => {
+                    let font_sz = 12.0 * scale;
+                    let line_h = 16.0 * scale;
+                    out.push(TextEntry {
+                        text: "Nothing here yet".to_string(),
+                        x: cx,
+                        y: base_y + (item_h - line_h) * 0.5,
+                        font_size: font_sz,
+                        line_height: line_h,
+                        max_width: w - cx - 8.0 * scale,
+                        color: crate::theme::RuntimeTheme::text_u8(theme.text_dim, 160),
+                        weight: 400,
+                        bounds: None,
+                        center: true,
+                    });
+                }
                 EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } | EntryKind::Master => {
                     let indent = entry.depth as f32 * INDENT_PX * scale;
-                    let text_offset = indent + 28.0 * scale;
+                    let dot_offset = if matches!(entry.kind, EntryKind::Master) { 12.0 } else { 28.0 };
+                    let text_offset = indent + dot_offset * scale;
                     let text_x = cx + text_offset;
                     let font_sz = 12.0 * scale;
                     let line_h = 16.0 * scale;
@@ -1616,7 +1638,8 @@ impl SampleBrowser {
                             let row_right = cx + self.content_width(scale);
                             let row_cy = base_y + item_h * 0.5;
                             let layout = super::solo_mute::layout_right_aligned(row_right, row_cy, scale);
-                            out.extend(super::solo_mute::build_text_entries(&layout, *is_soloed, *is_muted, theme, scale));
+                            let visible = *is_soloed || *is_muted || self.hovered_entry == Some(i);
+                            out.extend(super::solo_mute::build_text_entries(&layout, *is_soloed, *is_muted, visible, theme, scale));
                         }
                     }
                 }

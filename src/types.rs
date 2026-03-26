@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use crate::automation::AutomationParam;
 use crate::component;
 use crate::entity_id::EntityId;
+use crate::instruments::InstrumentSnapshot;
 use crate::midi;
 use crate::regions::{ExportRegion, LoopRegion};
 use crate::text_note;
@@ -250,6 +251,20 @@ pub(crate) enum GroupHover {
     CornerSE(EntityId),
 }
 
+/// Snapshot of a single group member entity, used when copying groups to clipboard.
+/// Uses InstrumentSnapshot (not Instrument) to avoid sharing Arc<Mutex<...>> state.
+#[derive(Clone)]
+pub(crate) enum GroupMemberSnapshot {
+    Object(CanvasObject),
+    Waveform(WaveformView, Option<AudioClipData>),
+    LoopRegion(LoopRegion),
+    ExportRegion(ExportRegion),
+    MidiClip(midi::MidiClip),
+    TextNote(text_note::TextNote),
+    ComponentInstance(component::ComponentInstance),
+    Instrument(InstrumentSnapshot),
+}
+
 #[derive(Clone)]
 pub(crate) enum ClipboardItem {
     Object(CanvasObject),
@@ -264,7 +279,7 @@ pub(crate) enum ClipboardItem {
     MidiClip(midi::MidiClip),
     MidiNotes(Vec<midi::MidiNote>),
     TextNote(text_note::TextNote),
-    Group(crate::group::Group),
+    Group(crate::group::Group, Vec<(EntityId, GroupMemberSnapshot)>),
 }
 
 pub(crate) struct Clipboard {

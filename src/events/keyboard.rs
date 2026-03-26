@@ -1020,18 +1020,21 @@ impl App {
                         } else {
                             self.sample_browser.search_query.pop();
                         }
+                        self.sample_browser.text_dirty = true;
                         self.sample_browser.schedule_search_rebuild();
                         self.request_redraw();
                         return;
                     }
                     Key::Named(NamedKey::Space) => {
                         self.sample_browser.search_query.push(' ');
+                        self.sample_browser.text_dirty = true;
                         self.sample_browser.schedule_search_rebuild();
                         self.request_redraw();
                         return;
                     }
                     Key::Character(ch) if !self.cmd_held() => {
                         self.sample_browser.search_query.push_str(ch.as_ref());
+                        self.sample_browser.text_dirty = true;
                         self.sample_browser.schedule_search_rebuild();
                         self.request_redraw();
                         return;

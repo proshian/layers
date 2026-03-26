@@ -1398,6 +1398,10 @@ impl App {
     }
 
     pub(crate) fn update_right_window(&mut self) {
+        // Don't clobber a deliberately-opened Master right window when nothing else is selected
+        if self.right_window.as_ref().map_or(false, |rw| rw.is_master()) && self.selected.is_empty() {
+            return;
+        }
         // Collect all selected waveform IDs
         let wf_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| {
             if let HitTarget::Waveform(id) = t { Some(*id) } else { None }
@@ -3341,6 +3345,11 @@ impl App {
                     (HitTarget::TextNote(id), EntityBeforeState::TextNote(before)) => {
                         if let Some(after) = self.text_notes.get(&id) {
                             ops.push(crate::operations::Operation::UpdateTextNote { id, before, after: after.clone() });
+                        }
+                    }
+                    (HitTarget::Group(id), EntityBeforeState::Group(before)) => {
+                        if let Some(after) = self.groups.get(&id) {
+                            ops.push(crate::operations::Operation::UpdateGroup { id, before, after: after.clone() });
                         }
                     }
                     _ => {}

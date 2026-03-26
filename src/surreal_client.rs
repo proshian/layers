@@ -85,6 +85,7 @@ fn record_to_committed(rec: &OpRecord) -> Option<CommittedOp> {
         user_id,
         timestamp_ms: rec.timestamp_ms,
         seq: rec.seq,
+        before_selection: Vec::new(),
     })
 }
 

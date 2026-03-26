@@ -293,6 +293,8 @@ pub(crate) struct Gpu {
     pub(crate) swash_cache: SwashCache,
     pub(crate) text_atlas: TextAtlas,
     pub(crate) text_renderer: TextRenderer,
+    pub(crate) overlay_text_atlas: TextAtlas,
+    pub(crate) overlay_text_renderer: TextRenderer,
     pub(crate) viewport: Viewport,
     pub(crate) scale_factor: f32,
 
@@ -644,6 +646,13 @@ impl Gpu {
             wgpu::MultisampleState::default(),
             None,
         );
+        let mut overlay_text_atlas = TextAtlas::new(&device, &queue, &cache, surface_format);
+        let overlay_text_renderer = TextRenderer::new(
+            &mut overlay_text_atlas,
+            &device,
+            wgpu::MultisampleState::default(),
+            None,
+        );
         let viewport = Viewport::new(&device, &cache);
 
         Self {
@@ -666,6 +675,8 @@ impl Gpu {
             swash_cache,
             text_atlas,
             text_renderer,
+            overlay_text_atlas,
+            overlay_text_renderer,
             viewport,
             scale_factor,
             browser_text_buffers: Vec::new(),
@@ -833,9 +844,7 @@ impl Gpu {
             overlay_instances.extend(p.build_instances(settings, w, h, self.scale_factor));
         }
 
-        if let Some(cm) = context_menu {
-            overlay_instances.extend(cm.build_instances(settings, w, h, self.scale_factor));
-        }
+        // Context menu is rendered in a separate top layer (after text) — see top_instances below
 
         if let Some(sw) = settings_window {
             overlay_instances.extend(sw.build_instances(settings, w, h, self.scale_factor));
@@ -877,6 +886,12 @@ impl Gpu {
                 });
             }
             }
+        }
+
+        // Top overlay: context menu renders above all other overlays and text
+        let mut top_instances: Vec<InstanceRaw> = Vec::new();
+        if let Some(cm) = context_menu {
+            top_instances.extend(cm.build_instances(settings, w, h, self.scale_factor));
         }
 
         // --- prepare text ---
@@ -1022,7 +1037,7 @@ impl Gpu {
             }
         }
 
-        // Transport panel text (rendered before menus so menus appear on top)
+        // Transport panel text and icons
         for te in TransportPanel::get_text_entries(&settings.theme, w, h, scale, playback_position, bpm, editing_bpm) {
             let buf = shape_text_entry(&mut self.font_system, &te);
             text_buffers.push(buf);
@@ -1033,7 +1048,6 @@ impl Gpu {
                 full_bounds,
             ));
         }
-        // Transport panel icon glyphs
         for ie in TransportPanel::get_icon_entries(
             settings, w, h, scale,
             is_playing, is_recording,
@@ -1062,18 +1076,7 @@ impl Gpu {
             }
         }
 
-        if let Some(cm) = context_menu {
-            for te in cm.get_text_entries(&settings.theme, w, h, scale) {
-                let buf = shape_text_entry(&mut self.font_system, &te);
-                text_buffers.push(buf);
-                text_meta.push((
-                    te.x,
-                    te.y,
-                    TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
-                    full_bounds,
-                ));
-            }
-        }
+        // Context menu text is rendered in the top overlay layer — see top_text_buffers below
 
         // Plugin editor text
         if let Some(pe) = plugin_editor {
@@ -1539,6 +1542,17 @@ impl Gpu {
                 &self.instance_buffer,
                 offset,
                 bytemuck::cast_slice(&overlay_instances[..overlay_count]),
+            );
+        }
+
+        // Write top overlay instances (context menu) after regular overlays
+        let top_count = top_instances.len().min(MAX_INSTANCES - world_count - overlay_count);
+        if top_count > 0 {
+            let top_offset = ((world_count + overlay_count) * std::mem::size_of::<InstanceRaw>()) as u64;
+            self.queue.write_buffer(
+                &self.instance_buffer,
+                top_offset,
+                bytemuck::cast_slice(&top_instances[..top_count]),
             );
         }
 
@@ -2252,6 +2266,48 @@ impl Gpu {
             )
             .unwrap();
 
+        // Prepare top overlay text (context menu) — rendered after top overlay geometry
+        let mut top_text_buffers: Vec<TextBuffer> = Vec::new();
+        let mut top_text_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
+        if let Some(cm) = context_menu {
+            for te in cm.get_text_entries(&settings.theme, w, h, scale) {
+                let buf = shape_text_entry(&mut self.font_system, &te);
+                top_text_buffers.push(buf);
+                top_text_meta.push((
+                    te.x,
+                    te.y,
+                    TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
+                    full_bounds,
+                ));
+            }
+        }
+        let top_text_areas: Vec<TextArea> = top_text_buffers
+            .iter()
+            .zip(top_text_meta.iter())
+            .map(|(buffer, &(left, top, color, bounds))| TextArea {
+                buffer,
+                left,
+                top,
+                scale: 1.0,
+                bounds,
+                default_color: color,
+                custom_glyphs: &[],
+            })
+            .collect();
+        if !top_text_areas.is_empty() {
+            self.overlay_text_renderer
+                .prepare(
+                    &self.device,
+                    &self.queue,
+                    &mut self.font_system,
+                    &mut self.overlay_text_atlas,
+                    &self.viewport,
+                    top_text_areas,
+                    &mut self.swash_cache,
+                )
+                .unwrap();
+        }
+
         // --- render pass ---
         let output = match self.surface.get_current_texture() {
             Ok(t) => t,
@@ -2334,6 +2390,26 @@ impl Gpu {
             self.text_renderer
                 .render(&self.text_atlas, &self.viewport, &mut pass)
                 .unwrap();
+
+            // Top overlay: context menu geometry drawn after all text
+            if top_count > 0 {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.screen_camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(
+                    0..QUAD_INDICES.len() as u32,
+                    0,
+                    (world_count + overlay_count) as u32..(world_count + overlay_count + top_count) as u32,
+                );
+            }
+            // Context menu text drawn on top of context menu geometry
+            if !top_text_buffers.is_empty() {
+                self.overlay_text_renderer
+                    .render(&self.overlay_text_atlas, &self.viewport, &mut pass)
+                    .unwrap();
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

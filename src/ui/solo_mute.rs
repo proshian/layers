@@ -73,9 +73,13 @@ pub fn build_instances(
     is_soloed: bool,
     is_muted: bool,
     is_hovered: bool,
+    visible: bool,
     theme: &RuntimeTheme,
     scale: f32,
 ) -> Vec<InstanceRaw> {
+    if !visible {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let br = 2.0 * scale;
 
@@ -121,9 +125,13 @@ pub fn build_text_entries(
     layout: &SoloMuteLayout,
     is_soloed: bool,
     is_muted: bool,
+    visible: bool,
     theme: &RuntimeTheme,
     scale: f32,
 ) -> Vec<crate::gpu::TextEntry> {
+    if !visible {
+        return Vec::new();
+    }
     let btn_font = 9.0 * scale;
     let btn_line = 11.0 * scale;
 

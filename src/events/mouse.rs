@@ -74,6 +74,11 @@ impl App {
                                     }
                                     MenuContext::LayerNode { kind: *kind }
                                 }
+                                ui::browser::EntryKind::Master => {
+                                    // No context menu for Main Layer
+                                    self.request_redraw();
+                                    return;
+                                }
                                 _ => {
                                     self.browser_context_path = Some(entry.path.clone());
                                     MenuContext::BrowserEntry
@@ -1314,12 +1319,15 @@ impl App {
                                     #[cfg(feature = "native")]
                                     self.sync_computer_keyboard_to_engine();
                                 }
+                                ui::browser::EntryKind::EmptyState => {}
                                 ui::browser::EntryKind::Master => {
                                     self.selected.clear();
+                                    self.sample_browser.master_selected = true;
                                     self.open_right_window_for_master();
                                     self.request_redraw();
                                 }
                                 ui::browser::EntryKind::LayerNode { id, kind, has_children, .. } => {
+                                    self.sample_browser.master_selected = false;
                                     // Solo/Mute button hit test (right-aligned buttons)
                                     if matches!(kind, crate::layers::LayerNodeKind::Waveform | crate::layers::LayerNodeKind::Instrument | crate::layers::LayerNodeKind::Group) {
                                         let (_, _, scale) = self.screen_info();
@@ -3052,6 +3060,11 @@ impl App {
                             (HitTarget::MidiClip(id), EntityBeforeState::MidiClip(before)) => {
                                 if let Some(after) = self.midi_clips.get(&id) {
                                     ops.push(crate::operations::Operation::UpdateMidiClip { id, before, after: after.clone() });
+                                }
+                            }
+                            (HitTarget::Group(id), EntityBeforeState::Group(before)) => {
+                                if let Some(after) = self.groups.get(&id) {
+                                    ops.push(crate::operations::Operation::UpdateGroup { id, before, after: after.clone() });
                                 }
                             }
                             _ => {}
