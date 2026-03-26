@@ -1,10 +1,21 @@
 use std::path::{Path, PathBuf};
 
 use surrealdb::engine::local::{Db, RocksDb};
+use surrealdb::types::{Bytes, SurrealValue};
 use surrealdb::Surreal;
 
-use super::helpers::f32_slice_to_u8;
 use super::models::*;
+
+// ---------------------------------------------------------------------------
+// Audio stored as original encoded file (like RemoteAudioFile in remote.rs)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, SurrealValue)]
+pub struct StoredAudioData {
+    pub waveform_id: String,
+    pub file_data: Bytes,
+    pub extension: String,
+}
 
 // ---------------------------------------------------------------------------
 // Storage
@@ -249,11 +260,8 @@ impl Storage {
     pub fn save_audio(
         &self,
         waveform_id: &str,
-        left: &[f32],
-        right: &[f32],
-        mono: &[f32],
-        sample_rate: u32,
-        duration_secs: f32,
+        file_bytes: &[u8],
+        extension: &str,
     ) {
         let db = match &self.project_db {
             Some(db) => db,
@@ -261,11 +269,8 @@ impl Storage {
         };
         let data = StoredAudioData {
             waveform_id: waveform_id.to_string(),
-            left_samples: f32_slice_to_u8(left),
-            right_samples: f32_slice_to_u8(right),
-            mono_samples: f32_slice_to_u8(mono),
-            sample_rate,
-            duration_secs,
+            file_data: Bytes::from(file_bytes.to_vec()),
+            extension: extension.to_string(),
         };
         let result = self.rt.block_on(async {
             let _: Option<StoredAudioData> =
@@ -277,13 +282,15 @@ impl Storage {
         }
     }
 
-    pub fn load_audio(&self, waveform_id: &str) -> Option<StoredAudioData> {
+    /// Returns (file_bytes, extension) for the given waveform, or None.
+    pub fn load_audio(&self, waveform_id: &str) -> Option<(Vec<u8>, String)> {
         let db = self.project_db.as_ref()?;
         self.rt.block_on(async {
             let data: Option<StoredAudioData> =
                 db.select(("audio", waveform_id)).await.ok()?;
             data
         })
+        .map(|d| (d.file_data.into_inner().to_vec(), d.extension))
     }
 
     // -----------------------------------------------------------------------
@@ -304,8 +311,8 @@ impl Storage {
         let data = StoredPeaks {
             waveform_id: waveform_id.to_string(),
             block_size,
-            left_peaks: f32_slice_to_u8(left_peaks),
-            right_peaks: f32_slice_to_u8(right_peaks),
+            left_peaks: peaks_f32_to_u8(left_peaks),
+            right_peaks: peaks_f32_to_u8(right_peaks),
         };
         let result = self.rt.block_on(async {
             let _: Option<StoredPeaks> =
@@ -317,13 +324,19 @@ impl Storage {
         }
     }
 
-    pub fn load_peaks(&self, waveform_id: &str) -> Option<StoredPeaks> {
+    /// Returns (block_size, left_peaks_f32, right_peaks_f32) or None.
+    pub fn load_peaks(&self, waveform_id: &str) -> Option<(u64, Vec<f32>, Vec<f32>)> {
         let db = self.project_db.as_ref()?;
-        self.rt.block_on(async {
+        let stored = self.rt.block_on(async {
             let data: Option<StoredPeaks> =
                 db.select(("peaks", waveform_id)).await.ok()?;
             data
-        })
+        })?;
+        Some((
+            stored.block_size,
+            peaks_u8_to_f32(&stored.left_peaks),
+            peaks_u8_to_f32(&stored.right_peaks),
+        ))
     }
 
     /// Clear all audio and peaks records (called before full rewrite on save).
@@ -420,6 +433,18 @@ impl Storage {
             Some(())
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Peak quantization helpers
+// ---------------------------------------------------------------------------
+
+fn peaks_f32_to_u8(peaks: &[f32]) -> Vec<u8> {
+    peaks.iter().map(|&p| (p.clamp(0.0, 1.0) * 255.0) as u8).collect()
+}
+
+fn peaks_u8_to_f32(peaks: &[u8]) -> Vec<f32> {
+    peaks.iter().map(|&b| b as f32 / 255.0).collect()
 }
 
 // ---------------------------------------------------------------------------

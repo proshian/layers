@@ -12,4 +12,5 @@ pub use conversions::*;
 pub use local::{Storage, default_base_path};
 #[cfg(feature = "native")]
 pub use remote::RemoteStorage;
+#[allow(unused_imports)] // used by tests
 pub use helpers::{f32_slice_to_u8, u8_slice_to_f32};

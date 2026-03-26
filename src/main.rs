@@ -198,6 +198,7 @@ enum PendingAudioLoad {
         wf_id: EntityId,
         wf_data: WaveformView,
         ac_data: AudioClipData,
+        source_file: (Vec<u8>, String),
     },
     /// Remote storage save finished — safe to push op to network now.
     /// Carries the decoded audio data so it can be applied at this point.
@@ -205,6 +206,7 @@ enum PendingAudioLoad {
         wf_id: EntityId,
         wf_data: WaveformView,
         ac_data: AudioClipData,
+        source_file: (Vec<u8>, String),
     },
     /// Load failed — remove placeholder.
     Failed { wf_id: EntityId },
@@ -228,6 +230,8 @@ struct App {
     objects: IndexMap<EntityId, CanvasObject>,
     waveforms: IndexMap<EntityId, WaveformView>,
     audio_clips: IndexMap<EntityId, AudioClipData>,
+    /// Original encoded audio file bytes + extension per waveform (for saving).
+    source_audio_files: IndexMap<EntityId, (Vec<u8>, String)>,
     audio_engine: Option<NativeAudioEngine>,
     recorder: Option<NativeAudioRecorder>,
     recording_waveform_id: Option<EntityId>,
@@ -398,6 +402,7 @@ impl App {
             objects: IndexMap::new(),
             waveforms: IndexMap::new(),
             audio_clips: IndexMap::new(),
+            source_audio_files: IndexMap::new(),
             audio_engine: None,
             recorder: None,
             recording_waveform_id: None,
@@ -803,6 +808,7 @@ impl App {
             stored_components,
             stored_component_instances,
             audio_clips,
+            source_audio_files,
             loaded_bpm,
             stored_midi_clips,
             stored_layer_tree,
@@ -872,6 +878,7 @@ impl App {
 
                 // Restore audio data and peaks from DB
                 let mut audio_clips: IndexMap<EntityId, AudioClipData> = IndexMap::new();
+                let mut source_audio_files: IndexMap<EntityId, (Vec<u8>, String)> = IndexMap::new();
                 if let Some(s) = &storage {
                     let wf_ids: Vec<EntityId> = waveforms.keys().cloned().collect();
                     for wf_id in &wf_ids {
@@ -883,17 +890,24 @@ impl App {
                         let mut left_peaks = wf.audio.left_peaks.clone();
                         let mut right_peaks = wf.audio.right_peaks.clone();
 
-                        if let Some(audio) = s.load_audio(&id_str) {
-                            left_samples = Arc::new(storage::u8_slice_to_f32(&audio.left_samples));
-                            right_samples =
-                                Arc::new(storage::u8_slice_to_f32(&audio.right_samples));
-                            let mono = storage::u8_slice_to_f32(&audio.mono_samples);
-                            sample_rate = audio.sample_rate;
-                            audio_clips.insert(*wf_id, AudioClipData {
-                                samples: Arc::new(mono),
-                                sample_rate: audio.sample_rate,
-                                duration_secs: audio.duration_secs,
-                            });
+                        if let Some((file_bytes, ext)) = s.load_audio(&id_str) {
+                            if let Some(loaded) = crate::audio::load_audio_from_bytes(&file_bytes, &ext) {
+                                left_samples = loaded.left_samples;
+                                right_samples = loaded.right_samples;
+                                sample_rate = loaded.sample_rate;
+                                audio_clips.insert(*wf_id, AudioClipData {
+                                    samples: loaded.samples,
+                                    sample_rate: loaded.sample_rate,
+                                    duration_secs: loaded.duration_secs,
+                                });
+                            } else {
+                                audio_clips.insert(*wf_id, AudioClipData {
+                                    samples: Arc::new(Vec::new()),
+                                    sample_rate: 48000,
+                                    duration_secs: 0.0,
+                                });
+                            }
+                            source_audio_files.insert(*wf_id, (file_bytes, ext));
                         } else {
                             audio_clips.insert(*wf_id, AudioClipData {
                                 samples: Arc::new(Vec::new()),
@@ -901,13 +915,11 @@ impl App {
                                 duration_secs: 0.0,
                             });
                         }
-                        if let Some(peaks) = s.load_peaks(&id_str) {
-                            let lp = storage::u8_slice_to_f32(&peaks.left_peaks);
-                            let rp = storage::u8_slice_to_f32(&peaks.right_peaks);
+                        if let Some((block_size, lp, rp)) = s.load_peaks(&id_str) {
                             left_peaks =
-                                Arc::new(WaveformPeaks::from_raw(peaks.block_size as usize, lp));
+                                Arc::new(WaveformPeaks::from_raw(block_size as usize, lp));
                             right_peaks =
-                                Arc::new(WaveformPeaks::from_raw(peaks.block_size as usize, rp));
+                                Arc::new(WaveformPeaks::from_raw(block_size as usize, rp));
                         }
                         let filename = wf.audio.filename.clone();
                         waveforms.get_mut(wf_id).unwrap().audio = Arc::new(AudioData {
@@ -934,6 +946,7 @@ impl App {
                     storage::components_from_stored(state.components),
                     storage::component_instances_from_stored(state.component_instances),
                     audio_clips,
+                    source_audio_files,
                     if state.bpm > 0.0 { state.bpm } else { DEFAULT_BPM },
                     storage::midi_clips_from_stored(state.midi_clips),
                     state.layer_tree,
@@ -955,6 +968,7 @@ impl App {
                     Vec::new(),  // stored_components
                     Vec::new(),  // stored_component_instances
                     IndexMap::new(),  // audio_clips
+                    IndexMap::new(),  // source_audio_files
                     DEFAULT_BPM,
                     Vec::new(),  // stored_midi_clips
                     Vec::new(),  // stored_layer_tree
@@ -1122,6 +1136,7 @@ impl App {
             objects,
             waveforms,
             audio_clips,
+            source_audio_files,
             audio_engine,
             recorder,
             recording_waveform_id: None,
@@ -2661,16 +2676,17 @@ impl App {
                             duration_secs: loaded.duration_secs,
                         };
                     }
+                    // Encode recorded PCM as WAV bytes for storage
+                    let wav_bytes = audio::encode_wav_bytes(
+                        &loaded.left_samples,
+                        &loaded.right_samples,
+                        loaded.sample_rate,
+                    );
                     if let Some(rs) = &self.remote_storage {
                         let wf_id_str = wf_id.to_string();
-                        // Encode recorded PCM as WAV bytes for remote storage
-                        let wav_bytes = audio::encode_wav_bytes(
-                            &loaded.left_samples,
-                            &loaded.right_samples,
-                            loaded.sample_rate,
-                        );
                         rs.save_audio(&wf_id_str, &wav_bytes, "wav");
                     }
+                    self.source_audio_files.insert(wf_id, (wav_bytes, "wav".to_string()));
                     // Finalize take group if recording into a selected waveform
                     if let Some(parent_id) = self.recording_take_parent_id.take() {
                         if let Some(parent) = self.waveforms.get(&parent_id) {
@@ -3710,31 +3726,35 @@ impl App {
                 duration_secs: loaded.duration_secs,
             };
 
+            // Read original file bytes for storage
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("wav")
+                .to_string();
+            let source_file = match std::fs::read(&path) {
+                Ok(bytes) => (bytes, ext.clone()),
+                Err(e) => {
+                    eprintln!("[BgAudioLoad] Failed to read file bytes: {e}");
+                    (Vec::new(), ext.clone())
+                }
+            };
+
             if let Some(rs) = &rs {
                 // Remote storage mode: defer waveform display until upload completes.
                 // Do NOT send Decoded — keep the placeholder visible with "uploading..." label.
                 let wf_id_str = wf_id.to_string();
-                let ext = path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("wav")
-                    .to_string();
                 let save_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    if let Ok(file_bytes) = std::fs::read(&path) {
-                        rs.save_audio(&wf_id_str, &file_bytes, &ext);
-                    } else {
-                        eprintln!("[BgAudioLoad] Failed to re-read file for remote save: {}", path.display());
-                    }
+                    rs.save_audio(&wf_id_str, &source_file.0, &ext);
                 }));
                 match save_result {
                     Ok(()) => {
                         println!("[BgAudioLoad] Remote save done for {wf_id}, sending SyncReady");
-                        let _ = tx.send(PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data });
+                        let _ = tx.send(PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data, source_file });
                     }
                     Err(e) => {
                         eprintln!("[BgAudioLoad] Remote save PANICKED for {wf_id}: {e:?}");
-                        // Still send SyncReady so the op gets pushed (data may be missing on remote)
-                        let _ = tx.send(PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data });
+                        let _ = tx.send(PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data, source_file });
                     }
                 }
             } else {
@@ -3743,6 +3763,7 @@ impl App {
                     wf_id,
                     wf_data,
                     ac_data,
+                    source_file,
                 });
             }
         });
@@ -3755,9 +3776,12 @@ impl App {
         let mut any = false;
         while let Ok(load) = self.pending_audio_rx.try_recv() {
             match load {
-                PendingAudioLoad::Decoded { wf_id, wf_data, ac_data } => {
+                PendingAudioLoad::Decoded { wf_id, wf_data, ac_data, source_file } => {
                     self.waveforms.insert(wf_id, wf_data.clone());
                     self.audio_clips.insert(wf_id, ac_data.clone());
+                    if !source_file.0.is_empty() {
+                        self.source_audio_files.insert(wf_id, source_file);
+                    }
                     let mut ops = vec![operations::Operation::CreateWaveform {
                         id: wf_id,
                         data: wf_data,
@@ -3768,9 +3792,12 @@ impl App {
                     self.push_op(operations::Operation::Batch(ops));
                     self.pending_audio_loads_count = self.pending_audio_loads_count.saturating_sub(1);
                 }
-                PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data } => {
+                PendingAudioLoad::SyncReady { wf_id, wf_data, ac_data, source_file } => {
                     self.waveforms.insert(wf_id, wf_data.clone());
                     self.audio_clips.insert(wf_id, ac_data.clone());
+                    if !source_file.0.is_empty() {
+                        self.source_audio_files.insert(wf_id, source_file);
+                    }
                     let mut ops = vec![operations::Operation::CreateWaveform {
                         id: wf_id,
                         data: wf_data,

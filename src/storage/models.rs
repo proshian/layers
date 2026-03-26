@@ -204,17 +204,7 @@ surreal_derive! {
 // Audio / peaks stored per waveform
 // ---------------------------------------------------------------------------
 
-surreal_derive! {
-    #[derive(Clone)]
-    pub struct StoredAudioData {
-        pub waveform_id: String,
-        pub left_samples: Vec<u8>,
-        pub right_samples: Vec<u8>,
-        pub mono_samples: Vec<u8>,
-        pub sample_rate: u32,
-        pub duration_secs: f32,
-    }
-}
+// StoredAudioData is defined in local.rs (uses surrealdb::types::Bytes)
 
 surreal_derive! {
     #[derive(Clone)]

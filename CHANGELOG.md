@@ -1,3 +1,4 @@
+- 2026-03-27: perf: store original encoded audio files (Bytes) instead of decoded PCM, quantize peaks to u8 — much faster save/load, smaller project files (46.9k loc)
 - 2026-03-27: perf: fix slow browser search — 150ms debounce, pre-lowered fuzzy match, background file indexing, skip 1-char queries (46.8k loc)
 - 2026-03-27: feat: per-channel RMS meter inside right window volume fader with peak hold (46.8k loc)
 - 2026-03-27: fix: option+drag on groups now deep-clones members instead of sharing them (46.6k loc)

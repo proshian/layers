@@ -167,19 +167,19 @@ impl App {
             storage.clear_audio_and_peaks();
             for (wf_id, wf) in self.waveforms.iter() {
                 let id_str = wf_id.to_string();
-                let (mono, duration) = if let Some(clip) = self.audio_clips.get(wf_id) {
-                    (&clip.samples, clip.duration_secs)
+                // Save original encoded audio file
+                if let Some((file_bytes, ext)) = self.source_audio_files.get(wf_id) {
+                    storage.save_audio(&id_str, file_bytes, ext);
                 } else {
-                    continue;
-                };
-                storage.save_audio(
-                    &id_str,
-                    &wf.audio.left_samples,
-                    &wf.audio.right_samples,
-                    mono,
-                    wf.audio.sample_rate,
-                    duration,
-                );
+                    // No source file cached — encode as WAV from PCM
+                    let wav_bytes = crate::audio::encode_wav_bytes(
+                        &wf.audio.left_samples,
+                        &wf.audio.right_samples,
+                        wf.audio.sample_rate,
+                    );
+                    storage.save_audio(&id_str, &wav_bytes, "wav");
+                }
+                // Save peaks (quantized to u8 by storage layer)
                 storage.save_peaks(
                     &id_str,
                     wf.audio.left_peaks.block_size as u64,
@@ -302,6 +302,7 @@ impl App {
         self.objects = IndexMap::new();
         self.waveforms.clear();
         self.audio_clips.clear();
+        self.source_audio_files.clear();
         self.components.clear();
         self.component_instances.clear();
         self.next_component_id = entity_id::new_id();
@@ -419,6 +420,7 @@ impl App {
 
         // Restore audio data and peaks from DB
         self.audio_clips.clear();
+        self.source_audio_files.clear();
         if let Some(s) = &self.storage {
             let wf_ids: Vec<EntityId> = self.waveforms.keys().cloned().collect();
             for wf_id in &wf_ids {
@@ -430,16 +432,26 @@ impl App {
                 let mut left_peaks = wf.audio.left_peaks.clone();
                 let mut right_peaks = wf.audio.right_peaks.clone();
 
-                if let Some(audio) = s.load_audio(&id_str) {
-                    left_samples = Arc::new(storage::u8_slice_to_f32(&audio.left_samples));
-                    right_samples = Arc::new(storage::u8_slice_to_f32(&audio.right_samples));
-                    let mono = storage::u8_slice_to_f32(&audio.mono_samples);
-                    sample_rate = audio.sample_rate;
-                    self.audio_clips.insert(*wf_id, AudioClipData {
-                        samples: Arc::new(mono),
-                        sample_rate: audio.sample_rate,
-                        duration_secs: audio.duration_secs,
-                    });
+                if let Some((file_bytes, ext)) = s.load_audio(&id_str) {
+                    // Decode audio from original file bytes
+                    if let Some(loaded) = crate::audio::load_audio_from_bytes(&file_bytes, &ext) {
+                        left_samples = loaded.left_samples;
+                        right_samples = loaded.right_samples;
+                        sample_rate = loaded.sample_rate;
+                        self.audio_clips.insert(*wf_id, AudioClipData {
+                            samples: loaded.samples,
+                            sample_rate: loaded.sample_rate,
+                            duration_secs: loaded.duration_secs,
+                        });
+                    } else {
+                        self.audio_clips.insert(*wf_id, AudioClipData {
+                            samples: Arc::new(Vec::new()),
+                            sample_rate: 48000,
+                            duration_secs: 0.0,
+                        });
+                    }
+                    // Cache source file bytes for future saves
+                    self.source_audio_files.insert(*wf_id, (file_bytes, ext));
                 } else {
                     self.audio_clips.insert(*wf_id, AudioClipData {
                         samples: Arc::new(Vec::new()),
@@ -447,11 +459,9 @@ impl App {
                         duration_secs: 0.0,
                     });
                 }
-                if let Some(peaks) = s.load_peaks(&id_str) {
-                    let lp = storage::u8_slice_to_f32(&peaks.left_peaks);
-                    let rp = storage::u8_slice_to_f32(&peaks.right_peaks);
-                    left_peaks = Arc::new(WaveformPeaks::from_raw(peaks.block_size as usize, lp));
-                    right_peaks = Arc::new(WaveformPeaks::from_raw(peaks.block_size as usize, rp));
+                if let Some((block_size, lp, rp)) = s.load_peaks(&id_str) {
+                    left_peaks = Arc::new(WaveformPeaks::from_raw(block_size as usize, lp));
+                    right_peaks = Arc::new(WaveformPeaks::from_raw(block_size as usize, rp));
                 }
                 let filename = wf.audio.filename.clone();
                 self.waveforms.get_mut(wf_id).unwrap().audio = Arc::new(AudioData {
