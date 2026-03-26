@@ -17,6 +17,7 @@ mod icons;
 mod history;
 mod instruments;
 mod layers;
+mod master;
 mod midi;
 mod midi_keyboard;
 mod network;
@@ -274,6 +275,7 @@ struct App {
     loop_hover: LoopHover,
     select_area: Option<SelectArea>,
     component_def_hover: ComponentDefHover,
+    pub(crate) master: master::Master,
     groups: IndexMap<EntityId, group::Group>,
     group_hover: GroupHover,
     text_notes: IndexMap<EntityId, text_note::TextNote>,
@@ -448,6 +450,7 @@ impl App {
             loop_hover: LoopHover::None,
             select_area: None,
             component_def_hover: ComponentDefHover::None,
+            master: master::Master::default(),
             groups: IndexMap::new(),
             group_hover: GroupHover::None,
             text_notes: IndexMap::new(),
@@ -1173,6 +1176,7 @@ impl App {
             loop_hover: LoopHover::None,
             select_area: None,
             component_def_hover: ComponentDefHover::None,
+            master: master::Master::default(),
             groups: IndexMap::new(),
             group_hover: GroupHover::None,
             text_notes: restored_text_notes,
@@ -1580,6 +1584,47 @@ impl App {
         }
     }
 
+    pub(crate) fn open_right_window_for_master(&mut self) {
+        let (vol_entry, vol_fader_focused, pan_knob_focused) =
+            if self.right_window.as_ref().map_or(false, |rw| rw.is_master()) {
+                let rw = self.right_window.take().unwrap();
+                (rw.vol_entry, rw.vol_fader_focused, rw.pan_knob_focused)
+            } else {
+                (ui::value_entry::ValueEntry::new(), false, false)
+            };
+        let member_count = self.waveforms.len() + self.instruments.len();
+        self.right_window = Some(ui::right_window::RightWindow {
+            target: ui::right_window::RightWindowTarget::Master,
+            volume: self.master.volume,
+            pan: self.master.pan,
+            warp_mode: ui::waveform::WarpMode::Off,
+            sample_bpm: 120.0,
+            pitch_semitones: 0.0,
+            is_reversed: false,
+            vol_dragging: false,
+            pan_dragging: false,
+            sample_bpm_dragging: false,
+            pitch_dragging: false,
+            drag_start_y: 0.0,
+            drag_start_value: 0.0,
+            vol_entry,
+            sample_bpm_entry: ui::value_entry::ValueEntry::new(),
+            pitch_entry: ui::value_entry::ValueEntry::new(),
+            vol_fader_focused,
+            pan_knob_focused,
+            pitch_focused: false,
+            sample_bpm_focused: false,
+            add_effect_hovered: false,
+            export_button_hovered: false,
+            group_name: "Main".to_string(),
+            group_member_count: member_count,
+            multi_target_ids: Vec::new(),
+            drag_start_snapshots: Vec::new(),
+            is_soloed: false,
+            is_muted: false,
+        });
+    }
+
     /// Detach a waveform's effect chain — clone the shared chain into a new independent one.
     pub(crate) fn detach_effect_chain(&mut self, wf_id: EntityId) {
         let chain_id = match self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id) {
@@ -1816,6 +1861,22 @@ impl App {
         out
     }
 
+    fn collect_master_chain_plugins(
+        &self,
+    ) -> Vec<std::sync::Arc<std::sync::Mutex<Option<effects::PluginGuiHandle>>>> {
+        let mut out = Vec::new();
+        if let Some(chain_id) = self.master.effect_chain_id {
+            if let Some(chain) = self.effect_chains.get(&chain_id) {
+                for slot in &chain.slots {
+                    if !slot.bypass {
+                        out.push(slot.gui.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
     #[cfg(feature = "native")]
     fn sync_audio_clips(&self) {
         if let Some(engine) = &self.audio_engine {
@@ -2020,6 +2081,10 @@ impl App {
             self.sync_instrument_regions(&group_id_to_bus_idx, &group_buses);
             engine.update_group_buses(group_buses);
             engine.update_chain_buses(chain_buses);
+
+            // Update master bus (Main Layer vol/pan/effects)
+            let master_plugins = self.collect_master_chain_plugins();
+            engine.update_master_bus(master_plugins, self.master.volume, self.master.pan);
 
             let regions: Vec<audio::AudioEffectRegion> = Vec::new();
             engine.update_effect_regions(regions);

@@ -180,6 +180,143 @@ pub(crate) fn start_export(
     Ok(rx)
 }
 
+/// Mix ALL waveforms in the project into stereo buffers (for Main Layer export).
+fn mix_all(app: &App) -> Result<MixedAudio, String> {
+    // Find the time span across all waveforms
+    let mut earliest = f64::MAX;
+    let mut latest = f64::MIN;
+    for wf in app.waveforms.values() {
+        if wf.disabled { continue; }
+        let wf_start = wf.position[0] as f64 / PIXELS_PER_SECOND as f64;
+        let wf_end = (wf.position[0] + wf.size[0]) as f64 / PIXELS_PER_SECOND as f64;
+        if wf_start < earliest { earliest = wf_start; }
+        if wf_end > latest { latest = wf_end; }
+    }
+    if earliest >= latest || earliest == f64::MAX {
+        return Err("No audio to export".to_string());
+    }
+
+    let start_sec = earliest;
+    let end_sec = latest;
+    let duration_sec = end_sec - start_sec;
+    let total_frames = (duration_sec * EXPORT_SAMPLE_RATE as f64) as usize;
+    let mut left_buf = vec![0.0f32; total_frames];
+    let mut right_buf = vec![0.0f32; total_frames];
+
+    // Collect group membership for applying group vol/pan
+    let mut wf_group: std::collections::HashMap<EntityId, EntityId> = std::collections::HashMap::new();
+    for (gid, g) in &app.groups {
+        for mid in &g.member_ids {
+            wf_group.insert(*mid, *gid);
+        }
+    }
+
+    for (&wf_id, wf) in &app.waveforms {
+        if wf.disabled { continue; }
+        let clip = match app.audio_clips.get(&wf_id) {
+            Some(c) => c,
+            None => continue,
+        };
+        if clip.samples.is_empty() { continue; }
+
+        let wf_start_sec = wf.position[0] as f64 / PIXELS_PER_SECOND as f64;
+        let wf_end_sec = (wf.position[0] + wf.size[0]) as f64 / PIXELS_PER_SECOND as f64;
+        let mix_start_sec = wf_start_sec.max(start_sec);
+        let mix_end_sec = wf_end_sec.min(end_sec);
+        if mix_start_sec >= mix_end_sec { continue; }
+
+        let volume = wf.volume;
+        let pan = wf.pan;
+        let left_gain = volume * (std::f32::consts::FRAC_PI_2 * (1.0 - pan)).cos().max(0.0).min(1.0) * std::f32::consts::SQRT_2;
+        let right_gain = volume * (std::f32::consts::FRAC_PI_2 * pan).cos().max(0.0).min(1.0) * std::f32::consts::SQRT_2;
+
+        // Apply group vol/pan if member of a group
+        let (g_l_mul, g_r_mul) = if let Some(gid) = wf_group.get(&wf_id) {
+            if let Some(g) = app.groups.get(gid) {
+                let gp = g.pan.clamp(0.0, 1.0);
+                ((2.0 * (1.0 - gp)).min(1.0) * g.volume, (2.0 * gp).min(1.0) * g.volume)
+            } else {
+                (1.0, 1.0)
+            }
+        } else {
+            (1.0, 1.0)
+        };
+
+        let src_rate = clip.sample_rate as f64;
+        let src_len = clip.samples.len();
+        let left_samples = &wf.audio.left_samples;
+        let right_samples = &wf.audio.right_samples;
+        let has_stereo = !left_samples.is_empty() && !right_samples.is_empty();
+        let offset_sec = wf.sample_offset_px as f64 / PIXELS_PER_SECOND as f64;
+        let wf_width_sec = wf.size[0] as f64 / PIXELS_PER_SECOND as f64;
+        let fade_in_sec = wf.fade_in_px as f64 / PIXELS_PER_SECOND as f64;
+        let fade_out_sec = wf.fade_out_px as f64 / PIXELS_PER_SECOND as f64;
+
+        for frame in 0..total_frames {
+            let t_sec = start_sec + frame as f64 / EXPORT_SAMPLE_RATE as f64;
+            if t_sec < mix_start_sec || t_sec >= mix_end_sec { continue; }
+
+            let clip_t = t_sec - wf_start_sec;
+            let src_t = offset_sec + clip_t;
+            let src_idx = (src_t * src_rate) as usize;
+
+            let (l_sample, r_sample) = if has_stereo && src_idx < left_samples.len() && src_idx < right_samples.len() {
+                (left_samples[src_idx], right_samples[src_idx])
+            } else if src_idx < src_len {
+                let mono = clip.samples[src_idx];
+                (mono, mono)
+            } else {
+                continue;
+            };
+
+            let mut fade = 1.0f32;
+            if fade_in_sec > 0.0 && clip_t < fade_in_sec {
+                fade *= (clip_t / fade_in_sec) as f32;
+            }
+            if fade_out_sec > 0.0 && clip_t > wf_width_sec - fade_out_sec {
+                let fade_pos = (wf_width_sec - clip_t) / fade_out_sec;
+                fade *= fade_pos as f32;
+            }
+            fade = fade.clamp(0.0, 1.0);
+
+            left_buf[frame] += l_sample * left_gain * fade * g_l_mul;
+            right_buf[frame] += r_sample * right_gain * fade * g_r_mul;
+        }
+    }
+
+    // Apply main layer volume and pan
+    let mv = app.master.volume;
+    let mp = app.master.pan.clamp(0.0, 1.0);
+    let ml_mul = (2.0 * (1.0 - mp)).min(1.0) * mv;
+    let mr_mul = (2.0 * mp).min(1.0) * mv;
+    if (ml_mul - 1.0).abs() > f32::EPSILON || (mr_mul - 1.0).abs() > f32::EPSILON {
+        for i in 0..total_frames {
+            left_buf[i] *= ml_mul;
+            right_buf[i] *= mr_mul;
+        }
+    }
+
+    Ok(MixedAudio { left: left_buf, right: right_buf, total_frames })
+}
+
+/// Mix all project audio (Main Layer) and start encoding on a background thread.
+pub(crate) fn start_export_main(
+    app: &App,
+    path: std::path::PathBuf,
+    format: ExportFormat,
+) -> Result<mpsc::Receiver<ExportProgress>, String> {
+    let audio = mix_all(app)?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = match format {
+            ExportFormat::Wav => encode_wav(&audio, &path, &tx),
+            ExportFormat::Mp3 => encode_wav(&audio, &path, &tx),
+        };
+        let _ = tx.send(ExportProgress::Done(result));
+    });
+    Ok(rx)
+}
+
 /// Legacy synchronous export (kept for backward compatibility with tests).
 pub(crate) fn export_group_wav(app: &App, group_id: EntityId, path: &Path) -> Result<(), String> {
     let audio = mix_group(app, group_id)?;

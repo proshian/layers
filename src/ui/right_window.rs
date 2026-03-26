@@ -11,6 +11,7 @@ pub enum RightWindowTarget {
     Waveform(EntityId),
     Instrument(EntityId),
     Group(EntityId),
+    Master,
 }
 
 pub const RIGHT_WINDOW_WIDTH: f32 = 200.0;
@@ -132,10 +133,17 @@ pub struct RightWindow {
     pub is_muted: bool,
 }
 
+/// Sentinel EntityId for the Main Layer (used for effect chain keying).
+pub const MAIN_LAYER_ID: EntityId = uuid::Uuid::from_bytes([
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x4f, 0xff,
+    0xbf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01,
+]);
+
 impl RightWindow {
     pub fn target_id(&self) -> EntityId {
         match self.target {
             RightWindowTarget::Waveform(id) | RightWindowTarget::Instrument(id) | RightWindowTarget::Group(id) => id,
+            RightWindowTarget::Master => MAIN_LAYER_ID,
         }
     }
 
@@ -151,6 +159,10 @@ impl RightWindow {
         matches!(self.target, RightWindowTarget::Group(_))
     }
 
+    pub fn is_master(&self) -> bool {
+        matches!(self.target, RightWindowTarget::Master)
+    }
+
     pub fn is_multi(&self) -> bool {
         self.multi_target_ids.len() > 1
     }
@@ -160,11 +172,11 @@ impl RightWindow {
     }
 
     fn y_extra(&self) -> f32 {
-        if self.is_group() { GROUP_EXTRA_Y } else { 0.0 }
+        if self.is_group() || self.is_master() { GROUP_EXTRA_Y } else { 0.0 }
     }
 
     pub fn target_y_extra(target: &RightWindowTarget) -> f32 {
-        if matches!(target, RightWindowTarget::Group(_)) { GROUP_EXTRA_Y } else { 0.0 }
+        if matches!(target, RightWindowTarget::Group(_) | RightWindowTarget::Master) { GROUP_EXTRA_Y } else { 0.0 }
     }
 
     pub fn panel_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
@@ -284,21 +296,21 @@ impl RightWindow {
     }
 
     pub fn hit_test_reverse_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() || self.is_master() { return false; }
         let (rp, rs) = Self::reverse_button_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     pub fn hit_test_warp_mode_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() || self.is_master() { return false; }
         let (rp, rs) = Self::warp_mode_button_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
             && pos[1] >= rp[1] && pos[1] <= rp[1] + rs[1]
     }
 
     pub fn hit_test_warp_mode_selector(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() || self.is_master() { return false; }
         if self.warp_mode == WarpMode::Off { return false; }
         let (rp, rs) = Self::warp_mode_selector_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -306,7 +318,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_sample_bpm_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() || self.is_master() { return false; }
         if self.warp_mode != WarpMode::RePitch { return false; }
         let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -314,7 +326,7 @@ impl RightWindow {
     }
 
     pub fn hit_test_pitch_text(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if self.is_instrument() || self.is_multi() || self.is_group() { return false; }
+        if self.is_instrument() || self.is_multi() || self.is_group() || self.is_master() { return false; }
         if self.warp_mode != WarpMode::Semitone { return false; }
         let (rp, rs) = Self::warp_param_text_rect(screen_w, screen_h, scale);
         pos[0] >= rp[0] && pos[0] <= rp[0] + rs[0]
@@ -510,8 +522,8 @@ impl RightWindow {
             border_radius: 0.0,
         });
 
-        // Group target: render export button (fall through to vol/pan below)
-        if self.is_group() {
+        // Group/MainLayer target: render export button (fall through to vol/pan below)
+        if self.is_group() || self.is_master() {
             let (ebp, ebs) = Self::export_button_rect(screen_w, screen_h, scale);
             out.push(InstanceRaw {
                 position: ebp,
@@ -635,8 +647,8 @@ impl RightWindow {
             out.push(InstanceRaw { position: [x1 - thick, y1 - bracket_len], size: [thick, bracket_len], color, border_radius: 0.0 });
         }
 
-        // Solo/Mute buttons (all entity types)
-        {
+        // Solo/Mute buttons (all entity types except MainLayer)
+        if !self.is_master() {
             let sm_layout = Self::solo_mute_layout(screen_w, screen_h, scale, self.y_extra());
             out.extend(super::solo_mute::build_instances(&sm_layout, self.is_soloed, self.is_muted, false, &settings.theme, scale));
         }
@@ -832,7 +844,9 @@ impl RightWindow {
         let rw_w = RIGHT_WINDOW_WIDTH * scale;
 
         // "INSPECTOR" header label (with selection count for multi-selection)
-        let header_text = if self.is_group() {
+        let header_text = if self.is_master() {
+            "MAIN".to_string()
+        } else if self.is_group() {
             "GROUP".to_string()
         } else if self.is_multi() {
             format!("{} CLIPS", self.selection_count())
@@ -852,8 +866,8 @@ impl RightWindow {
             center: false,
         });
 
-        // Group target: render group name, member count, export button text
-        if self.is_group() {
+        // Group/MainLayer target: render group name, member count, export button text
+        if self.is_group() || self.is_master() {
             // Group name
             out.push(TextEntry {
                 text: self.group_name.clone(),
@@ -1040,8 +1054,8 @@ impl RightWindow {
             center: true,
         });
 
-        // Solo/Mute button text (all entity types)
-        {
+        // Solo/Mute button text (all entity types except MainLayer)
+        if !self.is_master() {
             let sm_layout = Self::solo_mute_layout(screen_w, screen_h, scale, self.y_extra());
             out.extend(super::solo_mute::build_text_entries(&sm_layout, self.is_soloed, self.is_muted, theme, scale));
         }
@@ -1184,7 +1198,7 @@ impl RightWindow {
         let (pp, _) = Self::panel_rect(screen_w, screen_h, scale);
         let offset = match target {
             RightWindowTarget::Instrument(_) => REVERSE_BUTTON_Y_OFFSET,
-            RightWindowTarget::Group(_) => GROUP_EFFECT_CHAIN_TOP_OFFSET,
+            RightWindowTarget::Group(_) | RightWindowTarget::Master => GROUP_EFFECT_CHAIN_TOP_OFFSET,
             _ => EFFECT_CHAIN_TOP_OFFSET,
         };
         pp[1] + HEADER_HEIGHT * scale + offset * scale
@@ -1592,9 +1606,9 @@ impl RightWindow {
         ([pp[0] + margin, btn_y], [ps[0] - margin * 2.0, EFFECT_ADD_BUTTON_H * scale])
     }
 
-    /// Hit test: is pos on the group "Export WAV" button?
+    /// Hit test: is pos on the group/main "Export WAV" button?
     pub fn hit_test_export_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
-        if !self.is_group() { return false; }
+        if !self.is_group() && !self.is_master() { return false; }
         let (bp, bs) = Self::export_button_rect(screen_w, screen_h, scale);
         pos[0] >= bp[0] && pos[0] <= bp[0] + bs[0]
             && pos[1] >= bp[1] && pos[1] <= bp[1] + bs[1]

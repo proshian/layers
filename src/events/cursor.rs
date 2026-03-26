@@ -151,6 +151,9 @@ impl App {
                                     g.volume = new_vol;
                                 }
                             }
+                            Some(ui::right_window::RightWindowTarget::Master) => {
+                                self.master.volume = new_vol;
+                            }
                             None => {}
                         }
                     } else if is_pan_drag {
@@ -187,6 +190,9 @@ impl App {
                                 if let Some(g) = self.groups.get_mut(&gid) {
                                     g.pan = new_pan;
                                 }
+                            }
+                            Some(ui::right_window::RightWindowTarget::Master) => {
+                                self.master.pan = new_pan;
                             }
                             None => {}
                         }
@@ -238,12 +244,13 @@ impl App {
                     ui::right_window::RightWindowTarget::Waveform(wf_id) => self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id),
                     ui::right_window::RightWindowTarget::Instrument(inst_id) => self.instruments.get(&inst_id).and_then(|i| i.effect_chain_id),
                     ui::right_window::RightWindowTarget::Group(group_id) => self.groups.get(&group_id).and_then(|g| g.effect_chain_id),
+                    ui::right_window::RightWindowTarget::Master => self.master.effect_chain_id,
                 };
                 let slot_count = chain_id
                     .and_then(|cid| self.effect_chains.get(&cid))
                     .map_or(0, |c| c.slots.len());
                 let add_h = rw.hit_test_add_effect_button(self.mouse_pos, slot_count, sw, sh, scale);
-                let export_h = if rw.is_group() {
+                let export_h = if rw.is_group() || rw.is_master() {
                     rw.hit_test_export_button(self.mouse_pos, sw, sh, scale)
                 } else {
                     false

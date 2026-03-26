@@ -194,6 +194,9 @@ surreal_derive! {
         pub layer_tree: Vec<StoredLayerNode>,
         pub text_notes: Vec<StoredTextNote>,
         pub groups: Vec<StoredGroup>,
+        pub master_volume: f32,
+        pub master_pan: f32,
+        pub master_effect_chain_id: String,
     }
 }
 

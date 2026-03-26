@@ -189,6 +189,8 @@ pub struct AudioEngine {
     group_buses: Arc<Mutex<Vec<GroupBus>>>,
     chain_buses: Arc<Mutex<Vec<ChainBus>>>,
     master_volume: Arc<AtomicU64>,
+    master_pan: Arc<AtomicU64>,
+    master_bus_plugins: Arc<Mutex<Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>>>,
     rms_peak: Arc<AtomicU64>,
     loop_enabled: Arc<AtomicBool>,
     loop_start_bits: Arc<AtomicU64>,
@@ -345,6 +347,8 @@ impl AudioEngine {
         let group_buses: Arc<Mutex<Vec<GroupBus>>> = Arc::new(Mutex::new(Vec::new()));
         let chain_buses: Arc<Mutex<Vec<ChainBus>>> = Arc::new(Mutex::new(Vec::new()));
         let master_volume = Arc::new(AtomicU64::new(1.0f64.to_bits()));
+        let master_pan = Arc::new(AtomicU64::new(0.5f64.to_bits()));
+        let master_bus_plugins: Arc<Mutex<Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>>> = Arc::new(Mutex::new(Vec::new()));
         let rms_peak = Arc::new(AtomicU64::new(0.0f64.to_bits()));
         let loop_enabled = Arc::new(AtomicBool::new(false));
         let loop_start_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
@@ -374,6 +378,8 @@ impl AudioEngine {
         let cb = chain_buses.clone();
         let kb_preview = keyboard_preview.clone();
         let vol = master_volume.clone();
+        let m_pan = master_pan.clone();
+        let m_plugins = master_bus_plugins.clone();
         let rms = rms_peak.clone();
         let lp_en = loop_enabled.clone();
         let lp_s = loop_start_bits.clone();
@@ -1105,12 +1111,49 @@ impl AudioEngine {
                         }
                     }
 
+                    // --- Master bus pass: apply master volume + pan ---
+                    let master_pan_val = load_f64(&m_pan) as f32;
+                    let m_l_mul = gain * (2.0 * (1.0 - master_pan_val)).min(1.0);
+                    let m_r_mul = gain * (2.0 * master_pan_val).min(1.0);
+
+                    // Process master bus effect chain (if any plugins)
+                    if let Ok(plugins) = m_plugins.try_lock() {
+                        if !plugins.is_empty() {
+                            let block = frames;
+                            let mut src_l = vec![0.0f32; block];
+                            let mut src_r = vec![0.0f32; block];
+                            let mut dst_l = vec![0.0f32; block];
+                            let mut dst_r = vec![0.0f32; block];
+                            for i in 0..block {
+                                src_l[i] = dry_mix[i][0];
+                                src_r[i] = dry_mix[i][1];
+                            }
+                            for plug_arc in plugins.iter() {
+                                dst_l[..block].copy_from_slice(&src_l[..block]);
+                                dst_r[..block].copy_from_slice(&src_r[..block]);
+                                if let Ok(guard) = plug_arc.try_lock() {
+                                    if let Some(ref gui) = *guard {
+                                        let inputs: [&[f32]; 2] = [&src_l[..block], &src_r[..block]];
+                                        let mut outputs: [&mut [f32]; 2] = [&mut dst_l[..block], &mut dst_r[..block]];
+                                        gui.process(&inputs, &mut outputs, block);
+                                    }
+                                }
+                                std::mem::swap(&mut src_l, &mut dst_l);
+                                std::mem::swap(&mut src_r, &mut dst_r);
+                            }
+                            for i in 0..block {
+                                dry_mix[i][0] = src_l[i];
+                                dry_mix[i][1] = src_r[i];
+                            }
+                        }
+                    }
+
                     // Write final output (stereo)
                     for i in 0..frames {
                         let base = i * channels;
                         if channels >= 2 {
-                            let l = (dry_mix[i][0] * gain).clamp(-1.0, 1.0);
-                            let r = (dry_mix[i][1] * gain).clamp(-1.0, 1.0);
+                            let l = (dry_mix[i][0] * m_l_mul).clamp(-1.0, 1.0);
+                            let r = (dry_mix[i][1] * m_r_mul).clamp(-1.0, 1.0);
                             data[base] = l;
                             data[base + 1] = r;
                             let mono = (l + r) * 0.5;
@@ -1119,7 +1162,7 @@ impl AudioEngine {
                                 data[base + ch] = mono;
                             }
                         } else {
-                            let mono = ((dry_mix[i][0] + dry_mix[i][1]) * 0.5 * gain).clamp(-1.0, 1.0);
+                            let mono = ((dry_mix[i][0] + dry_mix[i][1]) * 0.5 * m_l_mul).clamp(-1.0, 1.0);
                             data[base] = mono;
                             sum_sq += (mono as f64) * (mono as f64);
                         }
@@ -1162,6 +1205,8 @@ impl AudioEngine {
             group_buses,
             chain_buses,
             master_volume,
+            master_pan,
+            master_bus_plugins,
             rms_peak,
             loop_enabled,
             loop_start_bits,
@@ -1357,6 +1402,19 @@ impl AudioEngine {
     pub fn update_chain_buses(&self, buses: Vec<ChainBus>) {
         if let Ok(mut guard) = self.chain_buses.lock() {
             *guard = buses;
+        }
+    }
+
+    pub fn update_master_bus(
+        &self,
+        plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
+        volume: f32,
+        pan: f32,
+    ) {
+        self.set_master_volume(volume);
+        store_f64(&self.master_pan, pan as f64);
+        if let Ok(mut guard) = self.master_bus_plugins.lock() {
+            *guard = plugins;
         }
     }
 

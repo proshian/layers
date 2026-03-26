@@ -911,7 +911,7 @@ impl App {
                             return;
                         }
 
-                        // --- Group export button click → open export window ---
+                        // --- Group/MainLayer export button click → open export window ---
                         if rw.hit_test_export_button(self.mouse_pos, sw, sh, scale) {
                             if let ui::right_window::RightWindowTarget::Group(group_id) = rw.target {
                                 let group_name = self.groups.get(&group_id)
@@ -919,6 +919,13 @@ impl App {
                                     .unwrap_or_else(|| "export".to_string());
                                 self.export_window = Some(
                                     ui::export_window::ExportWindow::new(group_id, group_name)
+                                );
+                            } else if let ui::right_window::RightWindowTarget::Master = rw.target {
+                                self.export_window = Some(
+                                    ui::export_window::ExportWindow::new(
+                                        ui::right_window::MAIN_LAYER_ID,
+                                        "Main".to_string(),
+                                    )
                                 );
                             }
                             self.request_redraw();
@@ -932,6 +939,7 @@ impl App {
                                 ui::right_window::RightWindowTarget::Waveform(wf_id) => self.waveforms.get(&wf_id).and_then(|w| w.effect_chain_id),
                                 ui::right_window::RightWindowTarget::Instrument(inst_id) => self.instruments.get(&inst_id).and_then(|i| i.effect_chain_id),
                                 ui::right_window::RightWindowTarget::Group(group_id) => self.groups.get(&group_id).and_then(|g| g.effect_chain_id),
+                                ui::right_window::RightWindowTarget::Master => self.master.effect_chain_id,
                             };
                             let slot_count = chain_id
                                 .and_then(|cid| self.effect_chains.get(&cid))
@@ -946,6 +954,9 @@ impl App {
                                     ui::right_window::RightWindowTarget::Waveform(wf_id) => self.detach_effect_chain(wf_id),
                                     ui::right_window::RightWindowTarget::Instrument(inst_id) => self.detach_instrument_effect_chain(inst_id),
                                     ui::right_window::RightWindowTarget::Group(group_id) => self.detach_group_effect_chain(group_id),
+                                    ui::right_window::RightWindowTarget::Master => {
+                                        self.master.effect_chain_id = None;
+                                    }
                                 }
                                 self.request_redraw();
                                 return;
@@ -1285,6 +1296,11 @@ impl App {
                                                 self.request_redraw();
                                                 return;
                                             }
+                                            if let ui::right_window::RightWindowTarget::Master = rw.target {
+                                                self.add_plugin_to_master_chain(unique_id, &entry.name);
+                                                self.request_redraw();
+                                                return;
+                                            }
                                         }
                                     }
                                     self.drag = DragState::DraggingPlugin {
@@ -1297,6 +1313,11 @@ impl App {
                                     self.keyboard_instrument_id = Some(*id);
                                     #[cfg(feature = "native")]
                                     self.sync_computer_keyboard_to_engine();
+                                }
+                                ui::browser::EntryKind::Master => {
+                                    self.selected.clear();
+                                    self.open_right_window_for_master();
+                                    self.request_redraw();
                                 }
                                 ui::browser::EntryKind::LayerNode { id, kind, has_children, .. } => {
                                     // Solo/Mute button hit test (right-aligned buttons)
@@ -2352,6 +2373,9 @@ impl App {
                                         });
                                     }
                                 }
+                                ui::right_window::RightWindowTarget::Master => {
+                                    // MainLayer vol/pan — no undo for now
+                                }
                             }
                         }
                         self.request_redraw();
@@ -2913,6 +2937,8 @@ impl App {
                                             self.add_plugin_to_instrument_chain(id, &plugin_id, &plugin_name),
                                         ui::right_window::RightWindowTarget::Group(id) =>
                                             self.add_plugin_to_group_chain(id, &plugin_id, &plugin_name),
+                                        ui::right_window::RightWindowTarget::Master =>
+                                            self.add_plugin_to_master_chain(&plugin_id, &plugin_name),
                                     }
                                     self.drag = DragState::None;
                                     self.update_hover();
@@ -3153,7 +3179,12 @@ impl App {
                 None => return, // user cancelled
             };
 
-            match crate::export::start_export(self, group_id, path, format) {
+            let export_result = if group_id == ui::right_window::MAIN_LAYER_ID {
+                crate::export::start_export_main(self, path, format)
+            } else {
+                crate::export::start_export(self, group_id, path, format)
+            };
+            match export_result {
                 Ok(rx) => {
                     if let Some(ew) = &mut self.export_window {
                         ew.state = ui::export_window::ExportState::Exporting;

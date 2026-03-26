@@ -111,6 +111,10 @@ impl App {
                         }
                         self.sync_audio_clips();
                     }
+                    ui::right_window::RightWindowTarget::Master => {
+                        self.master.volume = new_vol;
+                        self.sync_audio_clips();
+                    }
                 }
                 self.request_redraw();
                 return;
@@ -157,6 +161,10 @@ impl App {
                                 self.push_op(crate::operations::Operation::UpdateGroup { id: gid, before, after });
                             }
                         }
+                        self.sync_audio_clips();
+                    }
+                    ui::right_window::RightWindowTarget::Master => {
+                        self.master.pan = new_pan;
                         self.sync_audio_clips();
                     }
                 }

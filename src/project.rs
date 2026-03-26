@@ -148,6 +148,11 @@ impl App {
                 layer_tree: layers::tree_to_stored(&self.layer_tree),
                 text_notes: storage::text_notes_to_stored(&self.text_notes),
                 groups: storage::groups_to_stored(&self.groups),
+                master_volume: self.master.volume,
+                master_pan: self.master.pan,
+                master_effect_chain_id: self.master.effect_chain_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
             };
             storage.save_project_state(state);
 
@@ -532,6 +537,24 @@ impl App {
             .collect();
 
         self.groups = storage::groups_from_stored(state.groups);
+
+        // Restore Main Layer
+        self.master.volume = if state.master_volume == 0.0 && state.master_pan == 0.0 && state.master_effect_chain_id.is_empty() {
+            // Likely an older project that doesn't have main layer data — use defaults
+            1.0
+        } else {
+            state.master_volume
+        };
+        self.master.pan = if state.master_pan == 0.0 && state.master_volume == 0.0 {
+            0.5
+        } else {
+            state.master_pan
+        };
+        self.master.effect_chain_id = if state.master_effect_chain_id.is_empty() {
+            None
+        } else {
+            uuid::Uuid::parse_str(&state.master_effect_chain_id).ok()
+        };
 
         {
             let mut tree = layers::tree_from_stored(&state.layer_tree);

@@ -65,6 +65,7 @@ pub enum EntryKind {
     Plugin { unique_id: String, is_instrument: bool },
     ProjectInstrument { id: EntityId },
     LayerNode { id: EntityId, kind: LayerNodeKind, has_children: bool, expanded: bool, color: [f32; 4], is_soloed: bool, is_muted: bool },
+    Master,
 }
 
 #[derive(Clone)]
@@ -332,6 +333,15 @@ impl SampleBrowser {
         let searching = !query.is_empty();
         match self.active_category {
             BrowserCategory::Layers => {
+                // Pinned "Main" layer row at the top
+                if !searching {
+                    self.entries.push(BrowserEntry {
+                        path: PathBuf::new(),
+                        name: "Main".to_string(),
+                        kind: EntryKind::Master,
+                        depth: 0,
+                    });
+                }
                 for row in &self.layer_rows {
                     if searching && !fuzzy_match(&row.label, &query) {
                         continue;
@@ -1114,7 +1124,7 @@ impl SampleBrowser {
                         border_radius: dot_sz * 0.5,
                     });
                 }
-                EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } => {
+                EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } | EntryKind::Master => {
                     let indent = entry.depth as f32 * INDENT_PX * scale;
                     out.push(InstanceRaw {
                         position: [cx, y],
@@ -1560,13 +1570,14 @@ impl SampleBrowser {
                         center: false,
                     });
                 }
-                EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } => {
+                EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } | EntryKind::Master => {
                     let indent = entry.depth as f32 * INDENT_PX * scale;
                     let text_offset = indent + 28.0 * scale;
                     let text_x = cx + text_offset;
                     let font_sz = 12.0 * scale;
                     let line_h = 16.0 * scale;
                     let color = match &entry.kind {
+                        EntryKind::Master => crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255),
                         EntryKind::LayerNode { kind, .. } => match kind {
                             LayerNodeKind::Instrument => crate::theme::RuntimeTheme::text_u8(theme.text_primary, 230),
                             LayerNodeKind::MidiClip => crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 230),

@@ -268,6 +268,9 @@ impl App {
                             crate::ui::right_window::RightWindowTarget::Group(group_id) => {
                                 self.groups.get(&group_id).and_then(|g| g.effect_chain_id)
                             }
+                            crate::ui::right_window::RightWindowTarget::Master => {
+                                self.master.effect_chain_id
+                            }
                         };
                         if let Some(cid) = chain_id {
                             self.effect_chains.get(&cid).map(|c| {
