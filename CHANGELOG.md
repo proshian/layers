@@ -1,3 +1,5 @@
+- 2026-03-27: feat: per-channel RMS meter inside right window volume fader with peak hold (46.8k loc)
+- 2026-03-27: fix: option+drag on groups now deep-clones members instead of sharing them (46.6k loc)
 - 2026-03-27: feat: File → Export Audio menu item opens master render (Cmd+Shift+E) (46.5k loc)
 - 2026-03-27: ui: rename "Export WAV" to "Export" with download icon in right panel (46.4k loc)
 - 2026-03-27: refactor: replace export format buttons with dropdown (46.4k loc)

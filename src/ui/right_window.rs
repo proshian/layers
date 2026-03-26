@@ -1,7 +1,8 @@
 use crate::entity_id::EntityId;
 use crate::gpu::TextEntry;
 use crate::InstanceRaw;
-use crate::ui::palette::{gain_to_db, gain_to_vol_fader_pos, vol_fader_pos_to_gain,
+use crate::theme::{RMS_LOW, RMS_MID, RMS_HIGH};
+use crate::ui::palette::{db_to_gain, gain_to_db, gain_to_vol_fader_pos, vol_fader_pos_to_gain,
     VOL_FADER_DB_BOTTOM, VOL_FADER_P_ZERO, VOL_FADER_P_BOTTOM};
 use crate::ui::value_entry::ValueEntry;
 use crate::ui::waveform::{WarpMode, WaveformView};
@@ -131,6 +132,12 @@ pub struct RightWindow {
     pub is_soloed: bool,
     /// Transient mute state for the target entity
     pub is_muted: bool,
+    /// Smoothed RMS level (linear amplitude, 0.0–~1.5)
+    pub meter_rms: f32,
+    /// Peak hold level (linear amplitude)
+    pub meter_peak: f32,
+    /// Seconds since peak was last updated
+    pub peak_hold_timer: f32,
 }
 
 /// Sentinel EntityId for the Main Layer (used for effect chain keying).
@@ -161,6 +168,25 @@ impl RightWindow {
 
     pub fn is_master(&self) -> bool {
         matches!(self.target, RightWindowTarget::Master)
+    }
+
+    pub fn update_rms(&mut self, raw: f32) {
+        let dt = 1.0 / 60.0_f32;
+        let attack_coeff = 1.0 - (-dt / 0.005).exp();
+        let release_coeff = 1.0 - (-dt / 0.300).exp();
+        let coeff = if raw > self.meter_rms { attack_coeff } else { release_coeff };
+        self.meter_rms += coeff * (raw - self.meter_rms);
+
+        if raw > self.meter_peak {
+            self.meter_peak = raw;
+            self.peak_hold_timer = 0.0;
+        } else {
+            self.peak_hold_timer += dt;
+            if self.peak_hold_timer > 1.5 {
+                let peak_decay = 1.0 - (-dt / 0.5).exp();
+                self.meter_peak += peak_decay * (self.meter_rms - self.meter_peak);
+            }
+        }
     }
 
     pub fn is_multi(&self) -> bool {
@@ -345,7 +371,7 @@ impl RightWindow {
             center_x,
             label_y: track_pos[1] - 18.0 * scale,
             triangle_x: track_pos[0] - 14.0 * scale,
-            scale_labels_x: track_pos[0] + track_size[0] + 11.0 * scale,
+            scale_labels_x: track_pos[0] + track_size[0] + 6.0 * scale,
             db_text_y,
             db_text_rect: ([pp[0], db_text_y], [rw_w, 20.0 * scale]),
             bracket_x0: center_x - 20.0 * scale,
@@ -552,6 +578,70 @@ impl RightWindow {
             color: settings.theme.bg_elevated,
             border_radius: FADER_TRACK_W * 0.5 * scale,
         });
+
+        // RMS meter fill inside fader track (rendered behind gain fill)
+        if self.meter_rms > 0.0001 {
+            let meter_fader_pos = gain_to_vol_fader_pos(self.meter_rms);
+            let meter_y = Self::vol_fader_thumb_y(meter_fader_pos, track_pos, track_size[1]);
+            let track_bottom = track_pos[1] + track_size[1];
+            let br = FADER_TRACK_W * 0.5 * scale;
+
+            // dB thresholds for color zones
+            let y_minus12 = Self::vol_fader_thumb_y(gain_to_vol_fader_pos(db_to_gain(-12.0)), track_pos, track_size[1]);
+            let y_minus3 = Self::vol_fader_thumb_y(gain_to_vol_fader_pos(db_to_gain(-3.0)), track_pos, track_size[1]);
+
+            // Green zone: bottom → -12dB
+            let green_top = meter_y.max(y_minus12);
+            let green_h = track_bottom - green_top;
+            if green_h > 0.5 {
+                out.push(InstanceRaw {
+                    position: [track_pos[0], green_top],
+                    size: [track_size[0], green_h],
+                    color: crate::theme::with_alpha(RMS_LOW, 0.5),
+                    border_radius: br,
+                });
+            }
+
+            // Yellow zone: -12dB → -3dB
+            if meter_y < y_minus12 {
+                let yellow_top = meter_y.max(y_minus3);
+                let yellow_h = y_minus12 - yellow_top;
+                if yellow_h > 0.5 {
+                    out.push(InstanceRaw {
+                        position: [track_pos[0], yellow_top],
+                        size: [track_size[0], yellow_h],
+                        color: crate::theme::with_alpha(RMS_MID, 0.5),
+                        border_radius: 0.0,
+                    });
+                }
+            }
+
+            // Red zone: above -3dB
+            if meter_y < y_minus3 {
+                let red_top = meter_y;
+                let red_h = y_minus3 - red_top;
+                if red_h > 0.5 {
+                    out.push(InstanceRaw {
+                        position: [track_pos[0], red_top],
+                        size: [track_size[0], red_h],
+                        color: crate::theme::with_alpha(RMS_HIGH, 0.5),
+                        border_radius: 0.0,
+                    });
+                }
+            }
+        }
+
+        // Peak hold indicator
+        if self.meter_peak > 0.0001 {
+            let peak_fader_pos = gain_to_vol_fader_pos(self.meter_peak);
+            let peak_y = Self::vol_fader_thumb_y(peak_fader_pos, track_pos, track_size[1]);
+            out.push(InstanceRaw {
+                position: [track_pos[0], peak_y - 1.0 * scale],
+                size: [track_size[0], 2.0 * scale],
+                color: crate::theme::with_alpha(settings.theme.text_primary, 0.7),
+                border_radius: 0.0,
+            });
+        }
 
         // Focus corner brackets — enclose Gain label, fader track, ticks, scale labels, dB value
         if self.vol_fader_focused {
@@ -958,55 +1048,33 @@ impl RightWindow {
             center: false,
         });
 
-        // Scale labels to the right of tick marks
+        // Scale labels to the right of tick marks (centered)
         let scale_font = 9.0 * scale;
         let scale_line = 11.0 * scale;
         let label_x = layout.scale_labels_x;
-        let label_bounds = Some([label_x, 0.0, label_x + 30.0 * scale, screen_h]);
+        let label_w = 20.0 * scale;
+        let label_bounds = Some([label_x, 0.0, label_x + label_w, screen_h]);
 
-        // "+24" at fader top
-        out.push(TextEntry {
-            text: "24".to_string(),
-            x: label_x,
-            y: fader_pos[1] - scale_line * 0.5,
-            font_size: scale_font,
-            line_height: scale_line,
-            max_width: 30.0 * scale,
-            color: crate::theme::RuntimeTheme::text_u8(theme.text_dim, 220),
-            weight: 400,
-            bounds: label_bounds,
-            center: false,
-        });
-
-        // "0" at 0 dB position
-        let y_zero = fader_pos[1] + (1.0 - VOL_FADER_P_ZERO) * fader_size[1];
-        out.push(TextEntry {
-            text: "0".to_string(),
-            x: label_x,
-            y: y_zero - scale_line * 0.5,
-            font_size: scale_font,
-            line_height: scale_line,
-            max_width: 30.0 * scale,
-            color: crate::theme::RuntimeTheme::text_u8(theme.text_dim, 220),
-            weight: 400,
-            bounds: label_bounds,
-            center: false,
-        });
-
-        // "70" at -70 dB position (near bottom)
-        let y_70 = fader_pos[1] + (1.0 - VOL_FADER_P_BOTTOM) * fader_size[1];
-        out.push(TextEntry {
-            text: "70".to_string(),
-            x: label_x,
-            y: y_70 - scale_line * 0.5,
-            font_size: scale_font,
-            line_height: scale_line,
-            max_width: 30.0 * scale,
-            color: crate::theme::RuntimeTheme::text_u8(theme.text_dim, 220),
-            weight: 400,
-            bounds: label_bounds,
-            center: false,
-        });
+        let scale_labels: &[(&str, f32)] = &[
+            ("24",  fader_pos[1]),
+            ("0",   fader_pos[1] + (1.0 - VOL_FADER_P_ZERO) * fader_size[1]),
+            ("-24", fader_pos[1] + (1.0 - gain_to_vol_fader_pos(db_to_gain(-24.0))) * fader_size[1]),
+            ("-70", fader_pos[1] + (1.0 - VOL_FADER_P_BOTTOM) * fader_size[1]),
+        ];
+        for &(text, y_center) in scale_labels {
+            out.push(TextEntry {
+                text: text.to_string(),
+                x: label_x,
+                y: y_center - scale_line * 0.5,
+                font_size: scale_font,
+                line_height: scale_line,
+                max_width: label_w,
+                color: crate::theme::RuntimeTheme::text_u8(theme.text_dim, 220),
+                weight: 400,
+                bounds: label_bounds,
+                center: true,
+            });
+        }
 
         // dB value below fader — centered on the fader track
         let vol_idle = self.vol_text();

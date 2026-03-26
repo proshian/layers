@@ -1439,6 +1439,9 @@ impl App {
                     drag_start_snapshots: Vec::new(),
                     is_soloed: self.solo_ids.contains(&first_id),
                     is_muted: wf.disabled,
+                    meter_rms: 0.0,
+                    meter_peak: 0.0,
+                    peak_hold_timer: 0.0,
                 });
                 return;
             }
@@ -1493,6 +1496,9 @@ impl App {
                     drag_start_snapshots: Vec::new(),
                     is_soloed: self.solo_ids.contains(&group_id),
                     is_muted: g.disabled,
+                    meter_rms: 0.0,
+                    meter_peak: 0.0,
+                    peak_hold_timer: 0.0,
                 });
                 return;
             }
@@ -1532,6 +1538,9 @@ impl App {
                 drag_start_snapshots: Vec::new(),
                 is_soloed: self.solo_ids.contains(&wf_id),
                 is_muted: wf.disabled,
+                meter_rms: 0.0,
+                meter_peak: 0.0,
+                peak_hold_timer: 0.0,
             });
         }
     }
@@ -1575,6 +1584,9 @@ impl App {
                 drag_start_snapshots: Vec::new(),
                 is_soloed: self.solo_ids.contains(&inst_id),
                 is_muted: inst.disabled,
+                meter_rms: 0.0,
+                meter_peak: 0.0,
+                peak_hold_timer: 0.0,
             });
         }
     }
@@ -1617,6 +1629,9 @@ impl App {
             drag_start_snapshots: Vec::new(),
             is_soloed: false,
             is_muted: false,
+            meter_rms: 0.0,
+            meter_peak: 0.0,
+            peak_hold_timer: 0.0,
         });
     }
 
@@ -1930,12 +1945,13 @@ impl App {
                 let latency = Self::collect_chain_latency(&plugins);
                 let bus_idx = group_buses.len();
                 group_id_to_bus_idx.insert(gid, bus_idx);
-                group_buses.push(audio::GroupBus { plugins, latency_samples: latency, volume: group.volume, pan: group.pan });
+                group_buses.push(audio::GroupBus { entity_id: gid, plugins, latency_samples: latency, volume: group.volume, pan: group.pan });
             }
 
             let mut positions: Vec<[f32; 2]> = Vec::new();
             let mut sizes: Vec<[f32; 2]> = Vec::new();
             let mut clips: Vec<&AudioClipData> = Vec::new();
+            let mut entity_ids: Vec<EntityId> = Vec::new();
             let mut fade_ins: Vec<f32> = Vec::new();
             let mut fade_outs: Vec<f32> = Vec::new();
             let mut fade_in_curves: Vec<f32> = Vec::new();
@@ -2002,6 +2018,7 @@ impl App {
                 positions.push(wf.position);
                 sizes.push(wf.size);
                 clips.push(clip);
+                entity_ids.push(wf_id);
                 fade_ins.push(wf.fade_in_px);
                 fade_outs.push(wf.fade_out_px);
                 fade_in_curves.push(wf.fade_in_curve);
@@ -2057,6 +2074,7 @@ impl App {
                                 positions.push([wf.position[0] + offset[0], wf.position[1] + offset[1]]);
                                 sizes.push(wf.size);
                                 clips.push(clip);
+                                entity_ids.push(wf_id);
                                 fade_ins.push(wf.fade_in_px);
                                 fade_outs.push(wf.fade_out_px);
                                 fade_in_curves.push(wf.fade_in_curve);
@@ -2103,7 +2121,7 @@ impl App {
             }
 
             let owned_clips: Vec<AudioClipData> = clips.iter().map(|c| (*c).clone()).collect();
-            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &warp_modes, &sample_bpms, self.bpm, &pitch_semitones_vec, &chain_plugins_per_clip, &chain_latencies, &group_bus_indices, &chain_bus_indices);
+            engine.update_clips(&positions, &sizes, &owned_clips, &fade_ins, &fade_outs, &fade_in_curves, &fade_out_curves, &volumes, &pans, &sample_offsets, &vol_autos, &pan_autos, &warp_modes, &sample_bpms, self.bpm, &pitch_semitones_vec, &chain_plugins_per_clip, &chain_latencies, &group_bus_indices, &chain_bus_indices, &entity_ids);
             self.sync_instrument_regions(&group_id_to_bus_idx, &group_buses);
             engine.update_group_buses(group_buses);
             engine.update_chain_buses(chain_buses);
@@ -2393,7 +2411,7 @@ impl App {
             let latency = Self::collect_chain_latency(&plugins);
             let bus_idx = group_buses.len();
             group_id_to_bus_idx.insert(gid, bus_idx);
-            group_buses.push(audio::GroupBus { plugins, latency_samples: latency, volume: group.volume, pan: group.pan });
+            group_buses.push(audio::GroupBus { entity_id: gid, plugins, latency_samples: latency, volume: group.volume, pan: group.pan });
         }
         (group_id_to_bus_idx, group_buses)
     }
@@ -3199,7 +3217,34 @@ impl App {
                     }
                     HitTarget::Group(i) => {
                         if let Some(g) = self.groups.get(&i).cloned() {
+                            let mut g = g;
+                            let old_member_ids = g.member_ids.clone();
+                            let mut new_member_ids = Vec::new();
+                            for mid in old_member_ids {
+                                let new_mid = self.clone_entity(mid).unwrap_or(mid);
+                                new_member_ids.push(new_mid);
+                            }
+                            g.member_ids = new_member_ids;
                             let nid = new_id();
+                            // Emit create ops for cloned members so undo removes them
+                            for mid in &g.member_ids {
+                                if let Some(w) = self.waveforms.get(mid) {
+                                    let ac = self.audio_clips.get(mid).cloned();
+                                    copy_ops.push(operations::Operation::CreateWaveform { id: *mid, data: w.clone(), audio_clip: ac.map(|c| (*mid, c)) });
+                                } else if let Some(mc) = self.midi_clips.get(mid) {
+                                    copy_ops.push(operations::Operation::CreateMidiClip { id: *mid, data: mc.clone() });
+                                } else if let Some(obj) = self.objects.get(mid) {
+                                    copy_ops.push(operations::Operation::CreateObject { id: *mid, data: obj.clone() });
+                                } else if let Some(tn) = self.text_notes.get(mid) {
+                                    copy_ops.push(operations::Operation::CreateTextNote { id: *mid, data: tn.clone() });
+                                } else if let Some(lr) = self.loop_regions.get(mid) {
+                                    copy_ops.push(operations::Operation::CreateLoopRegion { id: *mid, data: lr.clone() });
+                                } else if let Some(xr) = self.export_regions.get(mid) {
+                                    copy_ops.push(operations::Operation::CreateExportRegion { id: *mid, data: xr.clone() });
+                                } else if let Some(ci) = self.component_instances.get(mid) {
+                                    copy_ops.push(operations::Operation::CreateComponentInstance { id: *mid, data: ci.clone() });
+                                }
+                            }
                             self.groups.insert(nid, g.clone());
                             copy_ops.push(operations::Operation::CreateGroup { id: nid, data: g });
                             new_selected.push(HitTarget::Group(nid));

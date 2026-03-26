@@ -176,6 +176,25 @@ impl App {
                 }
             }
 
+            // Poll per-entity RMS for right window meter
+            #[cfg(feature = "native")]
+            if let Some(rw) = &mut self.right_window {
+                let raw_rms = match rw.target {
+                    crate::ui::right_window::RightWindowTarget::Master => {
+                        self.audio_engine.as_ref().map_or(0.0, |e| e.rms_peak())
+                    }
+                    crate::ui::right_window::RightWindowTarget::Waveform(id)
+                    | crate::ui::right_window::RightWindowTarget::Instrument(id)
+                    | crate::ui::right_window::RightWindowTarget::Group(id) => {
+                        self.audio_engine.as_ref().map_or(0.0, |e| e.entity_rms(id))
+                    }
+                };
+                rw.update_rms(raw_rms);
+                if rw.meter_rms > 0.001 {
+                    gpu.window.request_redraw();
+                }
+            }
+
             #[cfg(feature = "native")]
             let is_playing = self.audio_engine.as_ref().map_or(false, |e| e.is_playing());
             #[cfg(not(feature = "native"))]

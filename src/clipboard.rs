@@ -67,7 +67,7 @@ impl App {
     }
 
     /// Clone any entity by ID, inserting the clone under a new ID. Returns the new ID.
-    fn clone_entity(&mut self, id: EntityId) -> Option<EntityId> {
+    pub(crate) fn clone_entity(&mut self, id: EntityId) -> Option<EntityId> {
         if let Some(obj) = self.objects.get(&id).cloned() {
             let nid = new_id();
             self.objects.insert(nid, obj);

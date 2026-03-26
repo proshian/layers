@@ -1,6 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::path::Path;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -83,6 +84,7 @@ pub struct LoadedAudio {
 }
 
 struct PlaybackClip {
+    entity_id: EntityId,
     buffer: Arc<Vec<f32>>,
     source_sample_rate: u32,
     effective_sample_rate: f64,
@@ -111,6 +113,7 @@ pub struct ChainBus {
 }
 
 pub struct GroupBus {
+    pub entity_id: EntityId,
     pub plugins: Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>,
     pub latency_samples: u32,
     pub volume: f32,
@@ -192,6 +195,7 @@ pub struct AudioEngine {
     master_pan: Arc<AtomicU64>,
     master_bus_plugins: Arc<Mutex<Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>>>,
     rms_peak: Arc<AtomicU64>,
+    per_entity_rms: Arc<Mutex<HashMap<EntityId, f64>>>,
     loop_enabled: Arc<AtomicBool>,
     loop_start_bits: Arc<AtomicU64>,
     loop_end_bits: Arc<AtomicU64>,
@@ -350,6 +354,7 @@ impl AudioEngine {
         let master_pan = Arc::new(AtomicU64::new(0.5f64.to_bits()));
         let master_bus_plugins: Arc<Mutex<Vec<Arc<Mutex<Option<crate::effects::PluginGuiHandle>>>>>> = Arc::new(Mutex::new(Vec::new()));
         let rms_peak = Arc::new(AtomicU64::new(0.0f64.to_bits()));
+        let per_entity_rms: Arc<Mutex<HashMap<EntityId, f64>>> = Arc::new(Mutex::new(HashMap::new()));
         let loop_enabled = Arc::new(AtomicBool::new(false));
         let loop_start_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
         let loop_end_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
@@ -381,6 +386,7 @@ impl AudioEngine {
         let m_pan = master_pan.clone();
         let m_plugins = master_bus_plugins.clone();
         let rms = rms_peak.clone();
+        let per_ent_rms = per_entity_rms.clone();
         let lp_en = loop_enabled.clone();
         let lp_s = loop_start_bits.clone();
         let lp_e = loop_end_bits.clone();
@@ -419,6 +425,7 @@ impl AudioEngine {
         let mut kb_batch_buf: Vec<KeyboardPreviewEvent> = Vec::with_capacity(64);
         let mut silent_buf = vec![0.0f32; effect_block_size];
 
+        let mut entity_rms_local: HashMap<EntityId, f64> = HashMap::new();
         let mut mon_debug_counter: u32 = 0;
         let mut was_playing = false;
         let mut met_phase: f64 = 0.0;
@@ -463,6 +470,7 @@ impl AudioEngine {
                     if !is_playing && !has_instruments && !mon_active && !preview_active {
                         data.fill(0.0);
                         store_f64(&rms, 0.0);
+                        if let Ok(mut m) = per_ent_rms.try_lock() { m.clear(); }
                         return;
                     }
 
@@ -490,6 +498,10 @@ impl AudioEngine {
                     }
                     dry_mix[..frames].fill([0.0, 0.0]);
 
+                    // Per-entity RMS accumulators
+                    entity_rms_local.clear();
+                    let mut clip_sum_sq: Vec<f64> = vec![0.0; clips_ref.len()];
+
                     // Drain keyboard preview events before instrument processing
                     kb_batch_buf.clear();
                     if let Ok(mut g) = kb_preview.try_lock() {
@@ -508,6 +520,7 @@ impl AudioEngine {
                     // Always process — instruments need continuous process() for GUI keyboard preview
                     if let Ok(inst_guard) = inst_r.try_lock() {
                         for region in inst_guard.iter() {
+                            let mut inst_sum_sq = 0.0f64;
                             let region_start_secs = region.x_start_px as f64 / PIXELS_PER_SECOND as f64;
                             let region_end_secs = region.x_end_px as f64 / PIXELS_PER_SECOND as f64;
                             // Pre-send MIDI by total latency so output aligns with timeline
@@ -617,19 +630,30 @@ impl AudioEngine {
                                             let gbi = region.group_bus_index.unwrap();
                                             let base = gbi * frames + offset;
                                             for j in 0..block_len {
-                                                inst_per_bus_l[base + j] += inst_out_l[j] * il_mul;
-                                                inst_per_bus_r[base + j] += inst_out_r[j] * ir_mul;
+                                                let il = inst_out_l[j] * il_mul;
+                                                let ir = inst_out_r[j] * ir_mul;
+                                                inst_per_bus_l[base + j] += il;
+                                                inst_per_bus_r[base + j] += ir;
+                                                let mono = ((il + ir) * 0.5) as f64;
+                                                inst_sum_sq += mono * mono;
                                             }
                                         } else {
                                             for j in 0..block_len {
-                                                dry_mix[offset + j][0] += inst_out_l[j] * il_mul;
-                                                dry_mix[offset + j][1] += inst_out_r[j] * ir_mul;
+                                                let il = inst_out_l[j] * il_mul;
+                                                let ir = inst_out_r[j] * ir_mul;
+                                                dry_mix[offset + j][0] += il;
+                                                dry_mix[offset + j][1] += ir;
+                                                let mono = ((il + ir) * 0.5) as f64;
+                                                inst_sum_sq += mono * mono;
                                             }
                                         }
                                     }
                                 }
 
                                 offset += block_len;
+                            }
+                            if frames > 0 {
+                                entity_rms_local.insert(region.id, (inst_sum_sq / frames as f64).sqrt());
                             }
                         }
                     }
@@ -640,7 +664,7 @@ impl AudioEngine {
                         let t = current_time + i as f64 / sr;
                         let mut mix_l = 0.0f32;
                         let mut mix_r = 0.0f32;
-                        for clip in clips_ref.iter() {
+                        for (ci, clip) in clips_ref.iter().enumerate() {
                             if !clip.chain_plugins.is_empty() || clip.group_bus_index.is_some() || clip.chain_bus_index.is_some() {
                                 continue;
                             }
@@ -676,6 +700,8 @@ impl AudioEngine {
                                     let pan_r = pan_angle.sin();
                                     mix_l += sample * pan_l;
                                     mix_r += sample * pan_r;
+                                    let mono = (sample * pan_l + sample * pan_r) * 0.5;
+                                    clip_sum_sq[ci] += (mono as f64) * (mono as f64);
                                 }
                             }
                         }
@@ -683,17 +709,21 @@ impl AudioEngine {
                     }
 
                     // Pass 2: clips with clip-level FX but no group and no chain bus → clip FX → dry_mix
-                    for clip in clips_ref.iter() {
+                    for (ci, clip) in clips_ref.iter().enumerate() {
                         if clip.chain_plugins.is_empty() || clip.group_bus_index.is_some() || clip.chain_bus_index.is_some() {
                             continue;
                         }
                         render_clip_dry(clip, frames, current_time, sr, &mut clip_dry);
                         process_clip_chain(clip, frames, effect_block_size, &mut clip_dry,
                             &mut fx_buf_l, &mut fx_buf_r, &mut fx_out_l, &mut fx_out_r);
+                        let mut csq = 0.0f64;
                         for j in 0..frames {
                             dry_mix[j][0] += clip_dry[j][0];
                             dry_mix[j][1] += clip_dry[j][1];
+                            let mono = ((clip_dry[j][0] + clip_dry[j][1]) * 0.5) as f64;
+                            csq += mono * mono;
                         }
+                        clip_sum_sq[ci] += csq;
                     }
 
                     // Pass 2.5: chain bus processing — shared effect chains process once on summed audio
@@ -704,14 +734,18 @@ impl AudioEngine {
                                 chain_bus_r[..frames].fill(0.0);
 
                                 // Sum dry audio from all clips assigned to this chain bus (ungrouped only)
-                                for clip in clips_ref.iter() {
+                                for (ci, clip) in clips_ref.iter().enumerate() {
                                     if clip.chain_bus_index != Some(bus_idx) { continue; }
                                     if clip.group_bus_index.is_some() { continue; }
                                     render_clip_dry(clip, frames, current_time, sr, &mut clip_dry);
+                                    let mut csq = 0.0f64;
                                     for j in 0..frames {
                                         chain_bus_l[j] += clip_dry[j][0];
                                         chain_bus_r[j] += clip_dry[j][1];
+                                        let mono = ((clip_dry[j][0] + clip_dry[j][1]) * 0.5) as f64;
+                                        csq += mono * mono;
                                     }
+                                    clip_sum_sq[ci] += csq;
                                 }
 
                                 // Process chain bus through plugins (block-by-block)
@@ -762,7 +796,7 @@ impl AudioEngine {
                                 group_bus_l[..frames].fill(0.0);
                                 group_bus_r[..frames].fill(0.0);
 
-                                for clip in clips_ref.iter() {
+                                for (ci, clip) in clips_ref.iter().enumerate() {
                                     if clip.group_bus_index != Some(bus_idx) {
                                         continue;
                                     }
@@ -781,8 +815,12 @@ impl AudioEngine {
                                                     let auto_pan = crate::automation::interp_automation(norm_t, &clip.pan_automation, clip.pan);
                                                     let sample = clip.buffer[source_idx] * fg * clip.volume * auto_vol;
                                                     let pan_angle = auto_pan * std::f32::consts::FRAC_PI_2;
-                                                    group_bus_l[i] += sample * pan_angle.cos();
-                                                    group_bus_r[i] += sample * pan_angle.sin();
+                                                    let sl = sample * pan_angle.cos();
+                                                    let sr_s = sample * pan_angle.sin();
+                                                    group_bus_l[i] += sl;
+                                                    group_bus_r[i] += sr_s;
+                                                    let mono = ((sl + sr_s) * 0.5) as f64;
+                                                    clip_sum_sq[ci] += mono * mono;
                                                 }
                                             }
                                         }
@@ -791,10 +829,14 @@ impl AudioEngine {
                                         render_clip_dry(clip, frames, current_time, sr, &mut clip_dry);
                                         process_clip_chain(clip, frames, effect_block_size, &mut clip_dry,
                                             &mut fx_buf_l, &mut fx_buf_r, &mut fx_out_l, &mut fx_out_r);
+                                        let mut csq = 0.0f64;
                                         for j in 0..frames {
                                             group_bus_l[j] += clip_dry[j][0];
                                             group_bus_r[j] += clip_dry[j][1];
+                                            let mono = ((clip_dry[j][0] + clip_dry[j][1]) * 0.5) as f64;
+                                            csq += mono * mono;
                                         }
+                                        clip_sum_sq[ci] += csq;
                                     }
                                 }
 
@@ -843,9 +885,17 @@ impl AudioEngine {
                                 let gp = bus.pan.clamp(0.0, 1.0);
                                 let l_mul = (2.0 * (1.0 - gp)).min(1.0) * gv;
                                 let r_mul = (2.0 * gp).min(1.0) * gv;
+                                let mut grp_sq = 0.0f64;
                                 for j in 0..frames {
-                                    dry_mix[j][0] += group_bus_l[j] * l_mul;
-                                    dry_mix[j][1] += group_bus_r[j] * r_mul;
+                                    let gl = group_bus_l[j] * l_mul;
+                                    let gr = group_bus_r[j] * r_mul;
+                                    dry_mix[j][0] += gl;
+                                    dry_mix[j][1] += gr;
+                                    let mono = ((gl + gr) * 0.5) as f64;
+                                    grp_sq += mono * mono;
+                                }
+                                if frames > 0 {
+                                    entity_rms_local.insert(bus.entity_id, (grp_sq / frames as f64).sqrt());
                                 }
                             }
                         }
@@ -1171,6 +1221,17 @@ impl AudioEngine {
                     if frames > 0 {
                         let rms_val = (sum_sq / frames as f64).sqrt();
                         store_f64(&rms, rms_val);
+
+                        // Per-clip RMS
+                        for (ci, clip) in clips_ref.iter().enumerate() {
+                            if clip_sum_sq[ci] > 0.0 {
+                                entity_rms_local.insert(clip.entity_id, (clip_sum_sq[ci] / frames as f64).sqrt());
+                            }
+                        }
+                        // Write per-entity RMS to shared map
+                        if let Ok(mut m) = per_ent_rms.try_lock() {
+                            std::mem::swap(&mut *m, &mut entity_rms_local);
+                        }
                     }
 
                     if is_playing {
@@ -1208,6 +1269,7 @@ impl AudioEngine {
             master_pan,
             master_bus_plugins,
             rms_peak,
+            per_entity_rms,
             loop_enabled,
             loop_start_bits,
             loop_end_bits,
@@ -1339,6 +1401,7 @@ impl AudioEngine {
         chain_latencies: &[u32],
         group_bus_indices: &[Option<usize>],
         chain_bus_indices: &[Option<usize>],
+        entity_ids: &[EntityId],
     ) {
         let mut clips = self.clips.lock().unwrap();
         clips.clear();
@@ -1369,6 +1432,7 @@ impl AudioEngine {
                 _ => clip_data.sample_rate as f64,
             };
             clips.push(PlaybackClip {
+                entity_id: entity_ids.get(i).copied().unwrap_or(EntityId::nil()),
                 buffer: clip_data.samples.clone(),
                 source_sample_rate: clip_data.sample_rate,
                 effective_sample_rate: effective_rate,
@@ -1453,6 +1517,14 @@ impl AudioEngine {
 
     pub fn rms_peak(&self) -> f32 {
         load_f64(&self.rms_peak) as f32
+    }
+
+    pub fn entity_rms(&self, id: EntityId) -> f32 {
+        self.per_entity_rms
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&id).copied())
+            .unwrap_or(0.0) as f32
     }
 
     pub fn set_metronome_enabled(&self, enabled: bool) {

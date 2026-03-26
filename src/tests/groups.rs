@@ -942,3 +942,47 @@ fn delete_group_also_deletes_members() {
     assert_eq!(app.groups.len(), 1, "group should be restored on undo");
     assert_eq!(app.waveforms.len(), 2, "member waveforms should be restored on undo");
 }
+
+#[test]
+fn alt_drag_group_deep_clones_members() {
+    let mut app = App::new_headless();
+
+    let wf_id1 = new_id();
+    let wf_id2 = new_id();
+    app.waveforms.insert(wf_id1, make_waveform(0.0, 0.0));
+    app.waveforms.insert(wf_id2, make_waveform(200.0, 0.0));
+
+    app.selected.push(HitTarget::Waveform(wf_id1));
+    app.selected.push(HitTarget::Waveform(wf_id2));
+    app.execute_command(CommandAction::CreateGroup);
+    assert_eq!(app.groups.len(), 1);
+    let group_id = *app.groups.keys().next().unwrap();
+    let original_members = app.groups[&group_id].member_ids.clone();
+
+    // Simulate option+drag: begin_move_selection with alt_copy=true
+    app.selected = vec![HitTarget::Group(group_id)];
+    app.begin_move_selection([100.0, 100.0], true, Some(HitTarget::Group(group_id)));
+
+    // Should now have 2 groups
+    assert_eq!(app.groups.len(), 2, "alt+drag should create a second group");
+
+    // Find the new group (not the original)
+    let new_group_id = *app.groups.keys().find(|id| **id != group_id).unwrap();
+    let new_members = app.groups[&new_group_id].member_ids.clone();
+
+    // New group must have same number of members
+    assert_eq!(new_members.len(), 2, "cloned group should have 2 members");
+
+    // All member IDs must be different from the original
+    for mid in &new_members {
+        assert!(!original_members.contains(mid), "member {:?} should be a new clone", mid);
+    }
+
+    // Cloned waveforms must exist
+    for mid in &new_members {
+        assert!(app.waveforms.contains_key(mid), "cloned waveform {:?} must exist", mid);
+    }
+
+    // Total: 2 original + 2 cloned = 4
+    assert_eq!(app.waveforms.len(), 4, "should have 4 waveforms total");
+}
