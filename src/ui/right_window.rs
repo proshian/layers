@@ -901,12 +901,12 @@ impl RightWindow {
                 center: false,
             });
 
-            // "Export WAV" button text
+            // "Export" button text
             let (ebp, ebs) = Self::export_button_rect(screen_w, screen_h, scale);
             let icon_size = 14.0 * scale;
             let padding = 12.0 * scale;
             out.push(TextEntry {
-                text: "Export WAV".to_string(),
+                text: "Export".to_string(),
                 x: ebp[0] + padding + icon_size + 6.0 * scale,
                 y: ebp[1] + (ebs[1] - 12.0 * scale) * 0.5,
                 font_size: 12.0 * scale,
@@ -1545,6 +1545,24 @@ impl RightWindow {
             },
         });
 
+        // "Export" button icon (groups / master only)
+        if self.is_group() || self.is_master() {
+            let (ebp, ebs) = Self::export_button_rect(screen_w, screen_h, scale);
+            let export_icon_size = 14.0 * scale;
+            let export_padding = 12.0 * scale;
+            out.push(crate::gpu::IconEntry {
+                codepoint: crate::icons::FILE_DOWNLOAD,
+                x: ebp[0] + export_padding,
+                y: ebp[1] + (ebs[1] - export_icon_size) * 0.5,
+                size: export_icon_size,
+                color: if self.export_button_hovered {
+                    crate::theme::RuntimeTheme::text_u8(settings.theme.text_primary, 255)
+                } else {
+                    crate::theme::RuntimeTheme::text_u8(settings.theme.text_secondary, 180)
+                },
+            });
+        }
+
         out
     }
 
@@ -1595,10 +1613,10 @@ impl RightWindow {
 
     // ---- Group panel helpers ----
 
-    /// Y offset for the "Export WAV" button inside the group panel.
+    /// Y offset for the "Export" button inside the group panel.
     const GROUP_EXPORT_BTN_Y: f32 = 90.0;
 
-    /// Rectangle for the "Export WAV" button when target is a Group.
+    /// Rectangle for the "Export" button when target is a Group.
     pub fn export_button_rect(screen_w: f32, screen_h: f32, scale: f32) -> ([f32; 2], [f32; 2]) {
         let (pp, ps) = Self::panel_rect(screen_w, screen_h, scale);
         let margin = 8.0 * scale;
@@ -1606,7 +1624,7 @@ impl RightWindow {
         ([pp[0] + margin, btn_y], [ps[0] - margin * 2.0, EFFECT_ADD_BUTTON_H * scale])
     }
 
-    /// Hit test: is pos on the group/main "Export WAV" button?
+    /// Hit test: is pos on the group/main "Export" button?
     pub fn hit_test_export_button(&self, pos: [f32; 2], screen_w: f32, screen_h: f32, scale: f32) -> bool {
         if !self.is_group() && !self.is_master() { return false; }
         let (bp, bs) = Self::export_button_rect(screen_w, screen_h, scale);

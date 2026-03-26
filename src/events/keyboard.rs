@@ -1513,7 +1513,14 @@ impl App {
                                 if let HitTarget::LoopRegion(i) = t { Some(*i) } else { None }
                             })
                             .collect();
-                        if !wf_ids.is_empty() || !lr_ids.is_empty() {
+                        let group_ids: Vec<EntityId> = self
+                            .selected
+                            .iter()
+                            .filter_map(|t| {
+                                if let HitTarget::Group(i) = t { Some(*i) } else { None }
+                            })
+                            .collect();
+                        if !wf_ids.is_empty() || !lr_ids.is_empty() || !group_ids.is_empty() {
                             let mut ops = Vec::new();
                             if !wf_ids.is_empty() {
                                 let any_enabled = wf_ids.iter().any(|i| self.waveforms.get(i).map_or(false, |wf| !wf.disabled));
@@ -1537,6 +1544,17 @@ impl App {
                                     }
                                 }
                                 self.sync_loop_region();
+                            }
+                            if !group_ids.is_empty() {
+                                let any_enabled = group_ids.iter().any(|i| self.groups.get(i).map_or(false, |g| !g.disabled));
+                                let new_disabled = any_enabled;
+                                for i in &group_ids {
+                                    if let Some(g) = self.groups.get_mut(i) {
+                                        let before = g.clone();
+                                        g.disabled = new_disabled;
+                                        ops.push(crate::operations::Operation::UpdateGroup { id: *i, before, after: g.clone() });
+                                    }
+                                }
                             }
                             if !ops.is_empty() {
                                 self.push_op(crate::operations::Operation::Batch(ops));

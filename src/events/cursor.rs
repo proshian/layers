@@ -236,7 +236,7 @@ impl App {
             }
         }
 
-        // Right window "Add Effect" / "Export WAV" button hover
+        // Right window "Add Effect" / "Export" button hover
         if let Some(rw) = &self.right_window {
             let (sw, sh, scale) = self.screen_info();
             let (add_hovered, export_hovered) = {

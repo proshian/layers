@@ -343,15 +343,12 @@ impl App {
                         ew.contains(self.mouse_pos, scr_w, scr_h, scale)
                     });
                     if inside {
-                        // Format button clicks
-                        if let Some(fmt) = self.export_window.as_ref().and_then(|ew| {
-                            ew.hit_test_format(self.mouse_pos, scr_w, scr_h, scale)
-                        }) {
-                            if let Some(ew) = &mut self.export_window {
-                                ew.format = fmt;
+                        // Format dropdown clicks
+                        if let Some(ew) = &mut self.export_window {
+                            if ew.handle_format_click(self.mouse_pos, scr_w, scr_h, scale) {
+                                self.request_redraw();
+                                return;
                             }
-                            self.request_redraw();
-                            return;
                         }
 
                         // Export button click
@@ -364,12 +361,19 @@ impl App {
                             return;
                         }
                     } else {
-                        // Click outside closes export window (only if idle)
+                        // Click outside: close dropdown first, then window
                         let is_idle = self.export_window.as_ref().map_or(false, |ew| {
                             ew.state == ui::export_window::ExportState::Idle
                         });
                         if is_idle {
-                            self.export_window = None;
+                            let dd_open = self.export_window.as_ref().map_or(false, |ew| ew.format_dropdown_open);
+                            if dd_open {
+                                if let Some(ew) = &mut self.export_window {
+                                    ew.format_dropdown_open = false;
+                                }
+                            } else {
+                                self.export_window = None;
+                            }
                         }
                     }
                     self.request_redraw();

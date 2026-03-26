@@ -1,3 +1,8 @@
+- 2026-03-27: feat: File → Export Audio menu item opens master render (Cmd+Shift+E) (46.5k loc)
+- 2026-03-27: ui: rename "Export WAV" to "Export" with download icon in right panel (46.4k loc)
+- 2026-03-27: refactor: replace export format buttons with dropdown (46.4k loc)
+- 2026-03-27: fix: pressing 0 now mutes/unmutes selected groups (46.4k loc)
+- 2026-03-27: fix: group and master bus effects chains now applied during export (46.4k loc)
 - 2026-03-27: fix: export window text clipped to window bounds to prevent overflow (46.3k loc)
 - 2026-03-27: fix: mute now toggles disabled (same as pressing 0), persistent and undoable (46.3k loc)
 - 2026-03-27: feat: solo/mute buttons in layers panel show only on hover or when active (46.2k loc)

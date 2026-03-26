@@ -1094,13 +1094,24 @@ impl Gpu {
 
         // Export window text
         if let Some(ew) = export_window {
+            let popup_rect = ew.open_dropdown_popup_rect(w, h, scale);
             for te in ew.get_text_entries(settings, w, h, scale) {
-                let bounds = match te.bounds {
-                    Some([l, t, r, b]) => TextBounds {
-                        left: l as i32, top: t as i32, right: r as i32, bottom: b as i32,
-                    },
-                    None => full_bounds,
-                };
+                let is_popup_entry = te.bounds.is_some();
+                let mut bounds = full_bounds;
+                if !is_popup_entry {
+                    if let Some((pp, ps)) = popup_rect {
+                        let overlaps_v = te.y + te.line_height > pp[1]
+                            && te.y < pp[1] + ps[1];
+                        if overlaps_v {
+                            if te.x >= pp[0] && te.x < pp[0] + ps[0] {
+                                continue;
+                            }
+                            if te.x < pp[0] && te.x + te.max_width > pp[0] {
+                                bounds.right = bounds.right.min(pp[0] as i32);
+                            }
+                        }
+                    }
+                }
                 let buf = shape_text_entry(&mut self.font_system, &te);
                 text_buffers.push(buf);
                 text_meta.push((

@@ -14,3 +14,4 @@ pub const ADD: &str = "\u{E145}";
 pub const MENU: &str = "\u{E5D2}";
 pub const CHEVRON_LEFT: &str = "\u{E5CB}";
 pub const CHEVRON_RIGHT: &str = "\u{E5CC}";
+pub const FILE_DOWNLOAD: &str = "\u{E2C4}";

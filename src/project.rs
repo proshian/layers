@@ -23,6 +23,7 @@ pub(crate) struct MenuState {
     pub(crate) paste: MenuId,
     pub(crate) select_all: MenuId,
     pub(crate) open_project_items: Vec<(MenuId, String)>,
+    pub(crate) export_audio: MenuId,
     pub(crate) open_submenu: MudaSubmenu,
     pub(crate) initialized: bool,
 }
@@ -265,6 +266,14 @@ impl App {
             self.request_redraw();
         } else if id == menu.select_all {
             self.execute_command(CommandAction::SelectAll);
+            self.request_redraw();
+        } else if id == menu.export_audio {
+            self.export_window = Some(
+                ui::export_window::ExportWindow::new(
+                    ui::right_window::MAIN_LAYER_ID,
+                    "Main".to_string(),
+                )
+            );
             self.request_redraw();
         } else if let Some(project_path) = menu
             .open_project_items
@@ -697,6 +706,13 @@ pub(crate) fn build_app_menu(storage: Option<&Storage>) -> MenuState {
         let _ = open_submenu.append(&MenuItem::new("No Projects", false, None));
     }
     let _ = file_menu.append(&open_submenu);
+    let _ = file_menu.append(&PredefinedMenuItem::separator());
+    let export_audio_item = MenuItem::new(
+        "Export Audio...",
+        true,
+        Some(Accelerator::new(Some(cmd | Modifiers::SHIFT), Code::KeyE)),
+    );
+    let _ = file_menu.append(&export_audio_item);
     let _ = menu.append(&file_menu);
 
     // -- Edit menu --
@@ -749,6 +765,7 @@ pub(crate) fn build_app_menu(storage: Option<&Storage>) -> MenuState {
         copy: copy_item.id().clone(),
         paste: paste_item.id().clone(),
         select_all: select_all_item.id().clone(),
+        export_audio: export_audio_item.id().clone(),
         open_project_items: open_items,
         open_submenu,
         initialized: false,
