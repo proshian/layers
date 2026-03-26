@@ -188,6 +188,20 @@ impl App {
 
         MouseButton::Left => match state {
             ElementState::Pressed => {
+                // Handle browser toggle button click (≡ in header or collapsed strip)
+                {
+                    let (_, _, scale) = self.screen_info();
+                    if self.sample_browser.hit_toggle_button(self.mouse_pos, scale) {
+                        self.sample_browser.visible = !self.sample_browser.visible;
+                        #[cfg(feature = "native")]
+                        if self.sample_browser.visible {
+                            self.refresh_project_browser_entries();
+                            self.ensure_plugins_scanned();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+                }
                 // Handle search clear button click
                 {
                     let (_, _, scale) = self.screen_info();
@@ -482,6 +496,56 @@ impl App {
                             });
                         if dev_consumed {
                             self.settings.save();
+                            self.request_redraw();
+                            return;
+                        }
+
+                        // Try plug-ins panel interaction
+                        let plugins_consumed =
+                            self.settings_window.as_mut().map_or(false, |sw| {
+                                sw.handle_plugins_click(
+                                    self.mouse_pos,
+                                    &mut self.settings,
+                                    scr_w,
+                                    scr_h,
+                                    scale,
+                                )
+                            });
+                        if plugins_consumed {
+                            self.settings.save();
+                            // Consume rescan flag
+                            let needs_rescan = self
+                                .settings_window
+                                .as_ref()
+                                .map_or(false, |sw| sw.rescan_requested);
+                            if needs_rescan {
+                                if let Some(sw) = &mut self.settings_window {
+                                    sw.rescan_requested = false;
+                                }
+                                #[cfg(feature = "native")]
+                                {
+                                    self.plugin_registry.rescan();
+                                    self.ensure_plugins_scanned();
+                                }
+                            }
+                            // Consume browse flag
+                            let needs_browse = self
+                                .settings_window
+                                .as_ref()
+                                .map_or(false, |sw| sw.browse_custom_folder_requested);
+                            if needs_browse {
+                                if let Some(sw) = &mut self.settings_window {
+                                    sw.browse_custom_folder_requested = false;
+                                }
+                                #[cfg(feature = "native")]
+                                {
+                                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                        self.settings.vst3_custom_folder_path =
+                                            folder.to_string_lossy().to_string();
+                                        self.settings.save();
+                                    }
+                                }
+                            }
                             self.request_redraw();
                             return;
                         }

@@ -402,14 +402,20 @@ impl App {
         }
 
         // Update browser hover state
-        if self.sample_browser.visible && !matches!(self.drag, DragState::ResizingBrowser) {
+        if !matches!(self.drag, DragState::ResizingBrowser) {
             let (_, sh, scale) = self.screen_info();
-            if self.sample_browser.contains(self.mouse_pos, sh, scale) {
-                self.sample_browser.update_hover(self.mouse_pos, sh, scale);
+            if self.sample_browser.visible {
+                if self.sample_browser.contains(self.mouse_pos, sh, scale) {
+                    self.sample_browser.update_hover(self.mouse_pos, sh, scale);
+                } else {
+                    self.sample_browser.toggle_hovered = false;
+                    self.sample_browser.hovered_entry = None;
+                    self.sample_browser.add_button_hovered = false;
+                    self.sample_browser.resize_hovered = false;
+                }
             } else {
-                self.sample_browser.hovered_entry = None;
-                self.sample_browser.add_button_hovered = false;
-                self.sample_browser.resize_hovered = false;
+                self.sample_browser.toggle_hovered =
+                    self.sample_browser.hit_toggle_button(self.mouse_pos, scale);
             }
             self.update_cursor();
         }
@@ -448,7 +454,7 @@ impl App {
         // Resizing text note
         if let DragState::ResizingTextNote { note_id, anchor, .. } = self.drag {
             let world = self.camera.screen_to_world(self.mouse_pos);
-            let (pos, size) = compute_resize(anchor, world, 40.0, false, &self.settings, self.camera.zoom, self.bpm);
+            let (pos, size) = compute_resize(anchor, world, 40.0, !self.is_snap_override_active(), &self.settings, self.camera.zoom, self.bpm);
             if let Some(tn) = self.text_notes.get_mut(&note_id) {
                 tn.position = pos;
                 tn.size = size;

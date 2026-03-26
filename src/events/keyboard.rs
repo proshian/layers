@@ -81,6 +81,14 @@ impl App {
                 }
             }
 
+            if self.export_window.is_some() {
+                if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+                    self.export_window = None;
+                    self.request_redraw();
+                    return;
+                }
+            }
+
             if self.context_menu.is_some() {
                 if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
                     self.context_menu = None;

@@ -29,6 +29,7 @@ const THEME_PRESETS: &[&str] = &["Default", "Ableton", "Light"];
 pub enum SettingsCategory {
     ThemeAndColors,
     Audio,
+    PlugIns,
     Developer,
 }
 
@@ -37,6 +38,7 @@ impl SettingsCategory {
         match self {
             Self::ThemeAndColors => "Theme & Colors",
             Self::Audio => "Audio",
+            Self::PlugIns => "Plug-Ins",
             Self::Developer => "Developer",
         }
     }
@@ -45,8 +47,12 @@ impl SettingsCategory {
 pub const CATEGORIES: &[SettingsCategory] = &[
     SettingsCategory::ThemeAndColors,
     SettingsCategory::Audio,
+    SettingsCategory::PlugIns,
     SettingsCategory::Developer,
 ];
+
+const TOGGLE_BTN_WIDTH: f32 = 56.0;
+const BUTTON_WIDTH: f32 = 80.0;
 
 
 struct SliderDef {
@@ -98,6 +104,8 @@ pub struct SettingsWindow {
     pub cached_input_devices: Vec<String>,
     pub cached_output_devices: Vec<String>,
     pub cached_buffer_sizes: Vec<String>,
+    pub rescan_requested: bool,
+    pub browse_custom_folder_requested: bool,
 }
 
 impl SettingsWindow {
@@ -121,6 +129,8 @@ impl SettingsWindow {
             #[cfg(not(feature = "native"))]
             cached_output_devices: vec!["No Device".to_string()],
             cached_buffer_sizes: BUFFER_SIZE_OPTIONS.iter().map(|s| s.to_string()).collect(),
+            rescan_requested: false,
+            browse_custom_folder_requested: false,
         }
     }
 
@@ -470,6 +480,64 @@ impl SettingsWindow {
     }
 
     // -----------------------------------------------------------------------
+    // Plug-Ins panel helpers
+    // -----------------------------------------------------------------------
+
+    /// Returns the rect for the "Rescan" button (row 0 of Plug-Ins panel).
+    fn plugins_rescan_button_rect(
+        &self,
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+    ) -> ([f32; 2], [f32; 2]) {
+        let (wp, ws) = self.win_rect(screen_w, screen_h, scale);
+        let content_x = wp[0] + SIDEBAR_WIDTH * scale;
+        let content_w = ws[0] - SIDEBAR_WIDTH * scale;
+        let btn_w = BUTTON_WIDTH * scale;
+        let btn_h = DROPDOWN_HEIGHT * scale;
+        let btn_x = content_x + content_w - DROPDOWN_RIGHT_PAD * scale - btn_w;
+        let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale;
+        let btn_y = row_y + (ROW_HEIGHT * scale - btn_h) * 0.5;
+        ([btn_x, btn_y], [btn_w, btn_h])
+    }
+
+    /// Returns the rect for a toggle button at the given content row index.
+    fn plugins_toggle_rect(
+        &self,
+        row_idx: usize,
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+    ) -> ([f32; 2], [f32; 2]) {
+        let (wp, ws) = self.win_rect(screen_w, screen_h, scale);
+        let content_x = wp[0] + SIDEBAR_WIDTH * scale;
+        let content_w = ws[0] - SIDEBAR_WIDTH * scale;
+        let btn_w = TOGGLE_BTN_WIDTH * scale;
+        let btn_h = DROPDOWN_HEIGHT * scale;
+        let btn_x = content_x + content_w - DROPDOWN_RIGHT_PAD * scale - btn_w;
+        let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale + row_idx as f32 * ROW_HEIGHT * scale;
+        let btn_y = row_y + (ROW_HEIGHT * scale - btn_h) * 0.5;
+        ([btn_x, btn_y], [btn_w, btn_h])
+    }
+
+    /// Returns the rect for the "Browse" button (row 3 of Plug-Ins panel).
+    fn plugins_browse_button_rect(
+        &self,
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+    ) -> ([f32; 2], [f32; 2]) {
+        self.plugins_toggle_rect(3, screen_w, screen_h, scale)
+    }
+
+    fn plugins_hit_rect(mouse: [f32; 2], pos: [f32; 2], size: [f32; 2]) -> bool {
+        mouse[0] >= pos[0]
+            && mouse[0] <= pos[0] + size[0]
+            && mouse[1] >= pos[1]
+            && mouse[1] <= pos[1] + size[1]
+    }
+
+    // -----------------------------------------------------------------------
     // Click handlers (per category)
     // -----------------------------------------------------------------------
 
@@ -620,6 +688,72 @@ impl SettingsWindow {
         false
     }
 
+    pub fn handle_plugins_click(
+        &mut self,
+        mouse: [f32; 2],
+        settings: &mut Settings,
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+    ) -> bool {
+        if self.active_category != SettingsCategory::PlugIns {
+            return false;
+        }
+
+        // Row 0: Rescan button
+        let (rp, rs) = self.plugins_rescan_button_rect(screen_w, screen_h, scale);
+        if Self::plugins_hit_rect(mouse, rp, rs) {
+            self.rescan_requested = true;
+            return true;
+        }
+
+        // Row 1: Use VST3 System Folders toggle
+        let (tp1, ts1) = self.plugins_toggle_rect(1, screen_w, screen_h, scale);
+        if Self::plugins_hit_rect(mouse, tp1, ts1) {
+            settings.use_vst3_system_folders = !settings.use_vst3_system_folders;
+            return true;
+        }
+
+        // Row 2: Use VST3 Custom Folder toggle
+        let (tp2, ts2) = self.plugins_toggle_rect(2, screen_w, screen_h, scale);
+        if Self::plugins_hit_rect(mouse, tp2, ts2) {
+            settings.use_vst3_custom_folder = !settings.use_vst3_custom_folder;
+            return true;
+        }
+
+        // Row 3: Browse button (only active when custom folder is enabled)
+        if settings.use_vst3_custom_folder {
+            let (bp, bs) = self.plugins_browse_button_rect(screen_w, screen_h, scale);
+            if Self::plugins_hit_rect(mouse, bp, bs) {
+                self.browse_custom_folder_requested = true;
+                return true;
+            }
+        }
+
+        // Row 4: Multiple Plug-In Windows toggle
+        let (tp4, ts4) = self.plugins_toggle_rect(4, screen_w, screen_h, scale);
+        if Self::plugins_hit_rect(mouse, tp4, ts4) {
+            settings.multiple_plugin_windows = !settings.multiple_plugin_windows;
+            return true;
+        }
+
+        // Row 5: Auto-Hide Plug-In Windows toggle
+        let (tp5, ts5) = self.plugins_toggle_rect(5, screen_w, screen_h, scale);
+        if Self::plugins_hit_rect(mouse, tp5, ts5) {
+            settings.auto_hide_plugin_windows = !settings.auto_hide_plugin_windows;
+            return true;
+        }
+
+        // Row 6: Auto-Open Plug-In Windows toggle
+        let (tp6, ts6) = self.plugins_toggle_rect(6, screen_w, screen_h, scale);
+        if Self::plugins_hit_rect(mouse, tp6, ts6) {
+            settings.auto_open_plugin_windows = !settings.auto_open_plugin_windows;
+            return true;
+        }
+
+        false
+    }
+
     // -----------------------------------------------------------------------
     // Instance rendering (build_instances)
     // -----------------------------------------------------------------------
@@ -736,6 +870,11 @@ impl SettingsWindow {
             }
             SettingsCategory::Audio => {
                 self.build_audio_instances(
+                    &mut out, settings, screen_w, screen_h, scale, content_x, content_w, wp, t,
+                );
+            }
+            SettingsCategory::PlugIns => {
+                self.build_plugins_instances(
                     &mut out, settings, screen_w, screen_h, scale, content_x, content_w, wp, t,
                 );
             }
@@ -940,6 +1079,90 @@ impl SettingsWindow {
             color: t.accent,
             border_radius: 6.0 * scale,
         });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_plugins_instances(
+        &self,
+        out: &mut Vec<InstanceRaw>,
+        settings: &Settings,
+        screen_w: f32,
+        screen_h: f32,
+        scale: f32,
+        content_x: f32,
+        content_w: f32,
+        wp: [f32; 2],
+        t: &crate::theme::RuntimeTheme,
+    ) {
+        let br = 6.0 * scale;
+
+        // Row 0: Rescan button (accent)
+        let (rp, rs) = self.plugins_rescan_button_rect(screen_w, screen_h, scale);
+        out.push(InstanceRaw {
+            position: rp,
+            size: rs,
+            color: t.accent,
+            border_radius: br,
+        });
+
+        // Row 1: Use VST3 System Folders toggle
+        {
+            let row_bottom = wp[1] + SECTION_HEADER_HEIGHT * scale + 1.0 * ROW_HEIGHT * scale;
+            Self::render_row_separator(out, content_x, content_w, row_bottom, scale, t);
+            let (tp, ts) = self.plugins_toggle_rect(1, screen_w, screen_h, scale);
+            let color = if settings.use_vst3_system_folders { t.accent } else { t.knob_inactive };
+            out.push(InstanceRaw { position: tp, size: ts, color, border_radius: br });
+        }
+
+        // Row 2: Use VST3 Custom Folder toggle
+        {
+            let row_bottom = wp[1] + SECTION_HEADER_HEIGHT * scale + 2.0 * ROW_HEIGHT * scale;
+            Self::render_row_separator(out, content_x, content_w, row_bottom, scale, t);
+            let (tp, ts) = self.plugins_toggle_rect(2, screen_w, screen_h, scale);
+            let color = if settings.use_vst3_custom_folder { t.accent } else { t.knob_inactive };
+            out.push(InstanceRaw { position: tp, size: ts, color, border_radius: br });
+        }
+
+        // Row 3: Browse button (only active when custom folder enabled)
+        {
+            let row_bottom = wp[1] + SECTION_HEADER_HEIGHT * scale + 3.0 * ROW_HEIGHT * scale;
+            Self::render_row_separator(out, content_x, content_w, row_bottom, scale, t);
+            if settings.use_vst3_custom_folder {
+                let (bp, bs) = self.plugins_browse_button_rect(screen_w, screen_h, scale);
+                out.push(InstanceRaw { position: bp, size: bs, color: t.accent, border_radius: br });
+            }
+        }
+
+        // Section separator before "Plug-In Windows"
+        {
+            let sep_y = wp[1] + SECTION_HEADER_HEIGHT * scale + 4.0 * ROW_HEIGHT * scale;
+            Self::render_row_separator(out, content_x, content_w, sep_y, scale, t);
+        }
+
+        // Row 4: Multiple Plug-In Windows toggle
+        {
+            let (tp, ts) = self.plugins_toggle_rect(4, screen_w, screen_h, scale);
+            let color = if settings.multiple_plugin_windows { t.accent } else { t.knob_inactive };
+            out.push(InstanceRaw { position: tp, size: ts, color, border_radius: br });
+        }
+
+        // Row 5: Auto-Hide Plug-In Windows toggle
+        {
+            let row_bottom = wp[1] + SECTION_HEADER_HEIGHT * scale + 5.0 * ROW_HEIGHT * scale;
+            Self::render_row_separator(out, content_x, content_w, row_bottom, scale, t);
+            let (tp, ts) = self.plugins_toggle_rect(5, screen_w, screen_h, scale);
+            let color = if settings.auto_hide_plugin_windows { t.accent } else { t.knob_inactive };
+            out.push(InstanceRaw { position: tp, size: ts, color, border_radius: br });
+        }
+
+        // Row 6: Auto-Open Plug-In Windows toggle
+        {
+            let row_bottom = wp[1] + SECTION_HEADER_HEIGHT * scale + 6.0 * ROW_HEIGHT * scale;
+            Self::render_row_separator(out, content_x, content_w, row_bottom, scale, t);
+            let (tp, ts) = self.plugins_toggle_rect(6, screen_w, screen_h, scale);
+            let color = if settings.auto_open_plugin_windows { t.accent } else { t.knob_inactive };
+            out.push(InstanceRaw { position: tp, size: ts, color, border_radius: br });
+        }
     }
 }
 
@@ -1161,6 +1384,190 @@ impl SettingsWindow {
                             super::dropdown::build_popup_text(&mut out, &labels, selected, dp, ds, scale, &settings.theme);
                         }
                     }
+                }
+            }
+            SettingsCategory::PlugIns => {
+                let btn_font = 12.0 * scale;
+                let btn_line = 16.0 * scale;
+
+                // Section header: "Plug-In Sources"
+                out.push(TextEntry {
+                    text: "Plug-In Sources".to_string(),
+                    x: content_x + ROW_LABEL_X * scale,
+                    y: wp[1] + (SECTION_HEADER_HEIGHT * scale - section_line) * 0.5,
+                    font_size: section_font,
+                    line_height: section_line,
+                    color: crate::theme::RuntimeTheme::text_u8(settings.theme.text_dim, 200),
+                    weight: 600,
+                    max_width: 300.0 * scale,
+                    bounds: None,
+                    center: false,
+                });
+
+                // Row 0: Rescan button label + button text
+                {
+                    let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale;
+                    Self::push_row_label(&mut out, "Rescan Plug-Ins", content_x, row_y, scale, settings);
+                    let (rp, rs) = self.plugins_rescan_button_rect(screen_w, screen_h, scale);
+                    out.push(TextEntry {
+                        text: "Rescan".to_string(),
+                        x: rp[0] + rs[0] * 0.5,
+                        y: rp[1] + (rs[1] - btn_line) * 0.5,
+                        font_size: btn_font,
+                        line_height: btn_line,
+                        color: [255, 255, 255, 255],
+                        weight: 600,
+                        max_width: rs[0],
+                        bounds: None,
+                        center: true,
+                    });
+                }
+
+                // Row 1: Use VST3 System Folders
+                {
+                    let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale + 1.0 * ROW_HEIGHT * scale;
+                    Self::push_row_label(&mut out, "Use VST3 System Folders", content_x, row_y, scale, settings);
+                    let (tp, ts) = self.plugins_toggle_rect(1, screen_w, screen_h, scale);
+                    let val_text = if settings.use_vst3_system_folders { "On" } else { "Off" };
+                    out.push(TextEntry {
+                        text: val_text.to_string(),
+                        x: tp[0] + ts[0] * 0.5,
+                        y: tp[1] + (ts[1] - btn_line) * 0.5,
+                        font_size: btn_font,
+                        line_height: btn_line,
+                        color: [255, 255, 255, 255],
+                        weight: 600,
+                        max_width: ts[0],
+                        bounds: None,
+                        center: true,
+                    });
+                }
+
+                // Row 2: Use VST3 Custom Folder
+                {
+                    let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale + 2.0 * ROW_HEIGHT * scale;
+                    Self::push_row_label(&mut out, "Use VST3 Custom Folder", content_x, row_y, scale, settings);
+                    let (tp, ts) = self.plugins_toggle_rect(2, screen_w, screen_h, scale);
+                    let val_text = if settings.use_vst3_custom_folder { "On" } else { "Off" };
+                    out.push(TextEntry {
+                        text: val_text.to_string(),
+                        x: tp[0] + ts[0] * 0.5,
+                        y: tp[1] + (ts[1] - btn_line) * 0.5,
+                        font_size: btn_font,
+                        line_height: btn_line,
+                        color: [255, 255, 255, 255],
+                        weight: 600,
+                        max_width: ts[0],
+                        bounds: None,
+                        center: true,
+                    });
+                }
+
+                // Row 3: Custom folder path / Browse
+                {
+                    let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale + 3.0 * ROW_HEIGHT * scale;
+                    let path_label = if settings.vst3_custom_folder_path.is_empty() {
+                        "(not set)".to_string()
+                    } else {
+                        settings.vst3_custom_folder_path.clone()
+                    };
+                    Self::push_row_label(&mut out, &path_label, content_x, row_y, scale, settings);
+                    if settings.use_vst3_custom_folder {
+                        let (bp, bs) = self.plugins_browse_button_rect(screen_w, screen_h, scale);
+                        out.push(TextEntry {
+                            text: "Browse".to_string(),
+                            x: bp[0] + bs[0] * 0.5,
+                            y: bp[1] + (bs[1] - btn_line) * 0.5,
+                            font_size: btn_font,
+                            line_height: btn_line,
+                            color: [255, 255, 255, 255],
+                            weight: 600,
+                            max_width: bs[0],
+                            bounds: None,
+                            center: true,
+                        });
+                    }
+                }
+
+                // Section header: "Plug-In Windows" (positioned at row 4 header)
+                {
+                    let sec2_y = wp[1] + SECTION_HEADER_HEIGHT * scale + 4.0 * ROW_HEIGHT * scale;
+                    out.push(TextEntry {
+                        text: "Plug-In Windows".to_string(),
+                        x: content_x + ROW_LABEL_X * scale,
+                        y: sec2_y + (ROW_HEIGHT * scale - section_line) * 0.5,
+                        font_size: section_font,
+                        line_height: section_line,
+                        color: crate::theme::RuntimeTheme::text_u8(settings.theme.text_dim, 200),
+                        weight: 600,
+                        max_width: 300.0 * scale,
+                        bounds: None,
+                        center: false,
+                    });
+                }
+
+                // Row 5: Multiple Plug-In Windows (show label at row 5, toggle at row 4 y+rowheight)
+                // Layout: row 4 is used as a "subheader" row, rows 4-6 are the three toggles
+                // Actually: rows 4, 5, 6 are the three toggle rows with the section label
+                // in the row 4 label position (left side).
+                // Simplification: use row 4 for "Multiple", row 5 for "Auto-Hide", row 6 for "Auto-Open"
+                {
+                    let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale + 4.0 * ROW_HEIGHT * scale;
+                    Self::push_row_label(&mut out, "Multiple Plug-In Windows", content_x, row_y, scale, settings);
+                    let (tp, ts) = self.plugins_toggle_rect(4, screen_w, screen_h, scale);
+                    let val_text = if settings.multiple_plugin_windows { "On" } else { "Off" };
+                    out.push(TextEntry {
+                        text: val_text.to_string(),
+                        x: tp[0] + ts[0] * 0.5,
+                        y: tp[1] + (ts[1] - btn_line) * 0.5,
+                        font_size: btn_font,
+                        line_height: btn_line,
+                        color: [255, 255, 255, 255],
+                        weight: 600,
+                        max_width: ts[0],
+                        bounds: None,
+                        center: true,
+                    });
+                }
+
+                // Row 5: Auto-Hide
+                {
+                    let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale + 5.0 * ROW_HEIGHT * scale;
+                    Self::push_row_label(&mut out, "Auto-Hide Plug-In Windows", content_x, row_y, scale, settings);
+                    let (tp, ts) = self.plugins_toggle_rect(5, screen_w, screen_h, scale);
+                    let val_text = if settings.auto_hide_plugin_windows { "On" } else { "Off" };
+                    out.push(TextEntry {
+                        text: val_text.to_string(),
+                        x: tp[0] + ts[0] * 0.5,
+                        y: tp[1] + (ts[1] - btn_line) * 0.5,
+                        font_size: btn_font,
+                        line_height: btn_line,
+                        color: [255, 255, 255, 255],
+                        weight: 600,
+                        max_width: ts[0],
+                        bounds: None,
+                        center: true,
+                    });
+                }
+
+                // Row 6: Auto-Open
+                {
+                    let row_y = wp[1] + SECTION_HEADER_HEIGHT * scale + 6.0 * ROW_HEIGHT * scale;
+                    Self::push_row_label(&mut out, "Auto-Open Plug-In Windows", content_x, row_y, scale, settings);
+                    let (tp, ts) = self.plugins_toggle_rect(6, screen_w, screen_h, scale);
+                    let val_text = if settings.auto_open_plugin_windows { "On" } else { "Off" };
+                    out.push(TextEntry {
+                        text: val_text.to_string(),
+                        x: tp[0] + ts[0] * 0.5,
+                        y: tp[1] + (ts[1] - btn_line) * 0.5,
+                        font_size: btn_font,
+                        line_height: btn_line,
+                        color: [255, 255, 255, 255],
+                        weight: 600,
+                        max_width: ts[0],
+                        bounds: None,
+                        center: true,
+                    });
                 }
             }
             SettingsCategory::Developer => {
