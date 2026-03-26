@@ -412,6 +412,7 @@ impl Operation {
                 inst.volume = data.volume;
                 inst.pan = data.pan;
                 inst.effect_chain_id = data.effect_chain_id;
+                inst.disabled = data.disabled;
                 app.instruments.insert(*id, inst);
             }
             Operation::DeleteInstrument { id, .. } => {
@@ -426,6 +427,7 @@ impl Operation {
                     inst.volume = after.volume;
                     inst.pan = after.pan;
                     inst.effect_chain_id = after.effect_chain_id;
+                    inst.disabled = after.disabled;
                 }
             }
 

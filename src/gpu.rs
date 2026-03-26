@@ -1095,13 +1095,19 @@ impl Gpu {
         // Export window text
         if let Some(ew) = export_window {
             for te in ew.get_text_entries(settings, w, h, scale) {
+                let bounds = match te.bounds {
+                    Some([l, t, r, b]) => TextBounds {
+                        left: l as i32, top: t as i32, right: r as i32, bottom: b as i32,
+                    },
+                    None => full_bounds,
+                };
                 let buf = shape_text_entry(&mut self.font_system, &te);
                 text_buffers.push(buf);
                 text_meta.push((
                     te.x,
                     te.y,
                     TextColor::rgba(te.color[0], te.color[1], te.color[2], te.color[3]),
-                    full_bounds,
+                    bounds,
                 ));
             }
         }
@@ -1271,7 +1277,8 @@ impl Gpu {
         let mut old_wf_cache = std::mem::take(&mut self.cached_wf_label_bufs);
         let mut new_wf_cache: Vec<(TextLabelCacheKey, TextBuffer)> = Vec::new();
         let mut wf_label_meta: Vec<(f32, f32, TextColor, TextBounds)> = Vec::new();
-        for (wf_idx, wf) in waveforms.iter() {
+        if settings_window.is_none() && command_palette.is_none() && export_window.is_none()
+        { for (wf_idx, wf) in waveforms.iter() {
             if hidden_take_children.contains(wf_idx) { continue; }
             let wf_right = wf.position[0] + wf.size[0];
             let wf_bottom = wf.position[1] + wf.size[1];
@@ -1376,6 +1383,7 @@ impl Gpu {
                 TextColor::rgba(255, 255, 255, alpha),
                 wf_label_bounds,
             ));
+        }
         }
         self.cached_wf_label_bufs = new_wf_cache;
 

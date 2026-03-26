@@ -53,12 +53,21 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) network_mode: crate::network::NetworkMode,
     pub(crate) hidden_take_children: &'a HashSet<EntityId>,
     pub(crate) solo_ids: &'a std::collections::HashSet<EntityId>,
-    pub(crate) mute_ids: &'a std::collections::HashSet<EntityId>,
 }
 
-/// Returns true if an entity should appear dimmed on canvas due to solo/mute state.
+/// Returns true if an entity should appear dimmed on canvas due to solo/mute/disabled state.
 fn is_dimmed_by_solo_mute(id: EntityId, ctx: &RenderContext) -> bool {
-    !crate::is_entity_audible(id, ctx.solo_ids, ctx.mute_ids, ctx.groups)
+    // Check disabled on the entity itself
+    if ctx.waveforms.get(&id).map_or(false, |wf| wf.disabled) {
+        return true;
+    }
+    if ctx.instruments.get(&id).map_or(false, |inst| inst.disabled) {
+        return true;
+    }
+    if ctx.groups.get(&id).map_or(false, |g| g.disabled) {
+        return true;
+    }
+    !crate::is_entity_audible(id, ctx.solo_ids, ctx.groups)
 }
 
 pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {

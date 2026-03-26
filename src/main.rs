@@ -352,29 +352,23 @@ struct App {
     pub(crate) midi_keyboard_held: HashMap<KeyCode, (EntityId, u8)>,
     /// Transient solo state — not persisted, not in undo history.
     pub(crate) solo_ids: std::collections::HashSet<EntityId>,
-    /// Transient mute state — not persisted, not in undo history.
-    pub(crate) mute_ids: std::collections::HashSet<EntityId>,
 }
 
 /// Whether an entity should be audible, considering solo/mute and group membership.
 /// Shared logic used by both audio routing (`App::should_play`) and rendering (`is_dimmed_by_solo_mute`).
+/// Mute is now handled via entity `disabled` fields, so this only checks solo logic.
 pub(crate) fn is_entity_audible(
     id: EntityId,
     solo_ids: &std::collections::HashSet<EntityId>,
-    mute_ids: &std::collections::HashSet<EntityId>,
     groups: &IndexMap<EntityId, crate::group::Group>,
 ) -> bool {
-    // Check direct mute
-    if mute_ids.contains(&id) {
-        return false;
-    }
-    // Check group mute
+    // Check group disabled — members of a disabled group should not play
     for group in groups.values() {
-        if group.member_ids.contains(&id) && mute_ids.contains(&group.id) {
+        if group.member_ids.contains(&id) && group.disabled {
             return false;
         }
     }
-    // If no solos active, play everything unmuted
+    // If no solos active, play everything
     if solo_ids.is_empty() {
         return true;
     }
@@ -527,7 +521,6 @@ impl App {
             keyboard_instrument_id: None,
             midi_keyboard_held: HashMap::new(),
             solo_ids: std::collections::HashSet::new(),
-            mute_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -644,7 +637,6 @@ impl App {
             &self.waveforms,
             &self.groups,
             &self.solo_ids,
-            &self.mute_ids,
         );
         self.sample_browser.layer_rows = rows;
         if self.sample_browser.active_category == ui::browser::BrowserCategory::Layers {
@@ -1253,7 +1245,6 @@ impl App {
             keyboard_instrument_id: None,
             midi_keyboard_held: HashMap::new(),
             solo_ids: std::collections::HashSet::new(),
-            mute_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -1447,7 +1438,7 @@ impl App {
                     multi_target_ids: wf_ids,
                     drag_start_snapshots: Vec::new(),
                     is_soloed: self.solo_ids.contains(&first_id),
-                    is_muted: self.mute_ids.contains(&first_id),
+                    is_muted: wf.disabled,
                 });
                 return;
             }
@@ -1501,7 +1492,7 @@ impl App {
                     multi_target_ids: Vec::new(),
                     drag_start_snapshots: Vec::new(),
                     is_soloed: self.solo_ids.contains(&group_id),
-                    is_muted: self.mute_ids.contains(&group_id),
+                    is_muted: g.disabled,
                 });
                 return;
             }
@@ -1540,7 +1531,7 @@ impl App {
                 multi_target_ids: vec![wf_id],
                 drag_start_snapshots: Vec::new(),
                 is_soloed: self.solo_ids.contains(&wf_id),
-                is_muted: self.mute_ids.contains(&wf_id),
+                is_muted: wf.disabled,
             });
         }
     }
@@ -1583,7 +1574,7 @@ impl App {
                 multi_target_ids: Vec::new(),
                 drag_start_snapshots: Vec::new(),
                 is_soloed: self.solo_ids.contains(&inst_id),
-                is_muted: self.mute_ids.contains(&inst_id),
+                is_muted: inst.disabled,
             });
         }
     }
@@ -1735,22 +1726,53 @@ impl App {
         }
     }
 
-    /// Toggle mute on an entity.
-    pub(crate) fn toggle_mute(&mut self, id: EntityId) {
-        if !self.mute_ids.remove(&id) {
-            self.mute_ids.insert(id);
+    /// Toggle mute (disabled) on a single entity, creating an undoable operation.
+    pub(crate) fn toggle_mute_disabled(&mut self, id: EntityId) {
+        if self.waveforms.contains_key(&id) {
+            let before = self.waveforms[&id].clone();
+            self.waveforms.get_mut(&id).unwrap().disabled = !before.disabled;
+            let after = self.waveforms[&id].clone();
+            self.push_op(crate::operations::Operation::UpdateWaveform { id, before, after });
+        } else if self.instruments.contains_key(&id) {
+            let inst = &self.instruments[&id];
+            let before = crate::instruments::InstrumentSnapshot {
+                name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
+                plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
+                volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id, disabled: inst.disabled,
+            };
+            let new_disabled = !inst.disabled;
+            self.instruments.get_mut(&id).unwrap().disabled = new_disabled;
+            let after = crate::instruments::InstrumentSnapshot { disabled: new_disabled, ..before.clone() };
+            self.push_op(crate::operations::Operation::UpdateInstrument { id, before, after });
+        } else if let Some(before) = self.groups.get(&id).cloned() {
+            if let Some(g) = self.groups.get_mut(&id) {
+                g.disabled = !g.disabled;
+            }
+            if let Some(after) = self.groups.get(&id).cloned() {
+                self.push_op(crate::operations::Operation::UpdateGroup { id, before, after });
+            }
         }
     }
 
-    /// Whether an entity should produce audio, considering solo/mute and group membership.
+    /// Whether an entity should produce audio, considering solo and group membership.
     pub(crate) fn should_play(&self, id: EntityId) -> bool {
-        is_entity_audible(id, &self.solo_ids, &self.mute_ids, &self.groups)
+        // Check disabled on the entity itself
+        if self.waveforms.get(&id).map_or(false, |wf| wf.disabled) {
+            return false;
+        }
+        if self.instruments.get(&id).map_or(false, |inst| inst.disabled) {
+            return false;
+        }
+        if self.groups.get(&id).map_or(false, |g| g.disabled) {
+            return false;
+        }
+        is_entity_audible(id, &self.solo_ids, &self.groups)
     }
 
-    /// Whether a group bus should be active (not muted, and passes solo check).
+    /// Whether a group bus should be active (not disabled, and passes solo check).
     #[cfg(feature = "native")]
     fn should_play_group(&self, gid: EntityId) -> bool {
-        if self.mute_ids.contains(&gid) {
+        if self.groups.get(&gid).map_or(false, |g| g.disabled) {
             return false;
         }
         if self.solo_ids.is_empty() {
@@ -2275,7 +2297,7 @@ impl App {
 
             // Build from lightweight instruments (new path)
             for (&inst_id, inst) in self.instruments.iter() {
-                if !inst.has_plugin() {
+                if !inst.has_plugin() || inst.disabled {
                     continue;
                 }
                 if !self.should_play(inst_id) {

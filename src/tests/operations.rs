@@ -638,6 +638,7 @@ fn test_serde_roundtrip_instrument() {
             volume: 1.0,
             pan: 0.5,
             effect_chain_id: None,
+            disabled: false,
         },
     });
 }

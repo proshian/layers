@@ -648,7 +648,7 @@ impl App {
                                     self.toggle_solo(target_id, shift);
                                 }
                                 ui::solo_mute::SoloMuteHit::Mute => {
-                                    self.toggle_mute(target_id);
+                                    self.toggle_mute_disabled(target_id);
                                 }
                                 ui::solo_mute::SoloMuteHit::None => {}
                             }
@@ -1342,7 +1342,7 @@ impl App {
                                                     self.toggle_solo(*id, shift);
                                                 }
                                                 ui::solo_mute::SoloMuteHit::Mute => {
-                                                    self.toggle_mute(*id);
+                                                    self.toggle_mute_disabled(*id);
                                                 }
                                                 ui::solo_mute::SoloMuteHit::None => {}
                                             }
@@ -2353,6 +2353,7 @@ impl App {
                                             volume: inst.volume,
                                             pan: inst.pan,
                                             effect_chain_id: inst.effect_chain_id,
+                                            disabled: inst.disabled,
                                         };
                                         let after_snap = before_snap.clone();
                                         if is_vol_drag {

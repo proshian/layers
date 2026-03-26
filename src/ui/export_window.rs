@@ -353,7 +353,10 @@ impl ExportWindow {
         let (wp, ws) = self.win_rect(screen_w, screen_h, scale);
         let t = &settings.theme;
 
-        // Window title
+        // Clip rect for text inside the window
+        let win_bounds = Some([wp[0], wp[1], wp[0] + ws[0], wp[1] + ws[1]]);
+
+        // Window title (above window, no clip)
         let title_font = 13.0 * scale;
         let title_line = 18.0 * scale;
         out.push(TextEntry {
@@ -371,10 +374,10 @@ impl ExportWindow {
 
         match self.state {
             ExportState::Idle => {
-                self.build_idle_text(&mut out, settings, screen_w, screen_h, scale);
+                self.build_idle_text(&mut out, settings, screen_w, screen_h, scale, win_bounds);
             }
             ExportState::Exporting => {
-                self.build_exporting_text(&mut out, settings, screen_w, screen_h, scale);
+                self.build_exporting_text(&mut out, settings, screen_w, screen_h, scale, win_bounds);
             }
         }
 
@@ -388,6 +391,7 @@ impl ExportWindow {
         screen_w: f32,
         screen_h: f32,
         scale: f32,
+        win_bounds: Option<[f32; 4]>,
     ) {
         let (wp, _ws) = self.win_rect(screen_w, screen_h, scale);
         let t = &settings.theme;
@@ -404,7 +408,7 @@ impl ExportWindow {
             color: crate::theme::RuntimeTheme::text_u8(t.text_dim, 200),
             weight: 600,
             max_width: 300.0 * scale,
-            bounds: None,
+            bounds: win_bounds,
             center: false,
         });
 
@@ -426,7 +430,7 @@ impl ExportWindow {
                 color,
                 weight: if is_selected { 600 } else { 400 },
                 max_width: bs[0],
-                bounds: None,
+                bounds: win_bounds,
                 center: false,
             });
         }
@@ -445,7 +449,7 @@ impl ExportWindow {
             color: crate::theme::RuntimeTheme::text_u8(t.text_dim, 160),
             weight: 400,
             max_width: 300.0 * scale,
-            bounds: None,
+            bounds: win_bounds,
             center: false,
         });
 
@@ -460,7 +464,7 @@ impl ExportWindow {
             color: crate::theme::RuntimeTheme::text_u8(t.text_primary, 255),
             weight: 600,
             max_width: ebs[0],
-            bounds: None,
+            bounds: win_bounds,
             center: false,
         });
     }
@@ -472,6 +476,7 @@ impl ExportWindow {
         screen_w: f32,
         screen_h: f32,
         scale: f32,
+        win_bounds: Option<[f32; 4]>,
     ) {
         let (wp, ws) = self.win_rect(screen_w, screen_h, scale);
         let t = &settings.theme;
@@ -486,7 +491,7 @@ impl ExportWindow {
             color: crate::theme::RuntimeTheme::text_u8(t.text_primary, 220),
             weight: 400,
             max_width: 300.0 * scale,
-            bounds: None,
+            bounds: win_bounds,
             center: false,
         });
 
@@ -501,7 +506,7 @@ impl ExportWindow {
             color: crate::theme::RuntimeTheme::text_u8(t.text_secondary, 200),
             weight: 400,
             max_width: 60.0 * scale,
-            bounds: None,
+            bounds: win_bounds,
             center: false,
         });
     }

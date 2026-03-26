@@ -92,7 +92,7 @@ impl App {
                             let before = crate::instruments::InstrumentSnapshot {
                                 name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
                                 plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
-                                volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+                                volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id, disabled: inst.disabled,
                             };
                             inst.volume = new_vol;
                             let after = crate::instruments::InstrumentSnapshot { volume: new_vol, ..before.clone() };
@@ -144,7 +144,7 @@ impl App {
                             let before = crate::instruments::InstrumentSnapshot {
                                 name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
                                 plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
-                                volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+                                volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id, disabled: inst.disabled,
                             };
                             inst.pan = new_pan;
                             let after = crate::instruments::InstrumentSnapshot { pan: new_pan, ..before.clone() };

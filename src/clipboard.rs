@@ -41,6 +41,7 @@ impl App {
                                     volume: inst.volume,
                                     pan: inst.pan,
                                     effect_chain_id: inst.effect_chain_id,
+                                    disabled: inst.disabled,
                                 };
                                 ops.push(operations::Operation::CreateInstrument { id: *mid, data: snap });
                             }
@@ -147,6 +148,7 @@ impl App {
                 volume: inst.volume,
                 pan: inst.pan,
                 effect_chain_id: inst.effect_chain_id,
+                disabled: inst.disabled,
             };
             return Some(GroupMemberSnapshot::Instrument(snap));
         }
@@ -994,6 +996,7 @@ impl App {
                             volume: inst.volume,
                             pan: inst.pan,
                             effect_chain_id: inst.effect_chain_id,
+                            disabled: inst.disabled,
                         };
                         del_ops.push(operations::Operation::DeleteInstrument { id: *mid, data: snap });
                         self.instruments.shift_remove(mid);

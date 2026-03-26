@@ -317,7 +317,7 @@ impl App {
                                 let before = crate::instruments::InstrumentSnapshot {
                                     name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
                                     plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
-                                    volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+                                    volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id, disabled: inst.disabled,
                                 };
                                 inst.volume = new_gain;
                                 let after = crate::instruments::InstrumentSnapshot { volume: new_gain, ..before.clone() };
@@ -390,7 +390,7 @@ impl App {
                                 let before = crate::instruments::InstrumentSnapshot {
                                     name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
                                     plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
-                                    volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id,
+                                    volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id, disabled: inst.disabled,
                                 };
                                 inst.pan = new_pan;
                                 let after = crate::instruments::InstrumentSnapshot { pan: new_pan, ..before.clone() };
@@ -1578,13 +1578,60 @@ impl App {
                         }
                     }
                     "m" => {
-                        // Mute selected entities
-                        let targets: Vec<EntityId> = self.selected.iter().filter_map(|t| match t {
-                            HitTarget::Waveform(id) | HitTarget::Instrument(id) | HitTarget::Group(id) => Some(*id),
-                            _ => None,
+                        // Mute selected entities — toggle disabled (same as pressing 0)
+                        let wf_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| {
+                            if let HitTarget::Waveform(id) = t { Some(*id) } else { None }
                         }).collect();
-                        for id in targets {
-                            self.toggle_mute(id);
+                        let inst_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| {
+                            if let HitTarget::Instrument(id) = t { Some(*id) } else { None }
+                        }).collect();
+                        let group_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| {
+                            if let HitTarget::Group(id) = t { Some(*id) } else { None }
+                        }).collect();
+                        let mut ops = Vec::new();
+                        if !wf_ids.is_empty() {
+                            let any_enabled = wf_ids.iter().any(|i| self.waveforms.get(i).map_or(false, |wf| !wf.disabled));
+                            let new_disabled = any_enabled;
+                            for i in &wf_ids {
+                                if let Some(wf) = self.waveforms.get_mut(i) {
+                                    let before = wf.clone();
+                                    wf.disabled = new_disabled;
+                                    ops.push(crate::operations::Operation::UpdateWaveform { id: *i, before, after: wf.clone() });
+                                }
+                            }
+                        }
+                        if !inst_ids.is_empty() {
+                            let any_enabled = inst_ids.iter().any(|i| self.instruments.get(i).map_or(false, |inst| !inst.disabled));
+                            let new_disabled = any_enabled;
+                            for i in &inst_ids {
+                                if let Some(inst) = self.instruments.get_mut(i) {
+                                    let before = crate::instruments::InstrumentSnapshot {
+                                        name: inst.name.clone(), plugin_id: inst.plugin_id.clone(),
+                                        plugin_name: inst.plugin_name.clone(), plugin_path: inst.plugin_path.clone(),
+                                        volume: inst.volume, pan: inst.pan, effect_chain_id: inst.effect_chain_id, disabled: inst.disabled,
+                                    };
+                                    inst.disabled = new_disabled;
+                                    let after = crate::instruments::InstrumentSnapshot { disabled: new_disabled, ..before.clone() };
+                                    ops.push(crate::operations::Operation::UpdateInstrument { id: *i, before, after });
+                                }
+                            }
+                        }
+                        if !group_ids.is_empty() {
+                            let any_enabled = group_ids.iter().any(|i| self.groups.get(i).map_or(false, |g| !g.disabled));
+                            let new_disabled = any_enabled;
+                            for i in &group_ids {
+                                if let Some(before) = self.groups.get(i).cloned() {
+                                    if let Some(g) = self.groups.get_mut(i) {
+                                        g.disabled = new_disabled;
+                                    }
+                                    if let Some(after) = self.groups.get(i).cloned() {
+                                        ops.push(crate::operations::Operation::UpdateGroup { id: *i, before, after });
+                                    }
+                                }
+                            }
+                        }
+                        if !ops.is_empty() {
+                            self.push_op(crate::operations::Operation::Batch(ops));
                         }
                         self.refresh_project_browser_entries();
                         #[cfg(feature = "native")]

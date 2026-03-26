@@ -416,6 +416,7 @@ impl App {
             volume: inst.volume,
             pan: inst.pan,
             effect_chain_id: inst.effect_chain_id,
+            disabled: inst.disabled,
         };
         self.instruments.insert(inst_id, inst);
 

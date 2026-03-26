@@ -1,3 +1,5 @@
+- 2026-03-27: fix: export window text clipped to window bounds to prevent overflow (46.3k loc)
+- 2026-03-27: fix: mute now toggles disabled (same as pressing 0), persistent and undoable (46.3k loc)
 - 2026-03-27: feat: solo/mute buttons in layers panel show only on hover or when active (46.2k loc)
 - 2026-03-27: fix: deleting a group now also deletes all its member entities with proper undo support (46.2k loc)
 - 2026-03-27: fix: undo group move now restores group bounding box + emits UpdateGroup op in all 3 commit paths (46.1k loc)

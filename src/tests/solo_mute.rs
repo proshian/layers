@@ -46,10 +46,10 @@ fn toggle_mute() {
 
     assert!(app.should_play(id));
 
-    app.toggle_mute(id);
+    app.toggle_mute_disabled(id);
     assert!(!app.should_play(id));
 
-    app.toggle_mute(id);
+    app.toggle_mute_disabled(id);
     assert!(app.should_play(id));
 }
 
@@ -109,7 +109,7 @@ fn mute_overrides_solo() {
     app.toggle_solo(id, false);
     assert!(app.should_play(id));
 
-    app.toggle_mute(id);
+    app.toggle_mute_disabled(id);
     assert!(!app.should_play(id));
 }
 
@@ -128,7 +128,7 @@ fn group_mute_affects_members() {
     assert!(app.should_play(wf1));
     assert!(app.should_play(wf2));
 
-    app.toggle_mute(group_id);
+    app.toggle_mute_disabled(group_id);
     assert!(!app.should_play(wf1));
     assert!(!app.should_play(wf2));
 }
@@ -203,7 +203,7 @@ fn mute_member_of_soloed_group() {
     assert!(app.should_play(wf1));
     assert!(app.should_play(wf2));
 
-    app.toggle_mute(wf1);
+    app.toggle_mute_disabled(wf1);
     assert!(!app.should_play(wf1), "muted member should not play even in soloed group");
     assert!(app.should_play(wf2), "unmuted member of soloed group should still play");
 }

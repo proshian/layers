@@ -105,7 +105,6 @@ impl App {
                     network_mode: self.network.mode(),
                     hidden_take_children: &hidden_take_children,
                     solo_ids: &self.solo_ids,
-                    mute_ids: &self.mute_ids,
                 };
                 build_instances(&mut self.cached_instances, &render_ctx);
                 build_waveform_vertices(&mut self.cached_wf_verts, &render_ctx);
