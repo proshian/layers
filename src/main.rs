@@ -156,6 +156,24 @@ pub(crate) use crate::theme::WAVEFORM_COLORS;
 
 // Audio formats supported via symphonia: wav, mp3, ogg, flac, aac
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "ogg", "flac", "aac", "m4a", "mp4"];
+const SESSION_DB_WS_URL: &str = "ws://db.layers.audio";
+const SESSION_DB_HOST: &str = "db.layers.audio";
+
+/// Strip known URL prefixes from a session address, return the bare project ID.
+pub(crate) fn parse_session_id(input: &str) -> String {
+    let s = input.trim();
+    for prefix in &[
+        "wss://db.layers.audio:8000/",
+        "https://db.layers.audio/",
+        "http://db.layers.audio/",
+        "db.layers.audio/",
+    ] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            return rest.to_lowercase();
+        }
+    }
+    s.to_lowercase()
+}
 
 pub(crate) const MIDI_AUTO_EDIT_ZOOM_THRESHOLD: f32 = 2.0;
 
@@ -917,43 +935,34 @@ impl App {
 
         let settings = Settings::load();
 
-        // Sample library folders are stored globally in settings so they
-        // persist across restarts regardless of project save state.
-        // Merge: use settings folders as the authoritative source, but keep
-        // any project-specific folders that aren't already in settings.
+        // Sample library folders are authoritative in global settings only.
+        // Migration: if settings has no folders but the project file has some,
+        // copy them into settings so they aren't lost.
+        let mut settings = settings;
+        if settings.sample_library_folders.is_empty() && !browser_folders.is_empty() {
+            settings.sample_library_folders = browser_folders
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            settings.save();
+        }
+
         let global_folders: Vec<PathBuf> = settings
             .sample_library_folders
             .iter()
             .map(PathBuf::from)
             .collect();
-        let mut merged_folders = global_folders.clone();
-        for f in &browser_folders {
-            if !merged_folders.contains(f) {
-                merged_folders.push(f.clone());
+
+        // Use project expanded state; expand any newly-seen settings folders
+        let mut expanded = browser_expanded.unwrap_or_default();
+        for f in &global_folders {
+            if !browser_folders.contains(f) {
+                expanded.insert(f.clone());
             }
         }
-        let use_global = !settings.sample_library_folders.is_empty();
-        let mut sample_browser = if use_global {
-            // Rebuild expanded set: keep project expanded state, add any new global folders as expanded
-            let mut expanded = browser_expanded.unwrap_or_default();
-            for f in &global_folders {
-                if !browser_folders.contains(f) {
-                    expanded.insert(f.clone());
-                }
-            }
-            ui::browser::SampleBrowser::from_state(
-                merged_folders,
-                expanded,
-                browser_visible || !global_folders.is_empty(),
-            )
-        } else if let Some(expanded) = browser_expanded {
-            ui::browser::SampleBrowser::from_state(browser_folders, expanded, browser_visible)
-        } else {
-            ui::browser::SampleBrowser::from_folders(browser_folders)
-        };
+        let visible = browser_visible || !global_folders.is_empty();
+        let mut sample_browser = ui::browser::SampleBrowser::from_state(global_folders, expanded, visible);
         sample_browser.restore_width(browser_width);
-
-        let mut settings = settings;
 
         let device_name = if settings.audio_output_device == "No Device" {
             None
@@ -1268,6 +1277,68 @@ impl App {
         self.pending_welcome = Some(welcome_rx);
         log::info!("Connecting to SurrealDB at {}", url);
     }
+
+    #[cfg(feature = "native")]
+    fn connect_remote_session(&mut self, project_id: &str) {
+        let url = SESSION_DB_WS_URL;
+
+        // RemoteStorage needs its own Arc<Runtime> for audio assets
+        let rs_rt = std::sync::Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("tokio rt for remote storage"),
+        );
+        if let Some(rs) = storage::RemoteStorage::connect(url, rs_rt) {
+            rs.use_project(project_id);
+            self.remote_storage = Some(std::sync::Arc::new(rs));
+        }
+
+        // Real-time op sync
+        self.connect_to_server(url, project_id);
+
+        self.toast_manager.push(
+            format!("Connecting to {SESSION_DB_HOST}/{project_id}…"),
+            ui::toast::ToastKind::Info,
+        );
+    }
+
+    #[cfg(feature = "native")]
+    fn submit_session(&mut self, is_share: bool, input: &str) {
+        let project_id = parse_session_id(input);
+        if project_id.is_empty() {
+            return;
+        }
+
+        self.connect_remote_session(&project_id);
+
+        if is_share {
+            let url = format!("{SESSION_DB_HOST}/{project_id}");
+            #[cfg(target_os = "macos")]
+            {
+                use std::io::Write;
+                if let Ok(mut child) = std::process::Command::new("pbcopy")
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                {
+                    if let Some(stdin) = child.stdin.as_mut() {
+                        let _ = stdin.write_all(url.as_bytes());
+                    }
+                    let _ = child.wait();
+                }
+            }
+            self.toast_manager.push(
+                format!("Session link copied: {url}"),
+                ui::toast::ToastKind::Success,
+            );
+        }
+    }
+
+    #[cfg(not(feature = "native"))]
+    fn connect_remote_session(&mut self, _project_id: &str) {}
+
+    #[cfg(not(feature = "native"))]
+    fn submit_session(&mut self, _is_share: bool, _input: &str) {}
 
     fn update_component_bounds(&mut self, comp_id: EntityId) {
         let indices = if let Some(comp) = self.components.get(&comp_id) {

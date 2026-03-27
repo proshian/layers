@@ -70,6 +70,10 @@ pub enum CommandAction {
     SetMidiClipColor(usize),
     CreateGroup,
     UngroupSelected,
+    RemovePlaceFromSidebar(usize),
+    ShowPlaceInFinder(usize),
+    ShareSession,
+    JoinSession,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -78,6 +82,8 @@ pub enum PaletteMode {
     VolumeFader,
     PluginPicker,
     InstrumentPicker,
+    ShareSession,
+    JoinSession,
 }
 
 pub struct PluginPickerEntry {
@@ -88,6 +94,7 @@ pub struct PluginPickerEntry {
 }
 
 pub const FADER_CONTENT_HEIGHT: f32 = 90.0;
+pub const SESSION_INPUT_CONTENT_HEIGHT: f32 = 110.0;
 const FADER_TRACK_H: f32 = 6.0;
 const FADER_THUMB_R: f32 = 9.0;
 const FADER_MARGIN_TOP: f32 = 36.0;
@@ -385,6 +392,20 @@ pub const COMMANDS: &[CommandDef] = &[
         action: CommandAction::UngroupSelected,
         dev_only: false,
     },
+    CommandDef {
+        name: "Share Session",
+        shortcut: "",
+        category: "Session",
+        action: CommandAction::ShareSession,
+        dev_only: false,
+    },
+    CommandDef {
+        name: "Join Session",
+        shortcut: "",
+        category: "Session",
+        action: CommandAction::JoinSession,
+        dev_only: false,
+    },
 ];
 
 #[derive(Clone)]
@@ -410,6 +431,8 @@ pub struct CommandPalette {
     pub filtered_plugin_indices: Vec<usize>,
     pub plugin_selected_index: usize,
     pub plugin_scroll_offset: f32,
+    // Session share/join text input
+    pub session_input: String,
 }
 
 impl CommandPalette {
@@ -429,6 +452,7 @@ impl CommandPalette {
             filtered_plugin_indices: Vec::new(),
             plugin_selected_index: 0,
             plugin_scroll_offset: 0.0,
+            session_input: String::new(),
         };
         p.rebuild_rows(dev_mode);
         p
@@ -769,6 +793,9 @@ impl CommandPalette {
         }
         if matches!(self.mode, PaletteMode::PluginPicker | PaletteMode::InstrumentPicker) {
             return self.plugin_visible_height(scale);
+        }
+        if matches!(self.mode, PaletteMode::ShareSession | PaletteMode::JoinSession) {
+            return SESSION_INPUT_CONTENT_HEIGHT * scale;
         }
         let mut h = 0.0;
         for row in self.visible_rows() {
@@ -1159,6 +1186,18 @@ impl CommandPalette {
                     });
                 }
             }
+            PaletteMode::ShareSession | PaletteMode::JoinSession => {
+                let pad = 20.0 * scale;
+                let input_y = list_top + 28.0 * scale;
+                let input_h = 36.0 * scale;
+                let input_w = size[0] - pad * 2.0;
+                out.push(InstanceRaw {
+                    position: [pos[0] + pad, input_y],
+                    size: [input_w, input_h],
+                    color: settings.theme.bg_input,
+                    border_radius: 8.0 * scale,
+                });
+            }
         }
 
         out
@@ -1173,6 +1212,8 @@ impl CommandPalette {
         // Search input text (or placeholder)
         let (display_text, search_color) = match self.mode {
             PaletteMode::VolumeFader => ("Master Volume", crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255)),
+            PaletteMode::ShareSession => ("Share Session", crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255)),
+            PaletteMode::JoinSession => ("Join Session", crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255)),
             PaletteMode::PluginPicker | PaletteMode::InstrumentPicker if self.search_text.is_empty() => {
                 ("Search plugins...", crate::theme::RuntimeTheme::text_u8(theme.text_dim, 160))
             }
@@ -1391,6 +1432,77 @@ impl CommandPalette {
                         y += PALETTE_ITEM_HEIGHT * scale;
                     }
                 }
+            }
+            PaletteMode::ShareSession | PaletteMode::JoinSession => {
+                let pad = 20.0 * scale;
+                let label_font = 11.0 * scale;
+                let label_line = 16.0 * scale;
+                let input_font = 14.0 * scale;
+                let input_line = 20.0 * scale;
+                let hint_font = 11.0 * scale;
+                let hint_line = 15.0 * scale;
+
+                let label = if self.mode == PaletteMode::ShareSession {
+                    "Session name:"
+                } else {
+                    "Session address:"
+                };
+                // Label above input
+                out.push(TextEntry {
+                    text: label.to_string(),
+                    x: ppos[0] + pad,
+                    y: list_top + 10.0 * scale,
+                    font_size: label_font,
+                    line_height: label_line,
+                    max_width: PALETTE_WIDTH * scale - pad * 2.0,
+                    color: crate::theme::RuntimeTheme::text_u8(theme.text_dim, 200),
+                    weight: 400,
+                    bounds: None,
+                    center: false,
+                });
+
+                // Text input content (value or placeholder)
+                let input_y = list_top + 28.0 * scale;
+                let input_h = 36.0 * scale;
+                let (input_text, input_color): (String, _) = if self.session_input.is_empty() {
+                    let placeholder = if self.mode == PaletteMode::ShareSession {
+                        "e.g. my-track"
+                    } else {
+                        "e.g. db.layers.audio/my-track"
+                    };
+                    (placeholder.to_string(), crate::theme::RuntimeTheme::text_u8(theme.text_dim, 120))
+                } else {
+                    (
+                        format!("{}|", self.session_input),
+                        crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255),
+                    )
+                };
+                out.push(TextEntry {
+                    text: input_text,
+                    x: ppos[0] + pad + 10.0 * scale,
+                    y: input_y + (input_h - input_line) * 0.5,
+                    font_size: input_font,
+                    line_height: input_line,
+                    max_width: PALETTE_WIDTH * scale - pad * 2.0 - 20.0 * scale,
+                    color: input_color,
+                    weight: 400,
+                    bounds: None,
+                    center: false,
+                });
+
+                // Hint at the bottom
+                out.push(TextEntry {
+                    text: "↵ to connect · Esc to cancel".to_string(),
+                    x: ppos[0] + pad,
+                    y: list_top + 76.0 * scale,
+                    font_size: hint_font,
+                    line_height: hint_line,
+                    max_width: PALETTE_WIDTH * scale - pad * 2.0,
+                    color: crate::theme::RuntimeTheme::text_u8(theme.text_dim, 120),
+                    weight: 400,
+                    bounds: None,
+                    center: false,
+                });
             }
         }
 

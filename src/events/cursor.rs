@@ -410,7 +410,6 @@ impl App {
                 } else {
                     self.sample_browser.toggle_hovered = false;
                     self.sample_browser.hovered_entry = None;
-                    self.sample_browser.add_button_hovered = false;
                     self.sample_browser.resize_hovered = false;
                 }
             } else {

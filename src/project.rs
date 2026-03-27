@@ -96,12 +96,7 @@ impl App {
                 camera_zoom: self.camera.zoom,
                 objects: storage::objects_to_stored(&self.objects),
                 waveforms: stored_waveforms,
-                browser_folders: self
-                    .sample_browser
-                    .root_folders
-                    .iter()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .collect(),
+                browser_folders: Vec::new(),
                 browser_width: self.sample_browser.width,
                 browser_visible: self.sample_browser.visible,
                 browser_expanded: self
@@ -483,17 +478,24 @@ impl App {
             engine.set_bpm(self.bpm);
         }
 
-        self.sample_browser = if !state.browser_expanded.is_empty() {
-            let folders: Vec<PathBuf> = state.browser_folders.iter().map(PathBuf::from).collect();
+        self.sample_browser = {
+            let settings = crate::settings::Settings::load();
+            // Migration: if settings has no folders but project file had some, migrate them.
+            let mut settings = settings;
+            if settings.sample_library_folders.is_empty() && !state.browser_folders.is_empty() {
+                settings.sample_library_folders = state.browser_folders.clone();
+                settings.save();
+            }
+            let global_folders: Vec<PathBuf> = settings
+                .sample_library_folders
+                .iter()
+                .map(PathBuf::from)
+                .collect();
             let expanded: HashSet<PathBuf> =
                 state.browser_expanded.iter().map(PathBuf::from).collect();
-            let mut b =
-                ui::browser::SampleBrowser::from_state(folders, expanded, state.browser_visible);
+            let mut b = ui::browser::SampleBrowser::from_state(global_folders, expanded, state.browser_visible);
             b.restore_width(state.browser_width);
             b
-        } else {
-            let folders: Vec<PathBuf> = state.browser_folders.iter().map(PathBuf::from).collect();
-            ui::browser::SampleBrowser::from_folders(folders)
         };
 
         self.selected.clear();

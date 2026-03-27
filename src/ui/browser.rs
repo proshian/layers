@@ -22,10 +22,15 @@ const SIDEBAR_ITEM_HEIGHT: f32 = 26.0;
 const SIDEBAR_SECTION_GAP: f32 = 18.0;
 const INDENT_PX: f32 = 16.0;
 const SCROLLBAR_WIDTH: f32 = 6.0;
-const ADD_BUTTON_SIZE: f32 = 20.0;
 const COLLAPSED_WIDTH: f32 = 20.0;
 /// Width of the toggle `◄` button in the search bar row.
 const TOGGLE_BTN_SIZE: f32 = 20.0;
+/// Vertical gap between the last category item and the "Places" section header inside the sidebar.
+const PLACES_SECTION_GAP: f32 = 8.0;
+/// Height of the "Places" label row inside the sidebar.
+const PLACES_HEADER_HEIGHT: f32 = 20.0;
+/// Row height for each entry in the places section of the sidebar.
+const PLACES_ROW_HEIGHT: f32 = 24.0;
 
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,7 +54,7 @@ impl BrowserCategory {
             BrowserCategory::Layers => "Layers",
             BrowserCategory::Samples => "Samples",
             BrowserCategory::Instruments => "Instruments",
-            BrowserCategory::Effects => "Effects",
+            BrowserCategory::Effects => "Audio Effects",
         }
     }
 }
@@ -108,7 +113,6 @@ pub struct SampleBrowser {
     pub scroll_velocity: f32,
     pub hovered_entry: Option<usize>,
     pub visible: bool,
-    pub add_button_hovered: bool,
     pub width: f32,
     pub resize_hovered: bool,
     pub text_dirty: bool,
@@ -145,6 +149,12 @@ pub struct SampleBrowser {
     pub layer_drop_indicator: Option<(usize, usize, bool)>,
     /// Whether the browser toggle button (≡ in header or collapsed strip) is hovered.
     pub toggle_hovered: bool,
+    /// Index of the currently selected place (root folder) in the Places column.
+    pub selected_place: usize,
+    /// Which place row (0-based into root_folders) is hovered; None if none.
+    pub hovered_place: Option<usize>,
+    /// Whether the "Add Folder…" row at the bottom of the places column is hovered.
+    pub places_add_hovered: bool,
 }
 
 impl SampleBrowser {
@@ -157,7 +167,6 @@ impl SampleBrowser {
             scroll_velocity: 0.0,
             hovered_entry: None,
             visible: true,
-            add_button_hovered: false,
             width: DEFAULT_BROWSER_WIDTH,
             resize_hovered: false,
             text_dirty: true,
@@ -184,6 +193,9 @@ impl SampleBrowser {
             search_clear_hovered: false,
             layer_drop_indicator: None,
             toggle_hovered: false,
+            selected_place: 0,
+            hovered_place: None,
+            places_add_hovered: false,
         }
     }
 
@@ -224,6 +236,7 @@ impl SampleBrowser {
         }
         self.expanded.insert(path.clone());
         self.root_folders.push(path);
+        self.selected_place = self.root_folders.len() - 1;
         self.file_index_dirty = true;
         self.rebuild_entries();
     }
@@ -232,6 +245,11 @@ impl SampleBrowser {
         if index < self.root_folders.len() {
             let removed = self.root_folders.remove(index);
             self.expanded.remove(&removed);
+            if self.selected_place >= self.root_folders.len() && !self.root_folders.is_empty() {
+                self.selected_place = self.root_folders.len() - 1;
+            } else if self.root_folders.is_empty() {
+                self.selected_place = 0;
+            }
             self.file_index_dirty = true;
             self.rebuild_entries();
         }
@@ -349,10 +367,9 @@ impl SampleBrowser {
                             }
                         }
                     }
-                } else {
-                    for root in &self.root_folders {
-                        walk_dir(&mut self.entries, &self.expanded, root, 0);
-                    }
+                } else if let Some(root) = self.root_folders.get(self.selected_place) {
+                    let root = root.clone();
+                    walk_dir(&mut self.entries, &self.expanded, &root, 0);
                 }
             }
             BrowserCategory::Instruments => {
@@ -400,8 +417,21 @@ impl SampleBrowser {
         self.sidebar_width(scale)
     }
 
-    fn content_width(&self, scale: f32) -> f32 {
-        self.panel_width(scale) - self.sidebar_width(scale)
+    /// Left edge of the file-tree pane. Places now live in the sidebar, so this is just content_x.
+    pub(crate) fn tree_content_x(&self, scale: f32) -> f32 {
+        self.content_x(scale)
+    }
+
+    fn tree_content_width(&self, scale: f32) -> f32 {
+        self.panel_width(scale) - self.content_x(scale)
+    }
+
+    /// Y coordinate where the Places section starts inside the sidebar (below all category rows).
+    fn places_section_y(&self, scale: f32) -> f32 {
+        let ct = self.content_top(scale);
+        let section_gap = SIDEBAR_SECTION_GAP * scale;
+        let item_h = SIDEBAR_ITEM_HEIGHT * scale;
+        ct + section_gap + SIDEBAR_CATEGORIES.len() as f32 * item_h + PLACES_SECTION_GAP * scale
     }
 
     fn content_height(&self, scale: f32) -> f32 {
@@ -538,32 +568,17 @@ impl SampleBrowser {
         pos[0] >= 0.0 && pos[0] <= edge + zone
     }
 
-    pub fn add_button_rect(&self, scale: f32) -> ([f32; 2], [f32; 2]) {
-        let w = self.panel_width(scale);
-        let sz = ADD_BUTTON_SIZE * scale;
-        let row_y = HEADER_HEIGHT * scale;
-        let margin = (SEARCH_BAR_HEIGHT * scale - sz) * 0.5;
-        let x = w - margin - sz;
-        let y = row_y + margin;
-        ([x, y], [sz, sz])
-    }
-
     /// Rect for the search clear (X) button, inside the search input on the right.
     fn clear_button_rect(&self, scale: f32) -> ([f32; 2], [f32; 2]) {
         let w = self.panel_width(scale);
         let margin = 6.0 * scale;
-        let right_pad = if self.active_category == BrowserCategory::Samples {
-            (ADD_BUTTON_SIZE + 10.0) * scale
-        } else {
-            margin
-        };
         let toggle_offset = (TOGGLE_BTN_SIZE + 6.0) * scale;
         let sb_x = margin + toggle_offset;
         let row_y = HEADER_HEIGHT * scale;
         let search_bar_h = SEARCH_BAR_HEIGHT * scale;
         let sb_y = row_y + margin;
         let sb_h = search_bar_h - 2.0 * margin;
-        let sb_w_inner = w - sb_x - right_pad;
+        let sb_w_inner = w - sb_x - margin;
         let btn_sz = 16.0 * scale;
         let btn_x = sb_x + sb_w_inner - btn_sz - 2.0 * scale;
         let btn_y = sb_y + (sb_h - btn_sz) * 0.5;
@@ -576,6 +591,57 @@ impl SampleBrowser {
         }
         let (bp, bs) = self.clear_button_rect(scale);
         pos[0] >= bp[0] && pos[0] <= bp[0] + bs[0] && pos[1] >= bp[1] && pos[1] <= bp[1] + bs[1]
+    }
+
+    /// Returns the index into `root_folders` for the place row at `pos`, or `None`.
+    pub fn hit_place_row(&self, pos: [f32; 2], scale: f32) -> Option<usize> {
+        if self.active_category != BrowserCategory::Samples {
+            return None;
+        }
+        let sb_w = self.sidebar_width(scale);
+        if pos[0] < 0.0 || pos[0] >= sb_w {
+            return None;
+        }
+        let places_y = self.places_section_y(scale);
+        let header_h = PLACES_HEADER_HEIGHT * scale;
+        let row_h = PLACES_ROW_HEIGHT * scale;
+        let y = pos[1] - places_y - header_h;
+        if y < 0.0 {
+            return None;
+        }
+        let idx = (y / row_h) as usize;
+        if idx < self.root_folders.len() {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    /// Returns true if `pos` is over the "Add Folder…" row in the sidebar.
+    pub fn hit_places_add(&self, pos: [f32; 2], scale: f32) -> bool {
+        if self.active_category != BrowserCategory::Samples {
+            return false;
+        }
+        let sb_w = self.sidebar_width(scale);
+        if pos[0] < 0.0 || pos[0] >= sb_w {
+            return false;
+        }
+        let places_y = self.places_section_y(scale);
+        let header_h = PLACES_HEADER_HEIGHT * scale;
+        let row_h = PLACES_ROW_HEIGHT * scale;
+        let add_row_y = places_y + header_h + self.root_folders.len() as f32 * row_h;
+        pos[1] >= add_row_y && pos[1] < add_row_y + row_h
+    }
+
+    pub fn hit_search_bar(&self, pos: [f32; 2], scale: f32) -> bool {
+        let top = HEADER_HEIGHT * scale;
+        let bottom = top + SEARCH_BAR_HEIGHT * scale;
+        let left = (6.0 + TOGGLE_BTN_SIZE + 6.0) * scale; // after toggle button
+        pos[1] >= top
+            && pos[1] < bottom
+            && pos[0] >= left
+            && pos[0] < self.panel_width(scale)
+            && !self.hit_clear_button(pos, scale)
     }
 
     pub fn get_search_clear_icon_entry(&self, theme: &crate::theme::RuntimeTheme, scale: f32) -> Option<crate::gpu::IconEntry> {
@@ -599,7 +665,6 @@ impl SampleBrowser {
     }
 
     /// Icon entry for the browser toggle button.
-    /// Returns a MENU icon (≡) when visible, or CHEVRON_RIGHT (›) centered on the collapsed strip.
     pub fn get_toggle_icon_entry(&self, theme: &crate::theme::RuntimeTheme, scale: f32, screen_h: f32) -> crate::gpu::IconEntry {
         let icon_size = 14.0 * scale;
         let color = if self.toggle_hovered {
@@ -632,31 +697,61 @@ impl SampleBrowser {
         }
     }
 
-    pub fn hit_add_button(&self, pos: [f32; 2], scale: f32) -> bool {
-        if self.active_category != BrowserCategory::Samples {
-            return false;
+    /// Icon entries for Places in the sidebar: a folder icon per place row + folder-add for "Add Folder…".
+    pub fn get_places_icon_entries(&self, theme: &crate::theme::RuntimeTheme, scale: f32) -> Vec<crate::gpu::IconEntry> {
+        if self.active_category != BrowserCategory::Samples || !self.visible {
+            return Vec::new();
         }
-        let (bp, bs) = self.add_button_rect(scale);
-        pos[0] >= bp[0] && pos[0] <= bp[0] + bs[0] && pos[1] >= bp[1] && pos[1] <= bp[1] + bs[1]
-    }
+        let mut out = Vec::new();
+        let places_y = self.places_section_y(scale);
+        let header_h = PLACES_HEADER_HEIGHT * scale;
+        let row_h = PLACES_ROW_HEIGHT * scale;
+        let icon_sz = 12.0 * scale;
+        let icon_x = 8.0 * scale;
 
-    pub fn hit_search_bar(&self, pos: [f32; 2], scale: f32) -> bool {
-        let top = HEADER_HEIGHT * scale;
-        let bottom = top + SEARCH_BAR_HEIGHT * scale;
-        let left = (6.0 + TOGGLE_BTN_SIZE + 6.0) * scale; // after toggle button
-        pos[1] >= top
-            && pos[1] < bottom
-            && pos[0] >= left
-            && pos[0] < self.panel_width(scale)
-            && !self.hit_add_button(pos, scale)
-            && !self.hit_clear_button(pos, scale)
+        for (i, _) in self.root_folders.iter().enumerate() {
+            let row_y = places_y + header_h + i as f32 * row_h;
+            let icon_y = row_y + (row_h - icon_sz) * 0.5;
+            let color = if i == self.selected_place {
+                crate::theme::RuntimeTheme::text_u8(theme.text_primary, 230)
+            } else if self.hovered_place == Some(i) {
+                crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 200)
+            } else {
+                crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 160)
+            };
+            out.push(crate::gpu::IconEntry {
+                codepoint: crate::icons::FOLDER,
+                x: icon_x,
+                y: icon_y,
+                size: icon_sz,
+                color,
+            });
+        }
+
+        // "Add Folder…" row icon
+        let add_row_y = places_y + header_h + self.root_folders.len() as f32 * row_h;
+        let icon_y = add_row_y + (row_h - icon_sz) * 0.5;
+        let add_color = if self.places_add_hovered {
+            crate::theme::RuntimeTheme::text_u8(theme.text_primary, 200)
+        } else {
+            crate::theme::RuntimeTheme::text_u8(theme.text_dim, 140)
+        };
+        out.push(crate::gpu::IconEntry {
+            codepoint: crate::icons::CREATE_NEW_FOLDER,
+            x: icon_x,
+            y: icon_y,
+            size: icon_sz,
+            color: add_color,
+        });
+
+        out
     }
 
     /// Returns which content-area entry the position is over, if any.
-    /// Only considers positions in the content area (right of sidebar).
+    /// Only considers positions in the tree pane (right of sidebar + places column).
     pub fn item_at(&self, pos: [f32; 2], _screen_h: f32, scale: f32) -> Option<usize> {
         let top = self.content_top(scale);
-        let cx = self.content_x(scale);
+        let cx = self.tree_content_x(scale);
         if pos[1] < top || pos[0] < cx {
             return None;
         }
@@ -716,10 +811,13 @@ impl SampleBrowser {
             return;
         }
         self.resize_hovered = self.hit_resize_handle(pos, scale);
-        self.add_button_hovered = self.hit_add_button(pos, scale);
         self.search_clear_hovered = self.hit_clear_button(pos, scale);
         self.hovered_sidebar = self.sidebar_item_at(pos, scale);
-        self.hovered_entry = if self.resize_hovered || self.hovered_sidebar.is_some() {
+        self.hovered_place = self.hit_place_row(pos, scale);
+        self.places_add_hovered = self.hit_places_add(pos, scale);
+        self.hovered_entry = if self.resize_hovered || self.hovered_sidebar.is_some()
+            || self.hovered_place.is_some() || self.places_add_hovered
+        {
             None
         } else {
             self.item_at(pos, screen_h, scale)
@@ -757,8 +855,11 @@ impl SampleBrowser {
 
         let header_h = HEADER_HEIGHT * scale;
         let sb_w = self.sidebar_width(scale);
-        let cx = self.content_x(scale);
         let item_h = ITEM_HEIGHT * scale;
+
+        // cx and content_w span the full tree pane (right of sidebar — no separate places column)
+        let cx = self.content_x(scale);
+        let content_w = self.tree_content_width(scale);
 
         // --- Full panel background ---
         out.push(InstanceRaw {
@@ -811,16 +912,11 @@ impl SampleBrowser {
                 });
             }
             let margin = 6.0 * scale;
-            let right_pad = if self.active_category == BrowserCategory::Samples {
-                (ADD_BUTTON_SIZE + 10.0) * scale
-            } else {
-                margin
-            };
             // Offset search bar right to make room for the toggle button
             let toggle_offset = (TOGGLE_BTN_SIZE + 6.0) * scale;
             let sb_x = margin + toggle_offset;
             let sb_y = row_y + margin;
-            let sb_w_inner = w - sb_x - right_pad;
+            let sb_w_inner = w - sb_x - margin;
             let sb_h = search_bar_h - 2.0 * margin;
             let bar_color = if self.search_focused {
                 [
@@ -879,45 +975,22 @@ impl SampleBrowser {
             }
         }
 
-        // "+" add folder button — only on Samples category
-        if self.active_category == BrowserCategory::Samples {
-            let (bp, bs) = self.add_button_rect(scale);
-            let btn_color = if self.add_button_hovered {
-                crate::theme::with_alpha(settings.theme.text_primary, 0.80)
-            } else {
-                crate::theme::with_alpha(settings.theme.text_primary, 0.50)
-            };
-            let bar_h = 2.0 * scale;
-            let bar_w = bs[0] * 0.6;
-            out.push(InstanceRaw {
-                position: [bp[0] + (bs[0] - bar_w) * 0.5, bp[1] + (bs[1] - bar_h) * 0.5],
-                size: [bar_w, bar_h],
-                color: btn_color,
-                border_radius: 0.0,
-            });
-            out.push(InstanceRaw {
-                position: [bp[0] + (bs[0] - bar_h) * 0.5, bp[1] + (bs[1] - bar_w) * 0.5],
-                size: [bar_h, bar_w],
-                color: btn_color,
-                border_radius: 0.0,
-            });
-        }
-
         // --- Sidebar background (slightly darker) ---
         let ct = self.content_top(scale);
+        let sidebar_bg = [
+            settings.theme.bg_base[0] * 0.9,
+            settings.theme.bg_base[1] * 0.9,
+            settings.theme.bg_base[2] * 0.9,
+            1.0,
+        ];
         out.push(InstanceRaw {
             position: [0.0, ct],
             size: [sb_w, screen_h - ct],
-            color: [
-                settings.theme.bg_base[0] * 0.9,
-                settings.theme.bg_base[1] * 0.9,
-                settings.theme.bg_base[2] * 0.9,
-                1.0,
-            ],
+            color: sidebar_bg,
             border_radius: 0.0,
         });
 
-        // --- Sidebar items ---
+        // --- Sidebar items (category tabs) ---
         let sb_item_h = SIDEBAR_ITEM_HEIGHT * scale;
         let section_gap = SIDEBAR_SECTION_GAP * scale;
 
@@ -954,6 +1027,62 @@ impl SampleBrowser {
             }
         }
 
+        // --- Places section inside sidebar (Samples category only) ---
+        if self.active_category == BrowserCategory::Samples {
+            let places_y = self.places_section_y(scale);
+            let ph = PLACES_HEADER_HEIGHT * scale;
+            let row_h = PLACES_ROW_HEIGHT * scale;
+
+            // Thin separator above "Places" label
+            out.push(InstanceRaw {
+                position: [8.0 * scale, places_y - 5.0 * scale],
+                size: [sb_w - 16.0 * scale, 1.0 * scale],
+                color: [1.0, 1.0, 1.0, 0.07],
+                border_radius: 0.0,
+            });
+
+            for (i, _) in self.root_folders.iter().enumerate() {
+                let row_y = places_y + ph + i as f32 * row_h;
+                if i == self.selected_place {
+                    out.push(InstanceRaw {
+                        position: [0.0, row_y],
+                        size: [sb_w, row_h],
+                        color: [
+                            settings.theme.accent[0],
+                            settings.theme.accent[1],
+                            settings.theme.accent[2],
+                            0.12,
+                        ],
+                        border_radius: 0.0,
+                    });
+                    out.push(InstanceRaw {
+                        position: [0.0, row_y],
+                        size: [2.5 * scale, row_h],
+                        color: settings.theme.accent,
+                        border_radius: 0.0,
+                    });
+                } else if self.hovered_place == Some(i) {
+                    out.push(InstanceRaw {
+                        position: [0.0, row_y],
+                        size: [sb_w, row_h],
+                        color: settings.theme.item_hover,
+                        border_radius: 0.0,
+                    });
+                }
+            }
+
+            // "Add Folder…" row hover
+            let add_row_y = places_y + ph + self.root_folders.len() as f32 * row_h;
+            if self.places_add_hovered {
+                out.push(InstanceRaw {
+                    position: [0.0, add_row_y],
+                    size: [sb_w, row_h],
+                    color: settings.theme.item_hover,
+                    border_radius: 0.0,
+                });
+            }
+        }
+
         // --- Vertical separator between sidebar and content ---
         out.push(InstanceRaw {
             position: [sb_w - 1.0 * scale, ct],
@@ -975,29 +1104,32 @@ impl SampleBrowser {
         let first_visible = (self.scroll_offset / item_h) as usize;
         let last_visible = ((self.scroll_offset + visible_h) / item_h).ceil() as usize;
         let last_visible = last_visible.min(self.entries.len());
-        let content_w = self.content_width(scale);
 
         for i in first_visible..last_visible {
             let entry = &self.entries[i];
             let y = ct + i as f32 * item_h - self.scroll_offset;
 
-            if y + item_h < ct || y > screen_h {
+            if y + item_h <= ct || y > screen_h {
                 continue;
             }
+
+            // Clamp row geometry to content area top (same clipping as text)
+            let clip_y = y.max(ct);
+            let clip_h = (y + item_h - clip_y).max(0.0);
 
             match &entry.kind {
                 EntryKind::PluginHeader => {
                     // Section separator
                     out.push(InstanceRaw {
-                        position: [cx, y],
+                        position: [cx, clip_y],
                         size: [content_w, 1.0 * scale],
                         color: [1.0, 1.0, 1.0, 0.07],
                         border_radius: 0.0,
                     });
                     // Section header background
                     out.push(InstanceRaw {
-                        position: [cx, y],
-                        size: [content_w, item_h],
+                        position: [cx, clip_y],
+                        size: [content_w, clip_h],
                         color: settings.theme.bg_plugin_header,
                         border_radius: 0.0,
                     });
@@ -1006,17 +1138,19 @@ impl SampleBrowser {
                     let badge_h = 12.0 * scale;
                     let badge_x = cx + 8.0 * scale;
                     let badge_y = y + (item_h - badge_h) * 0.5;
-                    out.push(InstanceRaw {
-                        position: [badge_x, badge_y],
-                        size: [badge_w, badge_h],
-                        color: settings.theme.accent_muted,
-                        border_radius: 2.0 * scale,
-                    });
+                    if badge_y >= ct {
+                        out.push(InstanceRaw {
+                            position: [badge_x, badge_y],
+                            size: [badge_w, badge_h],
+                            color: settings.theme.accent_muted,
+                            border_radius: 2.0 * scale,
+                        });
+                    }
                     // Hover
                     if self.hovered_entry == Some(i) {
                         out.push(InstanceRaw {
-                            position: [cx, y],
-                            size: [content_w, item_h],
+                            position: [cx, clip_y],
+                            size: [content_w, clip_h],
                             color: settings.theme.item_hover,
                             border_radius: 0.0,
                         });
@@ -1025,16 +1159,16 @@ impl SampleBrowser {
                 EntryKind::Plugin { is_instrument, .. } => {
                     // Plugin row background
                     out.push(InstanceRaw {
-                        position: [cx, y],
-                        size: [content_w, item_h],
+                        position: [cx, clip_y],
+                        size: [content_w, clip_h],
                         color: settings.theme.bg_plugin,
                         border_radius: 0.0,
                     });
                     // Hover
                     if self.hovered_entry == Some(i) {
                         out.push(InstanceRaw {
-                            position: [cx, y],
-                            size: [content_w, item_h],
+                            position: [cx, clip_y],
+                            size: [content_w, clip_h],
                             color: settings.theme.item_hover,
                             border_radius: 0.0,
                         });
@@ -1043,23 +1177,25 @@ impl SampleBrowser {
                     let dot_sz = 5.0 * scale;
                     let dot_x = cx + 12.0 * scale;
                     let dot_y = y + (item_h - dot_sz) * 0.5;
-                    let dot_color = if *is_instrument {
-                        settings.theme.pill_instrument
-                    } else {
-                        settings.theme.pill_effect
-                    };
-                    out.push(InstanceRaw {
-                        position: [dot_x, dot_y],
-                        size: [dot_sz, dot_sz],
-                        color: dot_color,
-                        border_radius: dot_sz * 0.5,
-                    });
+                    if dot_y >= ct {
+                        let dot_color = if *is_instrument {
+                            settings.theme.pill_instrument
+                        } else {
+                            settings.theme.pill_effect
+                        };
+                        out.push(InstanceRaw {
+                            position: [dot_x, dot_y],
+                            size: [dot_sz, dot_sz],
+                            color: dot_color,
+                            border_radius: dot_sz * 0.5,
+                        });
+                    }
                 }
                 EntryKind::ProjectInstrument { .. } | EntryKind::LayerNode { .. } => {
                     let indent = entry.depth as f32 * INDENT_PX * scale;
                     out.push(InstanceRaw {
-                        position: [cx, y],
-                        size: [content_w, item_h],
+                        position: [cx, clip_y],
+                        size: [content_w, clip_h],
                         color: settings.theme.bg_plugin,
                         border_radius: 0.0,
                     });
@@ -1071,16 +1207,16 @@ impl SampleBrowser {
                     if entry_entity_id.map_or(false, |id| selected_ids.contains(&id)) {
                         let a = settings.theme.accent;
                         out.push(InstanceRaw {
-                            position: [cx, y],
-                            size: [content_w, item_h],
+                            position: [cx, clip_y],
+                            size: [content_w, clip_h],
                             color: [a[0], a[1], a[2], 0.22],
                             border_radius: 0.0,
                         });
                     }
                     if self.hovered_entry == Some(i) {
                         out.push(InstanceRaw {
-                            position: [cx, y],
-                            size: [content_w, item_h],
+                            position: [cx, clip_y],
+                            size: [content_w, clip_h],
                             color: settings.theme.item_hover,
                             border_radius: 0.0,
                         });
@@ -1091,6 +1227,7 @@ impl SampleBrowser {
                         let chev_sz = 8.0 * scale;
                         let chev_x = cx + indent + 8.0 * scale + chev_sz * 0.5;
                         let cy_mid = y + item_h * 0.5;
+                        if cy_mid >= ct {
                         if *expanded {
                             let bar_w = chev_sz * 0.7;
                             let bar_h = 1.5 * scale;
@@ -1122,6 +1259,7 @@ impl SampleBrowser {
                                 border_radius: 0.0,
                             });
                         }
+                        }
                     }
                     }
                     // Category dot
@@ -1129,28 +1267,30 @@ impl SampleBrowser {
                     let dot_offset = indent + 20.0 * scale;
                     let dot_x = cx + dot_offset;
                     let dot_y = y + (item_h - dot_sz) * 0.5;
-                    let dot_color = match &entry.kind {
-                        EntryKind::LayerNode { kind, color, .. } => match kind {
-                            LayerNodeKind::Instrument => settings.theme.pill_instrument,
-                            LayerNodeKind::TextNote => settings.theme.category_dot,
-                            LayerNodeKind::Group => settings.theme.component_border_color,
-                            _ => *color,
-                        },
-                        _ => settings.theme.pill_instrument,
-                    };
-                    out.push(InstanceRaw {
-                        position: [dot_x, dot_y],
-                        size: [dot_sz, dot_sz],
-                        color: dot_color,
-                        border_radius: dot_sz * 0.5,
-                    });
+                    if dot_y >= ct {
+                        let dot_color = match &entry.kind {
+                            EntryKind::LayerNode { kind, color, .. } => match kind {
+                                LayerNodeKind::Instrument => settings.theme.pill_instrument,
+                                LayerNodeKind::TextNote => settings.theme.category_dot,
+                                LayerNodeKind::Group => settings.theme.component_border_color,
+                                _ => *color,
+                            },
+                            _ => settings.theme.pill_instrument,
+                        };
+                        out.push(InstanceRaw {
+                            position: [dot_x, dot_y],
+                            size: [dot_sz, dot_sz],
+                            color: dot_color,
+                            border_radius: dot_sz * 0.5,
+                        });
+                    }
                 }
                 EntryKind::Dir | EntryKind::File => {
                     // Hover
                     if self.hovered_entry == Some(i) {
                         out.push(InstanceRaw {
-                            position: [cx, y],
-                            size: [content_w, item_h],
+                            position: [cx, clip_y],
+                            size: [content_w, clip_h],
                             color: settings.theme.item_hover,
                             border_radius: 0.0,
                         });
@@ -1164,6 +1304,7 @@ impl SampleBrowser {
                         let chev_x = cx + indent + chev_sz * 0.5;
                         let cy = y + item_h * 0.5;
 
+                        if cy >= ct {
                         if self.is_expanded(&entry.path) {
                             let bar_w = chev_sz * 0.7;
                             let bar_h = 1.5 * scale;
@@ -1194,6 +1335,7 @@ impl SampleBrowser {
                                 color: crate::theme::with_alpha(settings.theme.text_primary, 0.40),
                                 border_radius: 0.0,
                             });
+                        }
                         }
                     }
                 }
@@ -1291,22 +1433,19 @@ impl SampleBrowser {
         let w = self.panel_width(scale);
         let header_h = HEADER_HEIGHT * scale;
         let sb_w = self.sidebar_width(scale);
-        let cx = self.content_x(scale);
         let item_h = ITEM_HEIGHT * scale;
+
+        // cx is the tree-pane left edge (right of sidebar)
+        let cx = self.content_x(scale);
 
         // --- Search bar text (second row, below header) ---
         {
             let search_bar_h = SEARCH_BAR_HEIGHT * scale;
             let row_y = header_h;
             let margin = 6.0 * scale;
-            let right_pad = if self.active_category == BrowserCategory::Samples {
-                (ADD_BUTTON_SIZE + 10.0) * scale
-            } else {
-                margin
-            };
             let toggle_offset = (TOGGLE_BTN_SIZE + 6.0) * scale;
             let sb_x = margin + toggle_offset;
-            let sb_w_inner = w - sb_x - right_pad;
+            let sb_w_inner = w - sb_x - margin;
             let font_sz = 11.0 * scale;
             let line_h = 14.0 * scale;
             let text_x = sb_x + 8.0 * scale;
@@ -1333,7 +1472,7 @@ impl SampleBrowser {
 
         let ct = self.content_top(scale);
 
-        // --- Sidebar category labels (fixed, not scrolled) ---
+        // --- Sidebar: category labels then Places section (not scrolled) ---
         let sb_item_h = SIDEBAR_ITEM_HEIGHT * scale;
         let section_gap = SIDEBAR_SECTION_GAP * scale;
         let font_sz = 12.0 * scale;
@@ -1356,6 +1495,76 @@ impl SampleBrowser {
                 max_width: sb_w - 16.0 * scale,
                 color,
                 weight: if is_active { 600 } else { 400 },
+                bounds: Some([0.0, 0.0, 0.0, 0.0]),
+                center: false,
+            });
+        }
+
+        // --- Places section inside sidebar (Samples only, not scrolled) ---
+        if self.active_category == BrowserCategory::Samples {
+            let places_y = self.places_section_y(scale);
+            let ph = PLACES_HEADER_HEIGHT * scale;
+            let row_h = PLACES_ROW_HEIGHT * scale;
+            let icon_w = 22.0 * scale; // space reserved for folder icon
+
+            // "Places" header label
+            out.push(TextEntry {
+                text: "Places".to_string(),
+                x: 8.0 * scale,
+                y: places_y + (ph - 9.0 * scale) * 0.5,
+                font_size: 9.0 * scale,
+                line_height: 9.0 * scale,
+                max_width: sb_w - 10.0 * scale,
+                color: crate::theme::RuntimeTheme::text_u8(theme.text_dim, 150),
+                weight: 600,
+                bounds: Some([0.0, 0.0, 0.0, 0.0]),
+                center: false,
+            });
+
+            for (i, root) in self.root_folders.iter().enumerate() {
+                let row_y = places_y + ph + i as f32 * row_h;
+                let name = root.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| root.to_string_lossy().to_string());
+                let label_line_h = 13.0 * scale;
+                let color = if i == self.selected_place {
+                    crate::theme::RuntimeTheme::text_u8(theme.text_primary, 240)
+                } else if self.hovered_place == Some(i) {
+                    crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 210)
+                } else {
+                    crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 180)
+                };
+                out.push(TextEntry {
+                    text: name,
+                    x: icon_w,
+                    y: row_y + (row_h - label_line_h) * 0.5,
+                    font_size: 12.0 * scale,
+                    line_height: label_line_h,
+                    max_width: sb_w - icon_w - 4.0 * scale,
+                    color,
+                    weight: if i == self.selected_place { 600 } else { 400 },
+                    bounds: Some([0.0, 0.0, 0.0, 0.0]),
+                    center: false,
+                });
+            }
+
+            // "Add Folder…" row
+            let add_row_y = places_y + ph + self.root_folders.len() as f32 * row_h;
+            let label_line_h = 13.0 * scale;
+            let add_color = if self.places_add_hovered {
+                crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 210)
+            } else {
+                crate::theme::RuntimeTheme::text_u8(theme.text_secondary, 180)
+            };
+            out.push(TextEntry {
+                text: "Add Folder…".to_string(),
+                x: icon_w,
+                y: add_row_y + (row_h - label_line_h) * 0.5,
+                font_size: 12.0 * scale,
+                line_height: label_line_h,
+                max_width: sb_w - icon_w - 4.0 * scale,
+                color: add_color,
+                weight: 400,
                 bounds: Some([0.0, 0.0, 0.0, 0.0]),
                 center: false,
             });

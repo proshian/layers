@@ -521,6 +521,43 @@ impl App {
                     }
                 }
             }
+            CommandAction::RemovePlaceFromSidebar(idx) => {
+                self.sample_browser.remove_folder(idx);
+                let mut s = crate::settings::Settings::load();
+                s.sample_library_folders = self.sample_browser.root_folders
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect();
+                s.save();
+                self.sample_browser.rebuild_entries();
+                self.request_redraw();
+            }
+            CommandAction::ShowPlaceInFinder(idx) => {
+                if let Some(path) = self.sample_browser.root_folders.get(idx) {
+                    std::process::Command::new("open")
+                        .arg(path)
+                        .spawn()
+                        .ok();
+                }
+            }
+            CommandAction::ShareSession => {
+                if let Some(p) = &mut self.command_palette {
+                    p.mode = PaletteMode::ShareSession;
+                    p.session_input.clear();
+                    p.search_text.clear();
+                }
+                self.request_redraw();
+                return;
+            }
+            CommandAction::JoinSession => {
+                if let Some(p) = &mut self.command_palette {
+                    p.mode = PaletteMode::JoinSession;
+                    p.session_input.clear();
+                    p.search_text.clear();
+                }
+                self.request_redraw();
+                return;
+            }
         }
         self.request_redraw();
     }

@@ -1196,6 +1196,40 @@ impl App {
                     }
                 }
 
+                if matches!(fader_mode, Some(PaletteMode::ShareSession | PaletteMode::JoinSession)) {
+                    let is_share = matches!(fader_mode, Some(PaletteMode::ShareSession));
+                    match &event.logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            self.command_palette = None;
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            if let Some(p) = &mut self.command_palette {
+                                p.session_input.pop();
+                            }
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            let text = self.command_palette.as_ref()
+                                .map(|p| p.session_input.trim().to_string())
+                                .unwrap_or_default();
+                            self.command_palette = None;
+                            if !text.is_empty() {
+                                self.submit_session(is_share, &text);
+                            }
+                        }
+                        Key::Named(NamedKey::Space) => {
+                            // spaces not allowed in session names — ignore
+                        }
+                        Key::Character(ch) if !self.cmd_held() => {
+                            if let Some(p) = &mut self.command_palette {
+                                p.session_input.push_str(ch.as_ref());
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.request_redraw();
+                    return;
+                }
+
                 if matches!(fader_mode, Some(PaletteMode::PluginPicker | PaletteMode::InstrumentPicker)) {
                     match &event.logical_key {
                         Key::Named(NamedKey::Escape) => {
@@ -1315,7 +1349,7 @@ impl App {
                             .as_ref()
                             .and_then(|p| p.selected_action());
                         if let Some(a) = action {
-                            if matches!(a, CommandAction::SetMasterVolume | CommandAction::AddPlugin | CommandAction::AddInstrument) {
+                            if matches!(a, CommandAction::SetMasterVolume | CommandAction::AddPlugin | CommandAction::AddInstrument | CommandAction::ShareSession | CommandAction::JoinSession) {
                                 self.execute_command(a);
                             } else {
                                 self.command_palette = None;

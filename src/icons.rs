@@ -14,3 +14,5 @@ pub const ADD: &str = "\u{E145}";
 pub const MENU: &str = "\u{E5D2}";
 pub const CHEVRON_LEFT: &str = "\u{E5CB}";
 pub const CHEVRON_RIGHT: &str = "\u{E5CC}";
+pub const FOLDER: &str = "\u{E2C7}";
+pub const CREATE_NEW_FOLDER: &str = "\u{E2CC}";

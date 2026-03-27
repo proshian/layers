@@ -33,6 +33,7 @@ pub enum MenuContext {
     ComponentDef,
     ComponentInstance,
     BrowserEntry,
+    BrowserPlace { folder_index: usize },
     LayerNode { kind: LayerNodeKind },
     MidiClipEdit {
         grid_mode: GridMode,
@@ -493,6 +494,20 @@ impl ContextMenu {
                 action: CommandAction::RevealInFinder,
                 checked: false,
             })],
+            MenuContext::BrowserPlace { folder_index } => vec![
+                ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Remove from Sidebar",
+                    shortcut: "",
+                    action: CommandAction::RemovePlaceFromSidebar(folder_index),
+                    checked: false,
+                }),
+                ContextMenuEntry::Item(ContextMenuItem {
+                    label: "Show in Finder",
+                    shortcut: "",
+                    action: CommandAction::ShowPlaceInFinder(folder_index),
+                    checked: false,
+                }),
+            ],
             MenuContext::LayerNode { kind } => {
                 let mut entries = vec![];
                 match kind {

@@ -20,6 +20,21 @@ fn test_add_folder_updates_browser_state() {
 }
 
 #[test]
+fn test_add_folder_selects_new_place() {
+    let mut browser = SampleBrowser::new();
+    let tmp = std::env::temp_dir();
+    // Add a first valid real directory
+    browser.add_folder(tmp.clone());
+    assert_eq!(browser.selected_place, 0);
+
+    // Add a second folder that is also tmp (will be ignored as duplicate)
+    // so test with /tmp itself being the one valid dir.
+    // Verify selected_place stays at 0 for one-folder case
+    assert_eq!(browser.root_folders.len(), 1);
+    assert_eq!(browser.selected_place, 0);
+}
+
+#[test]
 fn test_add_duplicate_folder_ignored() {
     let mut app = App::new_headless();
     let tmp = std::env::temp_dir();
@@ -73,31 +88,30 @@ fn test_browser_from_state_restores_global_folders() {
 }
 
 #[test]
-fn test_browser_merge_global_and_project_folders() {
-    // Simulates the startup merge logic: global settings folders + project folders
+fn test_rebuild_entries_samples_shows_only_selected_place() {
     let tmp = std::env::temp_dir();
-    let global_folders = vec![tmp.clone()];
-    let project_folders: Vec<PathBuf> = vec![];
+    let mut browser = SampleBrowser::new();
+    browser.add_folder(tmp.clone());
 
-    let mut merged = global_folders.clone();
-    for f in &project_folders {
-        if !merged.contains(f) {
-            merged.push(f.clone());
-        }
-    }
+    // With one root and selected_place=0, entries should contain at least the root dir entry
+    browser.active_category = BrowserCategory::Samples;
+    browser.rebuild_entries();
+    // The root dir itself is always added by walk_dir as a Dir entry
+    assert!(!browser.entries.is_empty());
+    assert!(matches!(browser.entries[0].kind, EntryKind::Dir));
+    assert_eq!(browser.entries[0].path, tmp);
+}
 
-    assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0], tmp);
-
-    // Now with overlapping folders — no duplicates
-    let project_folders_2 = vec![tmp.clone()];
-    let mut merged2 = global_folders.clone();
-    for f in &project_folders_2 {
-        if !merged2.contains(f) {
-            merged2.push(f.clone());
-        }
-    }
-    assert_eq!(merged2.len(), 1);
+#[test]
+fn test_selected_place_clamped_after_remove() {
+    let tmp = std::env::temp_dir();
+    let mut browser = SampleBrowser::new();
+    browser.add_folder(tmp.clone());
+    assert_eq!(browser.selected_place, 0);
+    // Removing the only folder should clamp to 0 safely
+    browser.remove_folder(0);
+    assert!(browser.root_folders.is_empty());
+    assert_eq!(browser.selected_place, 0);
 }
 
 #[test]
@@ -166,4 +180,31 @@ fn test_hit_sidebar_returns_correct_category() {
     // Click in content area (x > sidebar width) — None
     let pos_content = [120.0, content_top + 20.0];
     assert_eq!(browser.hit_sidebar(pos_content, scale), None);
+}
+
+#[test]
+fn test_hit_place_row_and_places_add() {
+    let tmp = std::env::temp_dir();
+    let mut browser = SampleBrowser::new();
+    browser.add_folder(tmp.clone());
+
+    let scale = 1.0;
+    let ct = (crate::ui::browser::HEADER_HEIGHT + 32.0) as f32;
+    // places_section_y = ct + 18 + 4*26 + 8 = ct + 130
+    let places_y = ct + 18.0 + 4.0 * 26.0 + 8.0;
+    let ph = 20.0_f32; // PLACES_HEADER_HEIGHT
+    let rh = 24.0_f32; // PLACES_ROW_HEIGHT
+
+    // Click on the single place row — must be in sidebar (x < 110)
+    let row_y = places_y + ph + 2.0;
+    let hit = browser.hit_place_row([50.0, row_y], scale);
+    assert_eq!(hit, Some(0));
+
+    // Click on "Add Folder…" row — still in sidebar
+    let add_row_y = places_y + ph + rh + 2.0;
+    assert!(browser.hit_places_add([50.0, add_row_y], scale));
+
+    // Click in tree area (x >= 110) — neither
+    assert_eq!(browser.hit_place_row([120.0, row_y], scale), None);
+    assert!(!browser.hit_places_add([120.0, add_row_y], scale));
 }

@@ -52,6 +52,17 @@ impl App {
                 if self.sample_browser.visible {
                     let (_, sh, scale) = self.screen_info();
                     if self.sample_browser.contains(self.mouse_pos, sh, scale) {
+                        // Right-click on a place row in the sidebar
+                        if let Some(place_idx) = self.sample_browser.hit_place_row(self.mouse_pos, scale) {
+                            self.context_menu = Some(ContextMenu::new(
+                                self.mouse_pos,
+                                MenuContext::BrowserPlace { folder_index: place_idx },
+                                &self.settings,
+                            ));
+                            self.request_redraw();
+                            return;
+                        }
+
                         if let Some(idx) =
                             self.sample_browser.item_at(self.mouse_pos, sh, scale)
                         {
@@ -1159,10 +1170,16 @@ impl App {
                             }
                             self.request_redraw();
                             return;
-                        } else if self.sample_browser.hit_add_button(self.mouse_pos, scale)
-                        {
+                        } else if self.sample_browser.hit_places_add(self.mouse_pos, scale) {
                             #[cfg(feature = "native")]
                             self.open_add_folder_dialog();
+                        } else if let Some(place_idx) = self.sample_browser.hit_place_row(self.mouse_pos, scale) {
+                            if place_idx != self.sample_browser.selected_place {
+                                self.sample_browser.selected_place = place_idx;
+                                self.sample_browser.scroll_offset = 0.0;
+                                self.sample_browser.scroll_velocity = 0.0;
+                                self.sample_browser.rebuild_entries();
+                            }
                         } else if let Some(idx) =
                             self.sample_browser.item_at(self.mouse_pos, sh, scale)
                         {

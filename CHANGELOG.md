@@ -1,3 +1,8 @@
+- 2026-03-25: feat: Share Session / Join Session via command palette — connects to wss://db.layers.audio:8000, copies share URL to clipboard (44.2k loc)
+- fix: browser Places section (folders, Add Folder) no longer scrolls with the samples list (43.2k loc)
+- feat: right-click context menu on Places sidebar rows — "Remove from Sidebar" and "Show in Finder" (43.9k loc)
+- fix: move Places section into sidebar (below Effects), removing separate middle column — now matches Ableton layout (43.9k loc)
+- feat: Ableton-style Places column in Samples browser — folder list with folder icons, "Add Folder…" row, single-root tree view; sample folders now stored only in settings.json (43.9k loc)
 - feat: Plug-Ins settings tab — Rescan button, VST3 system/custom folder toggles, Browse button, Multiple/Auto-Hide/Auto-Open plugin window toggles; all persisted via settings.json (43.7k loc)
 - fix: browser list text no longer scrolls through the search bar — clip boundary now uses content_top (header + search bar height) (43.2k loc)
 - fix: export window now hides background labels (group/sample names); Escape closes export window (43.2k loc)

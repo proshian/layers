@@ -1008,6 +1008,16 @@ impl Gpu {
                     full_bounds,
                 ));
             }
+            for ie in br.get_places_icon_entries(&settings.theme, scale) {
+                let buf = shape_icon_entry(&mut self.font_system, &ie);
+                text_buffers.push(buf);
+                text_meta.push((
+                    ie.x,
+                    ie.y,
+                    TextColor::rgba(ie.color[0], ie.color[1], ie.color[2], ie.color[3]),
+                    full_bounds,
+                ));
+            }
         }
 
         // Transport panel text (rendered before menus so menus appear on top)
