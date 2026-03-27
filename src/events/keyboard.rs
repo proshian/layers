@@ -506,21 +506,22 @@ impl App {
                 && !self.selected.is_empty()
             {
                 let shift = self.modifiers.shift_key();
+
+                // Shift+Left/Right: extend/shrink right edge of selected waveforms (Ableton-style)
+                if shift && matches!(event.logical_key, Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight)) {
+                    let step = grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm);
+                    let delta = if matches!(event.logical_key, Key::Named(NamedKey::ArrowRight)) { step } else { -step };
+                    self.resize_selected_waveforms(delta);
+                    return;
+                }
+
                 let (dx, dy) = match event.logical_key {
                     Key::Named(NamedKey::ArrowLeft) => {
-                        let step = if shift {
-                            grid::pixels_per_beat(self.bpm) * 4.0
-                        } else {
-                            grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm)
-                        };
+                        let step = grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm);
                         (-step, 0.0)
                     }
                     Key::Named(NamedKey::ArrowRight) => {
-                        let step = if shift {
-                            grid::pixels_per_beat(self.bpm) * 4.0
-                        } else {
-                            grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm)
-                        };
+                        let step = grid::grid_spacing_for_settings(&self.settings, self.camera.zoom, self.bpm);
                         (step, 0.0)
                     }
                     Key::Named(NamedKey::ArrowUp) => {

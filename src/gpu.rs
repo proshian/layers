@@ -299,7 +299,12 @@ pub(crate) struct Gpu {
     pub(crate) scale_factor: f32,
 
     pub(crate) browser_text_buffers: Vec<TextBuffer>,
+    /// Shape keys for diffing — only reshape entries whose text/font/weight changed.
+    browser_text_shape_keys: Vec<u64>,
     pub(crate) browser_text_generation: u64,
+    pub(crate) browser_cursor_text_generation: u64,
+    /// Per-frame shaped buffers for hover-only S/M/I text (max 3 entries).
+    pub(crate) browser_hover_bufs: Vec<TextBuffer>,
 
     cached_wf_label_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
     cached_text_note_bufs: Vec<(TextLabelCacheKey, TextBuffer)>,
@@ -323,6 +328,26 @@ pub(crate) struct TextEntry {
     pub weight: u16,
     pub bounds: Option<[f32; 4]>, // [left, top, right, bottom] clip rect; None = full screen
     pub center: bool,
+}
+
+/// Hash of shape-relevant fields (text, font_size, line_height, max_width, weight, center).
+/// Color, position, and bounds are render-time properties and don't affect glyph shaping.
+fn text_shape_key(te: &TextEntry) -> u64 {
+    let mut h: u64 = 14695981039346656037; // FNV-1a offset basis
+    for b in te.text.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
+    h ^= te.font_size.to_bits() as u64;
+    h = h.wrapping_mul(1099511628211);
+    h ^= te.line_height.to_bits() as u64;
+    h = h.wrapping_mul(1099511628211);
+    h ^= te.max_width.to_bits() as u64;
+    h = h.wrapping_mul(1099511628211);
+    h ^= te.weight as u64;
+    h = h.wrapping_mul(1099511628211);
+    h ^= te.center as u64;
+    h
 }
 
 fn shape_text_entry(font_system: &mut FontSystem, entry: &TextEntry) -> TextBuffer {
@@ -681,7 +706,10 @@ impl Gpu {
             viewport,
             scale_factor,
             browser_text_buffers: Vec::new(),
+            browser_text_shape_keys: Vec::new(),
             browser_text_generation: 0,
+            browser_cursor_text_generation: 0,
+            browser_hover_bufs: Vec::new(),
             cached_wf_label_bufs: Vec::new(),
             cached_text_note_bufs: Vec::new(),
             cached_group_label_bufs: Vec::new(),
@@ -924,22 +952,62 @@ impl Gpu {
             bottom: h as i32,
         };
 
-        // Browser text: shape ALL entries once, positions computed each frame
+        // Browser text: incrementally reshape only entries whose content changed.
+        // Color/position changes don't need reshaping — they're applied at render time.
         if let Some(br) = sample_browser {
-            if br.visible && br.text_generation != self.browser_text_generation {
-                self.browser_text_buffers.clear();
-                for te in &br.cached_text {
-                    let buf = shape_text_entry(&mut self.font_system, te);
-                    self.browser_text_buffers.push(buf);
+            let gen_changed = br.text_generation != self.browser_text_generation
+                || br.cursor_text_generation != self.browser_cursor_text_generation;
+            if br.visible && gen_changed {
+                let new_texts = &br.cached_text;
+                let old_len = self.browser_text_buffers.len();
+                let new_len = new_texts.len();
+
+                // Diff existing entries: only reshape if shape-relevant fields changed
+                let common = old_len.min(new_len);
+                for i in 0..common {
+                    let key = text_shape_key(&new_texts[i]);
+                    if key != self.browser_text_shape_keys[i] {
+                        self.browser_text_buffers[i] = shape_text_entry(&mut self.font_system, &new_texts[i]);
+                        self.browser_text_shape_keys[i] = key;
+                    }
                 }
+                // Append new entries
+                for i in common..new_len {
+                    let key = text_shape_key(&new_texts[i]);
+                    self.browser_text_buffers.push(shape_text_entry(&mut self.font_system, &new_texts[i]));
+                    self.browser_text_shape_keys.push(key);
+                }
+                // Trim removed entries
+                self.browser_text_buffers.truncate(new_len);
+                self.browser_text_shape_keys.truncate(new_len);
+
                 self.browser_text_generation = br.text_generation;
+                self.browser_cursor_text_generation = br.cursor_text_generation;
             } else if !br.visible && !self.browser_text_buffers.is_empty() {
                 self.browser_text_buffers.clear();
+                self.browser_text_shape_keys.clear();
                 self.browser_text_generation = 0;
+                self.browser_cursor_text_generation = 0;
             }
         } else if !self.browser_text_buffers.is_empty() {
             self.browser_text_buffers.clear();
+            self.browser_text_shape_keys.clear();
             self.browser_text_generation = 0;
+            self.browser_cursor_text_generation = 0;
+        }
+
+        // Browser hover S/M/I text: reshape each frame (max 3 entries, cheap)
+        if let Some(br) = sample_browser {
+            if br.visible {
+                self.browser_hover_bufs.clear();
+                for te in &br.hover_sm_text {
+                    self.browser_hover_bufs.push(shape_text_entry(&mut self.font_system, te));
+                }
+            } else {
+                self.browser_hover_bufs.clear();
+            }
+        } else {
+            self.browser_hover_bufs.clear();
         }
 
         // Drag ghost text
@@ -2342,6 +2410,32 @@ impl Gpu {
                         } else {
                             ((actual_y + te.line_height) as i32).min(content_bottom_h as i32)
                         },
+                    },
+                    custom_glyphs: &[],
+                });
+            }
+            // Hover-only S/M/I text overlay (shaped per frame, max 3 entries)
+            for (idx, te) in br.hover_sm_text.iter().enumerate() {
+                if idx >= self.browser_hover_bufs.len() {
+                    break;
+                }
+                let actual_y = te.y - br.scroll_offset;
+                if actual_y + te.line_height < content_top_h || actual_y > content_bottom_h {
+                    continue;
+                }
+                let clip_top = actual_y.max(content_top_h);
+                let alpha = ((te.color[3] as f32) * backdrop_alpha) as u8;
+                browser_text_areas.push(TextArea {
+                    buffer: &self.browser_hover_bufs[idx],
+                    left: te.x,
+                    top: actual_y,
+                    scale: 1.0,
+                    default_color: TextColor::rgba(te.color[0], te.color[1], te.color[2], alpha),
+                    bounds: TextBounds {
+                        left: 0,
+                        top: clip_top as i32,
+                        right: (panel_w - 8.0 * scale) as i32,
+                        bottom: ((actual_y + te.line_height) as i32).min(content_bottom_h as i32),
                     },
                     custom_glyphs: &[],
                 });

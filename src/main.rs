@@ -327,6 +327,10 @@ struct App {
     arrow_nudge_last: Option<TimeInstant>,
     arrow_nudge_overlap_snapshots: IndexMap<EntityId, WaveformView>,
     arrow_nudge_overlap_temp_splits: Vec<EntityId>,
+    arrow_resize_before: Option<Vec<(EntityId, WaveformView)>>,
+    arrow_resize_last: Option<TimeInstant>,
+    arrow_resize_overlap_snapshots: IndexMap<EntityId, WaveformView>,
+    arrow_resize_overlap_temp_splits: Vec<EntityId>,
     current_project_name: String,
     effect_chains: IndexMap<EntityId, effects::EffectChain>,
     components: IndexMap<EntityId, component::ComponentDef>,
@@ -515,6 +519,10 @@ impl App {
             arrow_nudge_last: None,
             arrow_nudge_overlap_snapshots: IndexMap::new(),
             arrow_nudge_overlap_temp_splits: Vec::new(),
+            arrow_resize_before: None,
+            arrow_resize_last: None,
+            arrow_resize_overlap_snapshots: IndexMap::new(),
+            arrow_resize_overlap_temp_splits: Vec::new(),
             current_project_name: project_name.into(),
             effect_chains: IndexMap::new(),
             components: IndexMap::new(),
@@ -1274,6 +1282,10 @@ impl App {
             arrow_nudge_last: None,
             arrow_nudge_overlap_snapshots: IndexMap::new(),
             arrow_nudge_overlap_temp_splits: Vec::new(),
+            arrow_resize_before: None,
+            arrow_resize_last: None,
+            arrow_resize_overlap_snapshots: IndexMap::new(),
+            arrow_resize_overlap_temp_splits: Vec::new(),
             current_project_name: project_name,
             effect_chains: IndexMap::new(),
             components: restored_components,
@@ -3002,7 +3014,7 @@ impl App {
 
     #[cfg(feature = "native")]
     pub(crate) fn sync_keyboard_instrument_from_selection(&mut self) {
-        // Try to find instrument from selected MidiClip's instrument_id
+        // Priority 1: derive instrument from selected MidiClip's instrument_id
         let clip_insts: Vec<EntityId> = self
             .selected
             .iter()
@@ -3017,6 +3029,21 @@ impl App {
             self.keyboard_instrument_id = Some(clip_insts[0]);
             return;
         }
+
+        // Priority 2: use directly selected Instrument
+        let inst_ids: Vec<EntityId> = self
+            .selected
+            .iter()
+            .filter_map(|t| match t {
+                HitTarget::Instrument(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        if inst_ids.len() == 1 && self.instruments.contains_key(&inst_ids[0]) {
+            self.keyboard_instrument_id = Some(inst_ids[0]);
+            return;
+        }
+
         self.keyboard_instrument_id = None;
     }
 
@@ -4157,6 +4184,46 @@ impl App {
         }
     }
 
+    pub(crate) fn commit_arrow_resize(&mut self) {
+        if let Some(before_states) = self.arrow_resize_before.take() {
+            let mut ops = Vec::new();
+            for (id, before) in before_states {
+                if let Some(after) = self.waveforms.get(&id) {
+                    ops.push(crate::operations::Operation::UpdateWaveform { id, before, after: after.clone() });
+                }
+            }
+            let overlap_snaps = std::mem::take(&mut self.arrow_resize_overlap_snapshots);
+            for (id, original) in overlap_snaps {
+                if let Some(wf) = self.waveforms.get(&id) {
+                    if wf.disabled {
+                        self.waveforms.shift_remove(&id);
+                        let ac = self.audio_clips.shift_remove(&id);
+                        ops.push(crate::operations::Operation::DeleteWaveform {
+                            id, data: original, audio_clip: ac.map(|c| (id, c)),
+                        });
+                    } else {
+                        ops.push(crate::operations::Operation::UpdateWaveform {
+                            id, before: original, after: wf.clone(),
+                        });
+                    }
+                }
+            }
+            for id in self.arrow_resize_overlap_temp_splits.drain(..) {
+                if let Some(wf_data) = self.waveforms.get(&id).cloned() {
+                    let ac = self.audio_clips.get(&id).cloned();
+                    ops.push(crate::operations::Operation::CreateWaveform {
+                        id, data: wf_data, audio_clip: ac.map(|c| (id, c)),
+                    });
+                }
+            }
+            if !ops.is_empty() {
+                self.push_op(crate::operations::Operation::Batch(ops));
+            }
+            self.sync_audio_clips();
+            self.arrow_resize_last = None;
+        }
+    }
+
     /// Move all selected entities by (dx, dy) pixels. Rapid calls within 500ms coalesce into one undo step.
     pub(crate) fn nudge_selection(&mut self, dx: f32, dy: f32) {
         if self.selected.is_empty() {
@@ -4233,6 +4300,52 @@ impl App {
         self.sync_audio_clips();
         self.sync_loop_region();
         self.arrow_nudge_last = Some(TimeInstant::now());
+        self.mark_dirty();
+        self.request_redraw();
+    }
+
+    /// Extend or shrink the right edge of all selected waveforms by `delta` pixels.
+    /// Rapid calls within 500ms coalesce into one undo step.
+    pub(crate) fn resize_selected_waveforms(&mut self, delta: f32) {
+        let wf_ids: Vec<EntityId> = self.selected.iter()
+            .filter_map(|t| if let HitTarget::Waveform(id) = t { Some(*id) } else { None })
+            .collect();
+        if wf_ids.is_empty() {
+            return;
+        }
+
+        let should_coalesce = self.arrow_resize_before.is_some()
+            && self.arrow_resize_last.map_or(false, |t| t.elapsed().as_millis() < 500);
+        if !should_coalesce {
+            self.commit_arrow_resize();
+            self.arrow_resize_before = Some(
+                wf_ids.iter()
+                    .filter_map(|id| self.waveforms.get(id).map(|w| (*id, w.clone())))
+                    .collect()
+            );
+        }
+
+        for &id in &wf_ids {
+            if let Some(wf) = self.waveforms.get_mut(&id) {
+                let full_w = full_audio_width_px(wf);
+                let max_size = if full_w > 0.0 { full_w - wf.sample_offset_px } else { f32::MAX };
+                let new_size = (wf.size[0] + delta)
+                    .max(WAVEFORM_MIN_WIDTH_PX)
+                    .min(max_size.max(WAVEFORM_MIN_WIDTH_PX));
+                wf.size[0] = new_size;
+                wf.fade_in_px = wf.fade_in_px.min(new_size * 0.5);
+                wf.fade_out_px = wf.fade_out_px.min(new_size * 0.5);
+            }
+        }
+
+        let mut snaps = std::mem::take(&mut self.arrow_resize_overlap_snapshots);
+        let mut tsplits = std::mem::take(&mut self.arrow_resize_overlap_temp_splits);
+        self.resolve_waveform_overlaps_live(&wf_ids, &mut snaps, &mut tsplits);
+        self.arrow_resize_overlap_snapshots = snaps;
+        self.arrow_resize_overlap_temp_splits = tsplits;
+
+        self.sync_audio_clips();
+        self.arrow_resize_last = Some(TimeInstant::now());
         self.mark_dirty();
         self.request_redraw();
     }

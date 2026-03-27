@@ -1,3 +1,6 @@
+- 2026-03-27: feat: shift+left/right arrow extends/shrinks selected audio clip right edge, with coalesced undo and overlap resolution (52.4k loc)
+- 2026-03-27: perf: incremental browser text shaping — shape-key diffing skips unchanged entries, cursor blink reshapes only 1 of 300+ buffers (52.1k loc)
+- 2026-03-27: perf: fix browser scroll lag — S/M/I hover text shaped per-frame as overlay instead of full text cache rebuild (51.9k loc)
 - 2026-03-27: fix: monitor inspector vol/pan now controls audio, correct pan law, live drag sync, ghost hit zone guard (51.9k loc)
 - 2026-03-27: feat: group icon (dashed rectangle) in layers panel + "Group" tooltip on hover (51.9k loc)
 - 2026-03-27: feat: per-group monitoring button (S M I) in browser layers + inspector — click I on group to hear mic through group FX, increased button contrast (51.9k loc)

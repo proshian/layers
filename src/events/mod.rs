@@ -10,7 +10,7 @@ mod scroll;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::ActiveEventLoop,
+    event_loop::{ActiveEventLoop, ControlFlow},
     window::{Window, WindowId},
 };
 
@@ -123,7 +123,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Pick up GPU from async init (WASM)
         if self.gpu.is_none() {
             let taken = self.pending_gpu.try_lock().ok().and_then(|mut slot| slot.take());
@@ -156,6 +156,13 @@ impl ApplicationHandler for App {
             }
         }
 
+        // Flush coalesced arrow-resize after 500ms idle
+        if let Some(last) = self.arrow_resize_last {
+            if last.elapsed().as_millis() >= 500 {
+                self.commit_arrow_resize();
+            }
+        }
+
         if self.sample_browser.visible && self.sample_browser.tick_scroll() {
             self.request_redraw();
         }
@@ -163,18 +170,27 @@ impl ApplicationHandler for App {
         // Blink cursor in search bar while focused.
         if self.sample_browser.visible && self.sample_browser.search_focused {
             if self.sample_browser.tick_cursor_blink() {
-                self.sample_browser.text_dirty = true;
+                self.sample_browser.cursor_text_dirty = true;
                 self.request_redraw();
             }
-            self.request_redraw(); // keep loop alive for blink timer
+            let wake = self.sample_browser.next_cursor_blink_toggle();
+            event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
         }
 
         // Blink cursor in palette search bar while open.
-        if let Some(ref mut palette) = self.command_palette {
-            if palette.tick_cursor_blink() {
-                self.request_redraw();
+        let (palette_toggled, palette_wake) = match self.command_palette {
+            Some(ref mut palette) => {
+                let t = palette.tick_cursor_blink();
+                let w = palette.next_cursor_blink_toggle();
+                (t, Some(w))
             }
-            self.request_redraw(); // keep loop alive for blink timer
+            None => (false, None),
+        };
+        if palette_toggled {
+            self.request_redraw();
+        }
+        if let Some(wake) = palette_wake {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
         }
 
         // Flush debounced search rebuild when deadline has passed.

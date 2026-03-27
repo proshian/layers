@@ -122,8 +122,14 @@ pub struct SampleBrowser {
     pub width: f32,
     pub resize_hovered: bool,
     pub text_dirty: bool,
+    /// When true, only the search-bar text entry (index 0) needs updating (cursor blink).
+    pub cursor_text_dirty: bool,
     pub cached_text: Vec<TextEntry>,
     pub text_generation: u64,
+    /// Incremented when only the search-bar cursor text entry changes (fast-path for GPU).
+    pub cursor_text_generation: u64,
+    /// Per-frame S/M/I text overlay for the hovered entry (cheap, max 3 entries).
+    pub hover_sm_text: Vec<TextEntry>,
     cached_screen_h: f32,
     cached_scale: f32,
     cached_text_primary_r: f32,
@@ -196,8 +202,11 @@ impl SampleBrowser {
             width: DEFAULT_BROWSER_WIDTH,
             resize_hovered: false,
             text_dirty: true,
+            cursor_text_dirty: false,
             cached_text: Vec::new(),
             text_generation: 0,
+            cursor_text_generation: 0,
+            hover_sm_text: Vec::new(),
             cached_screen_h: 0.0,
             cached_scale: 0.0,
             cached_text_primary_r: -1.0,
@@ -638,6 +647,14 @@ impl SampleBrowser {
         }
     }
 
+    /// Returns the instant when the cursor blink will next toggle visibility.
+    pub fn next_cursor_blink_toggle(&self) -> TimeInstant {
+        let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
+        let phase = elapsed_ms % 1000;
+        let remaining = if phase < 500 { 500 - phase } else { 1000 - phase };
+        TimeInstant::now() + std::time::Duration::from_millis(remaining as u64)
+    }
+
     /// Advance smooth scroll animation. Returns true if still animating.
     pub fn tick_scroll(&mut self) -> bool {
         if self.scroll_velocity.abs() < 0.5 {
@@ -943,13 +960,17 @@ impl SampleBrowser {
         self.hovered_sidebar = self.sidebar_item_at(pos, scale);
         self.hovered_place = self.hit_place_row(pos, scale);
         self.places_add_hovered = self.hit_places_add(pos, scale);
-        self.hovered_entry = if self.resize_hovered || self.hovered_sidebar.is_some()
+        let new_hovered = if self.resize_hovered || self.hovered_sidebar.is_some()
             || self.hovered_place.is_some() || self.places_add_hovered
         {
             None
         } else {
             self.item_at(pos, screen_h, scale)
         };
+        if new_hovered != self.hovered_entry {
+            self.hovered_entry = new_hovered;
+            self.rebuild_hover_sm_text(scale);
+        }
         // Preview toggle hover
         if self.preview_audio.is_some() {
             let [bx, by, bw, bh] = self.preview_toggle_rect(screen_h, scale);
@@ -957,6 +978,39 @@ impl SampleBrowser {
                 && pos[1] >= by && pos[1] <= by + bh;
         } else {
             self.preview_toggle_hovered = false;
+        }
+    }
+
+    /// Rebuild the small hover-only S/M/I text overlay for the current hovered entry.
+    fn rebuild_hover_sm_text(&mut self, scale: f32) {
+        self.hover_sm_text.clear();
+        let i = match self.hovered_entry {
+            Some(idx) => idx,
+            None => return,
+        };
+        let entry = match self.entries.get(i) {
+            Some(e) => e,
+            None => return,
+        };
+        if let EntryKind::LayerNode { kind, is_soloed, is_muted, is_monitoring, .. } = &entry.kind {
+            if !matches!(kind, LayerNodeKind::Waveform | LayerNodeKind::Instrument | LayerNodeKind::Group) {
+                return;
+            }
+            // Skip if already persistently visible (handled by cached text)
+            if *is_soloed || *is_muted || *is_monitoring {
+                return;
+            }
+            let ct = self.content_top(scale);
+            let item_h = ITEM_HEIGHT * scale;
+            let cx = self.content_x(scale);
+            let row_right = cx + self.content_width(scale);
+            let row_cy = ct + i as f32 * item_h + item_h * 0.5;
+            let layout = super::solo_mute::layout_right_aligned(row_right, row_cy, scale);
+            let show_mon = matches!(kind, LayerNodeKind::Group);
+            let theme = crate::theme::RuntimeTheme::default();
+            self.hover_sm_text = super::solo_mute::build_text_entries(
+                &layout, false, false, false, true, show_mon, &theme, scale,
+            );
         }
     }
 
@@ -1604,9 +1658,54 @@ impl SampleBrowser {
             self.cached_scale = scale;
             self.cached_text_primary_r = theme.text_primary[0];
             self.text_dirty = false;
+            self.cursor_text_dirty = false;
             self.text_generation += 1;
+        } else if self.cursor_text_dirty && !self.cached_text.is_empty() {
+            // Fast path: only rebuild the search bar text entry (index 0)
+            // instead of regenerating 300+ entries for a cursor blink.
+            self.cached_text[0] = self.build_search_bar_text_entry(theme, scale);
+            self.cursor_text_dirty = false;
+            self.cursor_text_generation += 1;
         }
         &self.cached_text
+    }
+
+    fn build_search_bar_text_entry(&self, theme: &crate::theme::RuntimeTheme, scale: f32) -> TextEntry {
+        let w = self.panel_width(scale);
+        let header_h = HEADER_HEIGHT * scale;
+        let search_bar_h = SEARCH_BAR_HEIGHT * scale;
+        let row_y = header_h;
+        let margin = 6.0 * scale;
+        let toggle_offset = (TOGGLE_BTN_SIZE + 6.0) * scale;
+        let sb_x = margin + toggle_offset;
+        let sb_w_inner = w - sb_x - margin;
+        let font_sz = 11.0 * scale;
+        let line_h = 14.0 * scale;
+        let text_x = sb_x + 8.0 * scale;
+        let text_y = row_y + (search_bar_h - line_h) * 0.5;
+        let show_cursor = self.search_focused && self.cursor_blink_visible;
+        let (text, color) = if self.search_focused || !self.search_query.is_empty() {
+            let display = if show_cursor {
+                format!("{}|", self.search_query)
+            } else {
+                self.search_query.clone()
+            };
+            (display, crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255))
+        } else {
+            ("Search...".to_string(), crate::theme::RuntimeTheme::text_u8(theme.text_dim, 160))
+        };
+        TextEntry {
+            text,
+            x: text_x,
+            y: text_y,
+            font_size: font_sz,
+            line_height: line_h,
+            max_width: sb_w_inner - if self.search_query.is_empty() { 16.0 } else { 32.0 } * scale,
+            color,
+            weight: 400,
+            bounds: Some([sb_x, row_y, sb_x + sb_w_inner, row_y + search_bar_h]),
+            center: false,
+        }
     }
 
     fn build_text_entries(&self, theme: &crate::theme::RuntimeTheme, _screen_h: f32, scale: f32) -> Vec<TextEntry> {
@@ -1620,41 +1719,7 @@ impl SampleBrowser {
         let cx = self.content_x(scale);
 
         // --- Search bar text (second row, below header) ---
-        {
-            let search_bar_h = SEARCH_BAR_HEIGHT * scale;
-            let row_y = header_h;
-            let margin = 6.0 * scale;
-            let toggle_offset = (TOGGLE_BTN_SIZE + 6.0) * scale;
-            let sb_x = margin + toggle_offset;
-            let sb_w_inner = w - sb_x - margin;
-            let font_sz = 11.0 * scale;
-            let line_h = 14.0 * scale;
-            let text_x = sb_x + 8.0 * scale;
-            let text_y = row_y + (search_bar_h - line_h) * 0.5;
-            let show_cursor = self.search_focused && self.cursor_blink_visible;
-            let (text, color) = if self.search_focused || !self.search_query.is_empty() {
-                let display = if show_cursor {
-                    format!("{}|", self.search_query)
-                } else {
-                    self.search_query.clone()
-                };
-                (display, crate::theme::RuntimeTheme::text_u8(theme.text_primary, 255))
-            } else {
-                ("Search...".to_string(), crate::theme::RuntimeTheme::text_u8(theme.text_dim, 160))
-            };
-            out.push(TextEntry {
-                text,
-                x: text_x,
-                y: text_y,
-                font_size: font_sz,
-                line_height: line_h,
-                max_width: sb_w_inner - if self.search_query.is_empty() { 16.0 } else { 32.0 } * scale,
-                color,
-                weight: 400,
-                bounds: Some([sb_x, row_y, sb_x + sb_w_inner, row_y + search_bar_h]),
-                center: false,
-            });
-        }
+        out.push(self.build_search_bar_text_entry(theme, scale));
 
         let ct = self.content_top(scale);
 
@@ -1855,15 +1920,17 @@ impl SampleBrowser {
                         bounds: Some([cx, base_y, w, base_y + item_h]),
                         center: false,
                     });
-                    // Solo/Mute button labels
+                    // Solo/Mute button labels (persistent state only; hover text is in hover_sm_text)
                     if let EntryKind::LayerNode { kind, is_soloed, is_muted, is_monitoring, .. } = &entry.kind {
                         if matches!(kind, LayerNodeKind::Waveform | LayerNodeKind::Instrument | LayerNodeKind::Group) {
-                            let row_right = cx + self.content_width(scale);
-                            let row_cy = base_y + item_h * 0.5;
-                            let layout = super::solo_mute::layout_right_aligned(row_right, row_cy, scale);
-                            let show_mon = matches!(kind, LayerNodeKind::Group);
-                            let visible = *is_soloed || *is_muted || *is_monitoring || self.hovered_entry == Some(i);
-                            out.extend(super::solo_mute::build_text_entries(&layout, *is_soloed, *is_muted, *is_monitoring, visible, show_mon, theme, scale));
+                            let visible = *is_soloed || *is_muted || *is_monitoring;
+                            if visible {
+                                let row_right = cx + self.content_width(scale);
+                                let row_cy = base_y + item_h * 0.5;
+                                let layout = super::solo_mute::layout_right_aligned(row_right, row_cy, scale);
+                                let show_mon = matches!(kind, LayerNodeKind::Group);
+                                out.extend(super::solo_mute::build_text_entries(&layout, *is_soloed, *is_muted, *is_monitoring, true, show_mon, theme, scale));
+                            }
                         }
                     }
                 }

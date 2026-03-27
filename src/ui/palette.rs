@@ -493,6 +493,14 @@ impl CommandPalette {
         }
     }
 
+    /// Returns the instant when the cursor blink will next toggle visibility.
+    pub fn next_cursor_blink_toggle(&self) -> TimeInstant {
+        let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
+        let phase = elapsed_ms % 1000;
+        let remaining = if phase < 500 { 500 - phase } else { 1000 - phase };
+        TimeInstant::now() + std::time::Duration::from_millis(remaining as u64)
+    }
+
     fn rebuild_rows(&mut self, dev_mode: bool) {
         let query = self.search_text.to_lowercase();
         let is_searching = !query.is_empty();
