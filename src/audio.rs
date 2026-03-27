@@ -552,6 +552,7 @@ impl AudioEngine {
         let mut met_freq: f64 = 1000.0;
         let mut met_last_beat: i64 = -1;
         let mut last_stretcher_time: f64 = -1.0;
+        let mut last_inst_time: f64 = -1.0;
 
         let stream = device
             .build_output_stream(
@@ -562,7 +563,8 @@ impl AudioEngine {
                     // Send all-notes-off to every instrument on play→stop transition
                     if was_playing && !is_playing {
                         met_last_beat = -1;
-                        last_stretcher_time = -1.0; // force stretcher reset on next play
+                        last_stretcher_time = -1.0;
+                        last_inst_time = -1.0;
                         if let Ok(mut g) = kb_preview.try_lock() {
                             g.pending.clear();
                         }
@@ -638,6 +640,12 @@ impl AudioEngine {
                     let mut inst_per_bus_l: Vec<f32> = vec![0.0f32; inst_per_bus_total];
                     let mut inst_per_bus_r: Vec<f32> = vec![0.0f32; inst_per_bus_total];
 
+                    // Detect play-start or seek for MIDI catch-up
+                    let inst_expected = last_inst_time + frames as f64 / sr;
+                    let inst_discontinuous = is_playing
+                        && (last_inst_time < 0.0
+                            || (current_time - inst_expected).abs() > 0.05);
+
                     // Process instrument regions (MIDI → VST3 → audio, additive)
                     // Always process — instruments need continuous process() for GUI keyboard preview
                     if let Ok(inst_guard) = inst_r.try_lock() {
@@ -664,8 +672,17 @@ impl AudioEngine {
                                             for ev in &region.midi_events {
                                                 // Shift MIDI events earlier by latency so output aligns
                                                 let adjusted_time = ev.time_secs - inst_latency_secs;
-                                                if adjusted_time >= t_start && adjusted_time < t_end {
-                                                    let so = ((adjusted_time - t_start) * sr) as i32;
+                                                // On play-start or seek, catch up any notes that
+                                                // should have fired before t_start but were missed.
+                                                let lower = if inst_discontinuous && offset == 0 {
+                                                    region_start_secs - inst_latency_secs
+                                                } else {
+                                                    t_start
+                                                };
+                                                if adjusted_time >= lower && adjusted_time < t_end {
+                                                    let so = (((adjusted_time - t_start) * sr) as i32)
+                                                        .max(0)
+                                                        .min(block_len as i32 - 1);
                                                     if ev.is_note_on {
                                                         gui.send_midi_note_on(ev.note, ev.velocity, 0, so);
                                                     } else {
@@ -779,6 +796,9 @@ impl AudioEngine {
                             }
                         }
                     }
+                    if is_playing {
+                        last_inst_time = current_time;
+                    }
 
                     if is_playing {
                     // Reset Complex stretchers on play-start or seek
@@ -849,7 +869,8 @@ impl AudioEngine {
                                 }
                             }
                         }
-                        dry_mix[i] = [mix_l, mix_r];
+                        dry_mix[i][0] += mix_l;
+                        dry_mix[i][1] += mix_r;
                     }
 
                     // Pass 1b: Complex warp clips without FX/group → stretched → dry_mix

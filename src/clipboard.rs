@@ -929,13 +929,14 @@ impl App {
         let lr_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::LoopRegion(i) => Some(*i), _ => None }).collect();
         let xr_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ExportRegion(i) => Some(*i), _ => None }).collect();
         let comp_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ComponentDef(i) => Some(*i), _ => None }).collect();
-        let inst_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ComponentInstance(i) => Some(*i), _ => None }).collect();
+        let component_instance_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::ComponentInstance(i) => Some(*i), _ => None }).collect();
         let mc_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::MidiClip(i) => Some(*i), _ => None }).collect();
         let tn_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::TextNote(i) => Some(*i), _ => None }).collect();
         let group_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::Group(i) => Some(*i), _ => None }).collect();
+        let instrument_ids: Vec<EntityId> = self.selected.iter().filter_map(|t| match t { HitTarget::Instrument(i) => Some(*i), _ => None }).collect();
 
         // Capture before removing
-        for &id in &inst_ids {
+        for &id in &component_instance_ids {
             if let Some(d) = self.component_instances.get(&id) { del_ops.push(operations::Operation::DeleteComponentInstance { id, data: d.clone() }); }
             self.component_instances.shift_remove(&id);
         }
@@ -964,8 +965,37 @@ impl App {
         for &id in &mc_ids { if let Some(d) = self.midi_clips.get(&id) { del_ops.push(operations::Operation::DeleteMidiClip { id, data: d.clone() }); } self.midi_clips.shift_remove(&id); }
         for &id in &tn_ids { if let Some(d) = self.text_notes.get(&id) { del_ops.push(operations::Operation::DeleteTextNote { id, data: d.clone() }); } self.text_notes.shift_remove(&id); }
         // Collect all individually-selected IDs so we don't double-delete group members
-        let already_deleted: std::collections::HashSet<EntityId> = [&obj_ids as &[EntityId], &wf_ids, &lr_ids, &xr_ids, &mc_ids, &tn_ids, &inst_ids, &comp_ids]
+        let already_deleted: std::collections::HashSet<EntityId> = [&obj_ids as &[EntityId], &wf_ids, &lr_ids, &xr_ids, &mc_ids, &tn_ids, &component_instance_ids, &comp_ids, &instrument_ids]
             .iter().flat_map(|v| v.iter().copied()).collect();
+        for &id in &instrument_ids {
+            let linked_mc_ids: Vec<EntityId> = self
+                .midi_clips
+                .iter()
+                .filter_map(|(mc_id, mc)| {
+                    (mc.instrument_id == Some(id) && !already_deleted.contains(mc_id)).then_some(*mc_id)
+                })
+                .collect();
+            for mc_id in linked_mc_ids {
+                if let Some(d) = self.midi_clips.get(&mc_id) {
+                    del_ops.push(operations::Operation::DeleteMidiClip { id: mc_id, data: d.clone() });
+                }
+                self.midi_clips.shift_remove(&mc_id);
+            }
+            if let Some(inst) = self.instruments.get(&id) {
+                let snap = crate::instruments::InstrumentSnapshot {
+                    name: inst.name.clone(),
+                    plugin_id: inst.plugin_id.clone(),
+                    plugin_name: inst.plugin_name.clone(),
+                    plugin_path: inst.plugin_path.clone(),
+                    volume: inst.volume,
+                    pan: inst.pan,
+                    effect_chain_id: inst.effect_chain_id,
+                    disabled: inst.disabled,
+                };
+                del_ops.push(operations::Operation::DeleteInstrument { id, data: snap });
+            }
+            self.instruments.shift_remove(&id);
+        }
         for &id in &group_ids {
             if let Some(d) = self.groups.get(&id) {
                 // Delete all member entities that weren't already individually deleted
@@ -1018,7 +1048,7 @@ impl App {
         }
 
         // Remove deleted entities from group member lists and update bounds
-        let all_deleted: Vec<EntityId> = [&obj_ids, &wf_ids, &lr_ids, &xr_ids, &mc_ids, &tn_ids]
+        let all_deleted: Vec<EntityId> = [&obj_ids, &wf_ids, &lr_ids, &xr_ids, &mc_ids, &tn_ids, &component_instance_ids, &instrument_ids]
             .iter().flat_map(|v| v.iter().copied()).collect();
         let mut groups_to_update: Vec<EntityId> = Vec::new();
         for (gid, group) in self.groups.iter_mut() {
@@ -1030,6 +1060,11 @@ impl App {
         }
         for gid in groups_to_update {
             self.update_group_bounds(gid);
+        }
+
+        if self.keyboard_instrument_id.is_some_and(|id| !self.instruments.contains_key(&id)) {
+            self.keyboard_instrument_id = None;
+            self.release_computer_keyboard_notes();
         }
 
         self.selected.clear();

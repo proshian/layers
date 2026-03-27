@@ -75,7 +75,7 @@ impl App {
                                         crate::layers::LayerNodeKind::Waveform => Some(HitTarget::Waveform(*id)),
                                         crate::layers::LayerNodeKind::Instrument => {
                                             self.keyboard_instrument_id = Some(*id);
-                                            None
+                                            Some(HitTarget::Instrument(*id))
                                         },
                                         crate::layers::LayerNodeKind::MidiClip => Some(HitTarget::MidiClip(*id)),
                                         crate::layers::LayerNodeKind::TextNote => Some(HitTarget::TextNote(*id)),
@@ -2116,6 +2116,7 @@ impl App {
                                 let new_idx = mc.notes.len() - 1;
                                 self.push_op(crate::operations::Operation::CreateMidiNote { clip_id: idx, note_idx: new_idx, data: note });
                                 self.selected_midi_notes = vec![new_idx];
+                                self.sync_audio_clips();
                             }
                             self.request_redraw();
                             return;
@@ -2744,6 +2745,7 @@ impl App {
                             self.push_op(crate::operations::Operation::Batch(ops));
                         }
                     }
+                    self.sync_audio_clips();
                     self.mark_dirty();
                     self.update_cursor();
                     self.request_redraw();

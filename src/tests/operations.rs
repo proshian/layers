@@ -19,7 +19,10 @@ fn test_operation_invert_create_delete() {
         color: [1.0, 0.0, 0.0, 1.0],
         border_radius: 5.0,
     };
-    let create = Operation::CreateObject { id, data: obj.clone() };
+    let create = Operation::CreateObject {
+        id,
+        data: obj.clone(),
+    };
     let inverted = create.invert();
     match &inverted {
         Operation::DeleteObject { id: del_id, data } => {
@@ -53,10 +56,18 @@ fn test_operation_invert_update_swaps_before_after() {
         color: [1.0, 0.0, 0.0, 1.0],
         border_radius: 5.0,
     };
-    let op = Operation::UpdateObject { id, before: before.clone(), after: after.clone() };
+    let op = Operation::UpdateObject {
+        id,
+        before: before.clone(),
+        after: after.clone(),
+    };
     let inverted = op.invert();
     match &inverted {
-        Operation::UpdateObject { before: inv_before, after: inv_after, .. } => {
+        Operation::UpdateObject {
+            before: inv_before,
+            after: inv_after,
+            ..
+        } => {
             assert_eq!(inv_before.position, after.position);
             assert_eq!(inv_after.position, before.position);
         }
@@ -75,8 +86,14 @@ fn test_operation_invert_batch() {
         border_radius: 0.0,
     };
     let batch = Operation::Batch(vec![
-        Operation::CreateObject { id: id1, data: obj.clone() },
-        Operation::CreateObject { id: id2, data: obj.clone() },
+        Operation::CreateObject {
+            id: id1,
+            data: obj.clone(),
+        },
+        Operation::CreateObject {
+            id: id2,
+            data: obj.clone(),
+        },
     ]);
     let inverted = batch.invert();
     match &inverted {
@@ -105,14 +122,20 @@ fn test_committed_op_has_unique_seq() {
         color: [1.0; 4],
         border_radius: 0.0,
     };
-    let op1 = commit_op(Operation::CreateObject { id, data: obj.clone() });
+    let op1 = commit_op(Operation::CreateObject {
+        id,
+        data: obj.clone(),
+    });
     let op2 = commit_op(Operation::CreateObject { id, data: obj });
     assert!(op2.seq > op1.seq);
 }
 
 #[test]
 fn test_set_bpm_invert() {
-    let op = Operation::SetBpm { before: 120.0, after: 140.0 };
+    let op = Operation::SetBpm {
+        before: 120.0,
+        after: 140.0,
+    };
     let inverted = op.invert();
     match &inverted {
         Operation::SetBpm { before, after } => {
@@ -160,13 +183,13 @@ fn make_waveform(x: f32, y: f32) -> WaveformView {
         warp_mode: WarpMode::Off,
         sample_bpm: 120.0,
         pitch_semitones: 0.0,
-            paulstretch_factor: 8.0,
+        paulstretch_factor: 8.0,
         is_reversed: false,
         disabled: false,
         sample_offset_px: 0.0,
         automation: AutomationData::new(),
-    effect_chain_id: None,
-    take_group: None,
+        effect_chain_id: None,
+        take_group: None,
     }
 }
 
@@ -175,7 +198,10 @@ fn test_apply_create_object() {
     let mut app = App::new_headless();
     let id = new_id();
     let obj = make_obj(10.0, 20.0);
-    let op = Operation::CreateObject { id, data: obj.clone() };
+    let op = Operation::CreateObject {
+        id,
+        data: obj.clone(),
+    };
     op.apply(&mut app);
     assert_eq!(app.objects.len(), 1);
     assert_eq!(app.objects[&id].position, [10.0, 20.0]);
@@ -199,7 +225,11 @@ fn test_apply_update_object() {
     let before = make_obj(0.0, 0.0);
     let after = make_obj(50.0, 50.0);
     app.objects.insert(id, before.clone());
-    let op = Operation::UpdateObject { id, before, after: after.clone() };
+    let op = Operation::UpdateObject {
+        id,
+        before,
+        after: after.clone(),
+    };
     op.apply(&mut app);
     assert_eq!(app.objects[&id].position, [50.0, 50.0]);
 }
@@ -214,7 +244,11 @@ fn test_apply_create_waveform_with_audio_clip() {
         sample_rate: 48000,
         duration_secs: 1.0,
     };
-    let op = Operation::CreateWaveform { id, data: wf, audio_clip: Some((id, ac)) };
+    let op = Operation::CreateWaveform {
+        id,
+        data: wf,
+        audio_clip: Some((id, ac)),
+    };
     op.apply(&mut app);
     assert_eq!(app.waveforms.len(), 1);
     assert_eq!(app.audio_clips.len(), 1);
@@ -225,12 +259,19 @@ fn test_apply_delete_waveform() {
     let mut app = App::new_headless();
     let id = new_id();
     app.waveforms.insert(id, make_waveform(0.0, 0.0));
-    app.audio_clips.insert(id, AudioClipData {
-        samples: Arc::new(Vec::new()),
-        sample_rate: 48000,
-        duration_secs: 0.0,
-    });
-    let op = Operation::DeleteWaveform { id, data: make_waveform(0.0, 0.0), audio_clip: None };
+    app.audio_clips.insert(
+        id,
+        AudioClipData {
+            samples: Arc::new(Vec::new()),
+            sample_rate: 48000,
+            duration_secs: 0.0,
+        },
+    );
+    let op = Operation::DeleteWaveform {
+        id,
+        data: make_waveform(0.0, 0.0),
+        audio_clip: None,
+    };
     op.apply(&mut app);
     assert!(app.waveforms.is_empty());
     assert!(app.audio_clips.is_empty());
@@ -240,7 +281,10 @@ fn test_apply_delete_waveform() {
 fn test_apply_set_bpm() {
     let mut app = App::new_headless();
     assert_eq!(app.bpm, 120.0);
-    let op = Operation::SetBpm { before: 120.0, after: 140.0 };
+    let op = Operation::SetBpm {
+        before: 120.0,
+        after: 140.0,
+    };
     op.apply(&mut app);
     assert_eq!(app.bpm, 140.0);
 }
@@ -249,7 +293,11 @@ fn test_apply_set_bpm() {
 fn test_apply_create_loop_region() {
     let mut app = App::new_headless();
     let id = new_id();
-    let lr = LoopRegion { position: [100.0, 0.0], size: [200.0, 30.0], enabled: true };
+    let lr = LoopRegion {
+        position: [100.0, 0.0],
+        size: [200.0, 30.0],
+        enabled: true,
+    };
     let op = Operation::CreateLoopRegion { id, data: lr };
     op.apply(&mut app);
     assert_eq!(app.loop_regions.len(), 1);
@@ -262,8 +310,14 @@ fn test_apply_batch() {
     let id1 = new_id();
     let id2 = new_id();
     let op = Operation::Batch(vec![
-        Operation::CreateObject { id: id1, data: make_obj(0.0, 0.0) },
-        Operation::CreateObject { id: id2, data: make_obj(10.0, 10.0) },
+        Operation::CreateObject {
+            id: id1,
+            data: make_obj(0.0, 0.0),
+        },
+        Operation::CreateObject {
+            id: id2,
+            data: make_obj(10.0, 10.0),
+        },
     ]);
     op.apply(&mut app);
     assert_eq!(app.objects.len(), 2);
@@ -314,7 +368,10 @@ fn test_push_op_clears_redo() {
     let obj = make_obj(0.0, 0.0);
 
     app.objects.insert(id1, obj.clone());
-    app.push_op(Operation::CreateObject { id: id1, data: obj.clone() });
+    app.push_op(Operation::CreateObject {
+        id: id1,
+        data: obj.clone(),
+    });
 
     app.undo_op();
     assert!(!app.op_redo_stack.is_empty());
@@ -331,7 +388,10 @@ fn test_op_undo_redo_bpm_cycle() {
     assert_eq!(app.bpm, 120.0);
 
     app.bpm = 140.0;
-    app.push_op(Operation::SetBpm { before: 120.0, after: 140.0 });
+    app.push_op(Operation::SetBpm {
+        before: 120.0,
+        after: 140.0,
+    });
     assert_eq!(app.bpm, 140.0);
 
     app.undo_op();
@@ -347,11 +407,17 @@ fn test_op_undo_multiple_objects() {
 
     let id1 = new_id();
     app.objects.insert(id1, make_obj(0.0, 0.0));
-    app.push_op(Operation::CreateObject { id: id1, data: make_obj(0.0, 0.0) });
+    app.push_op(Operation::CreateObject {
+        id: id1,
+        data: make_obj(0.0, 0.0),
+    });
 
     let id2 = new_id();
     app.objects.insert(id2, make_obj(10.0, 10.0));
-    app.push_op(Operation::CreateObject { id: id2, data: make_obj(10.0, 10.0) });
+    app.push_op(Operation::CreateObject {
+        id: id2,
+        data: make_obj(10.0, 10.0),
+    });
 
     assert_eq!(app.objects.len(), 2);
 
@@ -399,12 +465,16 @@ fn test_network_manager_connected_roundtrip() {
     let (mut mgr, remote_op_tx, mut remote_op_rx, remote_eph_tx, mut remote_eph_rx) =
         crate::network::NetworkManager::new_connected();
     // Simulate the surreal_client setting Connected after Welcome
-    mgr.connection_state.set(crate::network::NetworkMode::Connected);
+    mgr.connection_state
+        .set(crate::network::NetworkMode::Connected);
     assert!(mgr.is_connected());
 
     // Simulate sending an op from local
     let id = new_id();
-    let committed = commit_op(Operation::CreateObject { id, data: make_obj(1.0, 2.0) });
+    let committed = commit_op(Operation::CreateObject {
+        id,
+        data: make_obj(1.0, 2.0),
+    });
     mgr.send_op(committed.clone());
     // The op should appear on the remote side
     let received = remote_op_rx.try_recv().unwrap();
@@ -412,17 +482,22 @@ fn test_network_manager_connected_roundtrip() {
 
     // Simulate receiving an op from remote
     let remote_id = new_id();
-    let remote_committed = commit_op(Operation::CreateObject { id: remote_id, data: make_obj(3.0, 4.0) });
+    let remote_committed = commit_op(Operation::CreateObject {
+        id: remote_id,
+        data: make_obj(3.0, 4.0),
+    });
     remote_op_tx.send(remote_committed).unwrap();
     let polled = mgr.poll_ops();
     assert_eq!(polled.len(), 1);
 
     // Simulate ephemeral message roundtrip
     let user_id = new_id();
-    remote_eph_tx.send(crate::user::EphemeralMessage::CursorMove {
-        user_id,
-        position: [100.0, 200.0],
-    }).unwrap();
+    remote_eph_tx
+        .send(crate::user::EphemeralMessage::CursorMove {
+            user_id,
+            position: [100.0, 200.0],
+        })
+        .unwrap();
     let eph = mgr.poll_ephemeral();
     assert_eq!(eph.len(), 1);
 }
@@ -433,25 +508,31 @@ fn test_remote_user_cursor_update_via_ephemeral() {
     let user_id = new_id();
 
     // Add a remote user
-    app.remote_users.insert(user_id, crate::user::RemoteUserState {
-        user: crate::user::User {
-            id: user_id,
-            name: "Alice".to_string(),
-            color: crate::user::USER_COLORS[1],
+    app.remote_users.insert(
+        user_id,
+        crate::user::RemoteUserState {
+            user: crate::user::User {
+                id: user_id,
+                name: "Alice".to_string(),
+                color: crate::user::USER_COLORS[1],
+            },
+            cursor_world: None,
+            drag_preview: None,
+            online: true,
+            viewport: None,
+            playback: None,
+            editing_plugin: None,
         },
-        cursor_world: None,
-        drag_preview: None,
-        online: true,
-        viewport: None,
-        playback: None,
-        editing_plugin: None,
-    });
+    );
 
     // Simulate receiving a cursor move
     let state = app.remote_users.get_mut(&user_id).unwrap();
     state.cursor_world = Some([150.0, 250.0]);
 
-    assert_eq!(app.remote_users[&user_id].cursor_world, Some([150.0, 250.0]));
+    assert_eq!(
+        app.remote_users[&user_id].cursor_world,
+        Some([150.0, 250.0])
+    );
 }
 
 #[test]
@@ -464,7 +545,11 @@ fn test_apply_update_waveform() {
     after.volume = 0.5;
 
     app.waveforms.insert(id, before.clone());
-    let op = Operation::UpdateWaveform { id, before, after: after.clone() };
+    let op = Operation::UpdateWaveform {
+        id,
+        before,
+        after: after.clone(),
+    };
     op.apply(&mut app);
     assert_eq!(app.waveforms[&id].position, [50.0, 50.0]);
     assert_eq!(app.waveforms[&id].volume, 0.5);
@@ -488,9 +573,14 @@ fn test_apply_create_delete_midi_clip() {
         grid_mode: crate::settings::GridMode::default(),
         triplet_grid: false,
         velocity_lane_height: 0.0,
-        instrument_id: None, disabled: false,
+        instrument_id: None,
+        disabled: false,
     };
-    Operation::CreateMidiClip { id, data: clip.clone() }.apply(&mut app);
+    Operation::CreateMidiClip {
+        id,
+        data: clip.clone(),
+    }
+    .apply(&mut app);
     assert_eq!(app.midi_clips.len(), 1);
     assert_eq!(app.midi_clips[&id].notes.len(), 1);
 
@@ -564,7 +654,8 @@ fn test_serde_roundtrip_create_midi_clip() {
             grid_mode: crate::settings::GridMode::default(),
             triplet_grid: false,
             velocity_lane_height: 40.0,
-            instrument_id: None, disabled: false,
+            instrument_id: None,
+            disabled: false,
         },
     });
 }
@@ -720,8 +811,12 @@ fn test_two_apps_sync_via_channels() {
     let (mgr_b, b_remote_op_tx, mut b_remote_op_rx, b_remote_eph_tx, mut _b_remote_eph_rx) =
         crate::network::NetworkManager::new_connected();
 
-    mgr_a.connection_state.set(crate::network::NetworkMode::Connected);
-    mgr_b.connection_state.set(crate::network::NetworkMode::Connected);
+    mgr_a
+        .connection_state
+        .set(crate::network::NetworkMode::Connected);
+    mgr_b
+        .connection_state
+        .set(crate::network::NetworkMode::Connected);
     app_a.network = mgr_a;
     app_b.network = mgr_b;
 
@@ -749,7 +844,10 @@ fn test_two_apps_sync_via_channels() {
 
     // App B changes BPM
     app_b.bpm = 140.0;
-    app_b.push_op(Operation::SetBpm { before: 120.0, after: 140.0 });
+    app_b.push_op(Operation::SetBpm {
+        before: 120.0,
+        after: 140.0,
+    });
 
     // Relay B → A
     let op_from_b = b_remote_op_rx.try_recv().unwrap();
@@ -789,19 +887,22 @@ fn test_user_left_removes_from_map() {
     let user_id = new_id();
 
     // Add a remote user
-    app.remote_users.insert(user_id, crate::user::RemoteUserState {
-        user: crate::user::User {
-            id: user_id,
-            name: "Alice".to_string(),
-            color: crate::user::USER_COLORS[1],
+    app.remote_users.insert(
+        user_id,
+        crate::user::RemoteUserState {
+            user: crate::user::User {
+                id: user_id,
+                name: "Alice".to_string(),
+                color: crate::user::USER_COLORS[1],
+            },
+            cursor_world: Some([100.0, 200.0]),
+            drag_preview: None,
+            online: true,
+            viewport: None,
+            playback: None,
+            editing_plugin: None,
         },
-        cursor_world: Some([100.0, 200.0]),
-        drag_preview: None,
-        online: true,
-        viewport: None,
-        playback: None,
-        editing_plugin: None,
-    });
+    );
     assert_eq!(app.remote_users.len(), 1);
 
     // Simulate UserLeft
@@ -847,7 +948,8 @@ fn test_serde_roundtrip_update_midi_clip() {
         grid_mode: crate::settings::GridMode::default(),
         triplet_grid: false,
         velocity_lane_height: 40.0,
-        instrument_id: None, disabled: false,
+        instrument_id: None,
+        disabled: false,
     };
     let mut after = before.clone();
     after.position = [300.0, 150.0];
@@ -870,8 +972,12 @@ fn test_two_apps_midi_clip_move_sync() {
     let (mgr_b, b_remote_op_tx, mut _b_remote_op_rx, _b_remote_eph_tx, mut _b_remote_eph_rx) =
         crate::network::NetworkManager::new_connected();
 
-    mgr_a.connection_state.set(crate::network::NetworkMode::Connected);
-    mgr_b.connection_state.set(crate::network::NetworkMode::Connected);
+    mgr_a
+        .connection_state
+        .set(crate::network::NetworkMode::Connected);
+    mgr_b
+        .connection_state
+        .set(crate::network::NetworkMode::Connected);
     app_a.network = mgr_a;
     app_b.network = mgr_b;
 
@@ -891,10 +997,14 @@ fn test_two_apps_midi_clip_move_sync() {
         grid_mode: crate::settings::GridMode::default(),
         triplet_grid: false,
         velocity_lane_height: 0.0,
-        instrument_id: None, disabled: false,
+        instrument_id: None,
+        disabled: false,
     };
     app_a.midi_clips.insert(clip_id, clip.clone());
-    app_a.push_op(Operation::CreateMidiClip { id: clip_id, data: clip.clone() });
+    app_a.push_op(Operation::CreateMidiClip {
+        id: clip_id,
+        data: clip.clone(),
+    });
 
     // Relay A → B
     let op_from_a = a_remote_op_rx.try_recv().unwrap();
@@ -914,7 +1024,11 @@ fn test_two_apps_midi_clip_move_sync() {
     let mut after = clip.clone();
     after.position = [300.0, 150.0];
     app_a.midi_clips.insert(clip_id, after.clone());
-    app_a.push_op(Operation::UpdateMidiClip { id: clip_id, before, after: after.clone() });
+    app_a.push_op(Operation::UpdateMidiClip {
+        id: clip_id,
+        before,
+        after: after.clone(),
+    });
 
     // Relay A → B
     let op_from_a = a_remote_op_rx.try_recv().unwrap();
@@ -951,7 +1065,8 @@ fn test_surreal_json_roundtrip_update_midi_clip() {
         grid_mode: crate::settings::GridMode::default(),
         triplet_grid: false,
         velocity_lane_height: 0.0,
-        instrument_id: None, disabled: false,
+        instrument_id: None,
+        disabled: false,
     };
     let mut after = before.clone();
     after.position = [300.0, 150.0];
@@ -988,11 +1103,14 @@ fn test_set_bpm_rescales_waveform_positions() {
     // Bar 1 starts at beat 0 (0px), bar 2 starts at beat 4 (240px).
     let id1 = new_id();
     let id2 = new_id();
-    app.waveforms.insert(id1, make_waveform(0.0, 100.0));   // bar 1
+    app.waveforms.insert(id1, make_waveform(0.0, 100.0)); // bar 1
     app.waveforms.insert(id2, make_waveform(240.0, 100.0)); // bar 2
 
     // Halve the BPM → scale = 120/60 = 2
-    let op = Operation::SetBpm { before: 120.0, after: 60.0 };
+    let op = Operation::SetBpm {
+        before: 120.0,
+        after: 60.0,
+    };
     op.apply(&mut app);
 
     assert_eq!(app.bpm, 60.0);
@@ -1032,19 +1150,23 @@ fn test_set_bpm_rescales_midi_clip_and_notes() {
         grid_mode: crate::settings::GridMode::default(),
         triplet_grid: false,
         velocity_lane_height: 0.0,
-        instrument_id: None, disabled: false,
+        instrument_id: None,
+        disabled: false,
     };
     app.midi_clips.insert(id, clip);
 
     // Double the BPM → scale = 120/240 = 0.5
-    let op = Operation::SetBpm { before: 120.0, after: 240.0 };
+    let op = Operation::SetBpm {
+        before: 120.0,
+        after: 240.0,
+    };
     op.apply(&mut app);
 
     assert_eq!(app.bpm, 240.0);
     let mc = &app.midi_clips[&id];
-    assert_eq!(mc.position[0], 120.0);  // 240 * 0.5
-    assert_eq!(mc.size[0], 120.0);      // 240 * 0.5 (MIDI clips are beat-based)
-    assert_eq!(mc.notes[0].start_px, 30.0);    // 60 * 0.5
+    assert_eq!(mc.position[0], 120.0); // 240 * 0.5
+    assert_eq!(mc.size[0], 120.0); // 240 * 0.5 (MIDI clips are beat-based)
+    assert_eq!(mc.notes[0].start_px, 30.0); // 60 * 0.5
     assert_eq!(mc.notes[0].duration_px, 15.0); // 30 * 0.5
 
     // Undo
@@ -1068,15 +1190,18 @@ fn test_set_bpm_rescales_group_positions() {
     app.groups.insert(id, group);
 
     // Halve the BPM → scale = 120/60 = 2
-    let op = Operation::SetBpm { before: 120.0, after: 60.0 };
+    let op = Operation::SetBpm {
+        before: 120.0,
+        after: 60.0,
+    };
     op.apply(&mut app);
 
     assert_eq!(app.bpm, 60.0);
     let g = &app.groups[&id];
     assert_eq!(g.position[0], 480.0); // 240 * 2
     assert_eq!(g.position[1], 100.0); // 50 * 2
-    assert_eq!(g.size[0], 480.0);     // 240 * 2
-    assert_eq!(g.size[1], 200.0);     // 100 * 2
+    assert_eq!(g.size[0], 480.0); // 240 * 2
+    assert_eq!(g.size[1], 200.0); // 100 * 2
 
     // Undo
     op.invert().apply(&mut app);
@@ -1100,10 +1225,14 @@ fn test_surreal_json_roundtrip_create_midi_clip() {
         grid_mode: crate::settings::GridMode::default(),
         triplet_grid: false,
         velocity_lane_height: 0.0,
-        instrument_id: None, disabled: false,
+        instrument_id: None,
+        disabled: false,
     };
 
-    let committed = commit_op(Operation::CreateMidiClip { id: clip_id, data: clip });
+    let committed = commit_op(Operation::CreateMidiClip {
+        id: clip_id,
+        data: clip,
+    });
 
     let op_json = serde_json::to_string(&committed.op).unwrap();
     let deserialized: Operation = serde_json::from_str(&op_json).unwrap();

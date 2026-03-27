@@ -5,8 +5,7 @@ use crate::automation::AutomationData;
 use crate::entity_id::new_id;
 use crate::group::Group;
 use crate::layers::{self, DropTarget, LayerNodeKind};
-use crate::midi;
-use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView, DEFAULT_AUTO_FADE_PX};
+use crate::ui::waveform::{AudioData, WarpMode, WaveformPeaks, WaveformView};
 use crate::HitTarget;
 
 fn make_waveform(x: f32, y: f32) -> WaveformView {
@@ -214,6 +213,24 @@ fn test_delete_instrument_cascades_midi_clips() {
     app.selected = vec![HitTarget::MidiClip(mc_id)];
     app.delete_selected();
     assert!(app.midi_clips.is_empty());
+}
+
+#[test]
+fn test_delete_selected_instrument_removes_instrument_and_child_clip() {
+    let mut app = App::new_headless();
+    app.add_instrument("test-synth", "TestSynth");
+    let inst_id = app.instruments.keys().next().copied().unwrap();
+
+    app.selected = vec![HitTarget::Instrument(inst_id)];
+    app.keyboard_instrument_id = Some(inst_id);
+    app.delete_selected();
+
+    assert!(app.instruments.is_empty());
+    assert!(app.midi_clips.is_empty());
+    assert_eq!(app.keyboard_instrument_id, None);
+
+    app.refresh_project_browser_entries();
+    assert!(app.layer_tree.is_empty());
 }
 
 #[test]

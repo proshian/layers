@@ -1,3 +1,7 @@
+- 2026-03-27: fix: layer context-menu delete now removes VST instruments and linked MIDI clips (53.1k loc)
+- fix: instruments silent during playback — Pass 1 clip mixing overwrote dry_mix instead of adding to it, wiping instrument audio (52.5k loc)
+- fix: MIDI timeline playback — sync_audio_clips after note creation + MIDI clip edge resize so engine receives MIDI events (52.5k loc)
+- 2026-03-27: fix: MIDI instrument playback — activate VST3 event buses, fix latency-adjusted note scheduling on play start, harden group bus sync (52.5k loc)
 - 2026-03-27: fix: keyboard preview persists after "I" toggle — sync_keyboard_instrument_from_selection no longer clears explicitly-set target (52.5k loc)
 - 2026-03-27: feat: "I" button for instruments — toggle keyboard preview target from layers panel, inspector, or "i" key; auto-arms on add_instrument (52.5k loc)
 - 2026-03-27: fix: ASDFGH keyboard now works when instrument is selected directly (not just via MIDI clip) (52.4k loc)

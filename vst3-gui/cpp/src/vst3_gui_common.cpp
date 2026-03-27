@@ -363,6 +363,16 @@ int vst3_gui_setup_processing(Vst3GuiHandle* handle, double sample_rate, int blo
         }
         handle->outputChannels = SpeakerArr::getChannelCount(outputArr);
 
+        // Activate event (MIDI) input/output buses so instruments receive note events
+        int32 numEventInputBuses = handle->component->getBusCount(kEvent, kInput);
+        for (int32 i = 0; i < numEventInputBuses; i++) {
+            handle->component->activateBus(kEvent, kInput, i, true);
+        }
+        int32 numEventOutputBuses = handle->component->getBusCount(kEvent, kOutput);
+        for (int32 i = 0; i < numEventOutputBuses; i++) {
+            handle->component->activateBus(kEvent, kOutput, i, true);
+        }
+
         handle->component->setActive(true);
         processor->setProcessing(true);
         handle->processingSetUp = true;

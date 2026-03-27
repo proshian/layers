@@ -3008,10 +3008,15 @@ impl App {
     }
 
     /// Convenience: sync instruments using freshly built group bus data.
+    /// Also pushes group buses to the engine so instrument group_bus_index
+    /// stays consistent with the RT group bus array.
     #[cfg(feature = "native")]
     fn sync_instrument_regions_auto(&self) {
         let (map, buses) = self.build_group_bus_data();
         self.sync_instrument_regions(&map, &buses);
+        if let Some(engine) = &self.audio_engine {
+            engine.update_group_buses(buses);
+        }
     }
 
     #[cfg(feature = "native")]
