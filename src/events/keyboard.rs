@@ -1420,6 +1420,7 @@ impl App {
                                 }
                             }
                             engine.toggle_playback();
+                            self.broadcast_playback_if_connected();
                             self.request_redraw();
                         }
                     }

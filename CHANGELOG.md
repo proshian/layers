@@ -1,3 +1,6 @@
+- 2026-03-27: feat: show error toast with reconnect attempt counter (N/10) on connection failure (47.4k loc)
+- 2026-03-27: feat: --db-password CLI arg for authenticated remote SurrealDB connections (47.4k loc)
+- 2026-03-27: feat: follow mode — click remote user avatars to sync camera + playback colored viewport border, break on scroll (47.4k loc)
 - 2026-03-27: fix: code review — move peak helpers to shared module, tighten StoredAudioData visibility, rename save_project_state_local, restore comments (47.0k loc)
 - 2026-03-27: refactor: unify local and remote storage with ProjectStore trait, shared StoredAudioData/run_on_rt, remote now supports full project state + peaks (46.9k loc)
 - 2026-03-27: perf: store original encoded audio files (Bytes) instead of decoded PCM, quantize peaks to u8 — much faster save/load, smaller project files (46.9k loc)

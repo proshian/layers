@@ -173,6 +173,9 @@ impl App {
             }
         }
 
+        // Break follow mode on any local pan/zoom
+        self.following_user = None;
+
         let zoom_modifier = if cfg!(target_arch = "wasm32") {
             // In browsers, trackpad pinch-to-zoom is reported as ctrl+wheel
             self.cmd_held() || self.modifiers.control_key()
@@ -210,6 +213,7 @@ impl App {
         if self.command_palette.is_some() || self.context_menu.is_some() || self.settings_window.is_some() || self.export_window.is_some() {
             return;
         }
+        self.following_user = None;
         let factor = (1.0 + delta as f32).clamp(0.5, 2.0);
         self.camera.zoom_at(self.mouse_pos, factor);
         self.broadcast_cursor_if_connected();

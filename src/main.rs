@@ -336,6 +336,7 @@ struct App {
     ws_runtime: Option<NativeTokioRuntime>,
     connect_url: Option<String>,
     connect_project_id: Option<String>,
+    connect_password: Option<String>,
     pending_welcome: Option<NativeWelcomeReceiver>,
     reconnect_attempt: u32,
     last_reconnect_time: Option<TimeInstant>,
@@ -356,6 +357,8 @@ struct App {
     pub(crate) midi_keyboard_held: HashMap<KeyCode, (EntityId, u8)>,
     /// Transient solo state — not persisted, not in undo history.
     pub(crate) solo_ids: std::collections::HashSet<EntityId>,
+    /// Follow mode: when set, camera and playback sync to this remote user.
+    following_user: Option<user::UserId>,
 }
 
 /// Whether an entity should be audible, considering solo/mute and group membership.
@@ -508,6 +511,7 @@ impl App {
             ws_runtime: None,
             connect_url: None,
             connect_project_id: None,
+            connect_password: None,
             pending_welcome: None,
             reconnect_attempt: 0,
             last_reconnect_time: None,
@@ -526,6 +530,7 @@ impl App {
             keyboard_instrument_id: None,
             midi_keyboard_held: HashMap::new(),
             solo_ids: std::collections::HashSet::new(),
+            following_user: None,
         }
     }
 
@@ -1242,6 +1247,7 @@ impl App {
             ws_runtime: None,
             connect_url: None,
             connect_project_id: None,
+            connect_password: None,
             pending_welcome: None,
             reconnect_attempt: 0,
             last_reconnect_time: None,
@@ -1260,6 +1266,7 @@ impl App {
             keyboard_instrument_id: None,
             midi_keyboard_held: HashMap::new(),
             solo_ids: std::collections::HashSet::new(),
+            following_user: None,
         }
     }
 
@@ -1288,13 +1295,64 @@ impl App {
                     user_id: self.local_user.id,
                     position: world_pos,
                 });
+                self.network.send_ephemeral(crate::user::EphemeralMessage::ViewportUpdate {
+                    user_id: self.local_user.id,
+                    position: self.camera.position,
+                    zoom: self.camera.zoom,
+                });
                 self.last_cursor_send = now;
             }
         }
     }
 
+    /// Broadcast playback state to remote users. Call after any local playback change.
+    fn broadcast_playback_if_connected(&mut self) {
+        #[cfg(not(feature = "native"))]
+        return;
+        #[cfg(feature = "native")]
+        if self.network.is_connected() {
+            if let Some(engine) = &self.audio_engine {
+                self.network.send_ephemeral(crate::user::EphemeralMessage::PlaybackUpdate {
+                    user_id: self.local_user.id,
+                    is_playing: engine.is_playing(),
+                    position_seconds: engine.position_seconds(),
+                    timestamp_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                });
+            }
+        }
+    }
+
+    /// Hit-test avatar circles in the top-right corner (screen-space).
+    /// Returns the UserId of the clicked avatar, if any.
+    fn hit_test_avatar_circles(&self) -> Option<user::UserId> {
+        let r = 14.0_f32;
+        let margin = 12.0_f32;
+        let gap = 6.0_f32;
+        let (sw, _sh, _scale) = self.screen_info();
+        let mut x = sw - margin - r;
+        let y = margin + r + 28.0; // offset for macOS titlebar
+
+        let mut sorted_users: Vec<_> = self.remote_users.iter()
+            .filter(|(_, s)| s.online)
+            .collect();
+        sorted_users.sort_by_key(|(uid, _)| **uid);
+
+        for (uid, _remote) in &sorted_users {
+            let dx = self.mouse_pos[0] - x;
+            let dy = self.mouse_pos[1] - y;
+            if dx * dx + dy * dy <= r * r {
+                return Some(**uid);
+            }
+            x -= r * 2.0 + gap;
+        }
+        None
+    }
+
     #[cfg(feature = "native")]
-    fn connect_to_server(&mut self, url: &str, project_id: &str) {
+    fn connect_to_server(&mut self, url: &str, project_id: &str, password: Option<&str>) {
         // Reuse existing runtime or create one
         if self.ws_runtime.is_none() {
             self.ws_runtime = Some(
@@ -1315,6 +1373,7 @@ impl App {
         let _handle = surreal_client::spawn_surreal_client(
             url.to_string(),
             project_id.to_string(),
+            password.map(|s| s.to_string()),
             remote_op_tx,
             remote_op_rx,
             remote_eph_tx,
@@ -1331,6 +1390,7 @@ impl App {
         self.network = mgr;
         self.connect_url = Some(url.to_string());
         self.connect_project_id = Some(project_id.to_string());
+        self.connect_password = password.map(|s| s.to_string());
         self.pending_welcome = Some(welcome_rx);
         log::info!("Connecting to SurrealDB at {}", url);
     }
@@ -3890,6 +3950,10 @@ fn main() {
         .position(|a| a == "--project")
         .and_then(|i| std::env::args().nth(i + 1));
 
+    let db_password = std::env::args()
+        .position(|a| a == "--db-password")
+        .and_then(|i| std::env::args().nth(i + 1));
+
     let event_loop = EventLoop::new().unwrap();
 
     let mut app = App::new(skip_load);
@@ -3906,7 +3970,7 @@ fn main() {
                 .build()
                 .expect("Failed to create tokio runtime for remote storage"),
         );
-        if let Some(rs) = storage::RemoteStorage::connect(url, rt) {
+        if let Some(rs) = storage::RemoteStorage::connect(url, db_password.as_deref(), rt) {
             rs.use_project(pid);
             println!("[RemoteStorage] Connected to {url}, project '{pid}'");
             app.remote_storage = Some(Arc::new(rs));
@@ -3915,7 +3979,7 @@ fn main() {
         }
 
         // Real-time sync via SurrealDB live queries
-        app.connect_to_server(url, pid);
+        app.connect_to_server(url, pid, db_password.as_deref());
     }
 
     event_loop.run_app(&mut app).unwrap();

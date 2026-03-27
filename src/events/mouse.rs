@@ -11,6 +11,7 @@ impl App {
                     return;
                 }
                 self.command_palette = None;
+                self.following_user = None;
                 self.drag = DragState::Panning {
                     start_mouse: self.mouse_pos,
                     start_camera: self.camera.position,
@@ -221,6 +222,25 @@ impl App {
                         if self.sample_browser.visible {
                             self.refresh_project_browser_entries();
                             self.ensure_plugins_scanned();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                // Handle follow mode avatar click
+                if self.network.is_connected() {
+                    if let Some(clicked_uid) = self.hit_test_avatar_circles() {
+                        if self.following_user == Some(clicked_uid) {
+                            self.following_user = None;
+                        } else {
+                            self.following_user = Some(clicked_uid);
+                            // Immediately sync camera to followed user's viewport
+                            if let Some(remote) = self.remote_users.get(&clicked_uid) {
+                                if let Some(vp) = &remote.viewport {
+                                    self.camera.position = vp.position;
+                                    self.camera.zoom = vp.zoom;
+                                }
+                            }
                         }
                         self.request_redraw();
                         return;
@@ -1532,11 +1552,13 @@ impl App {
                             if let Some(engine) = &self.audio_engine {
                                 engine.toggle_playback();
                             }
+                            self.broadcast_playback_if_connected();
                         } else {
                             #[cfg(feature = "native")]
                             if let Some(engine) = &self.audio_engine {
                                 engine.toggle_playback();
                             }
+                            self.broadcast_playback_if_connected();
                         }
                         self.request_redraw();
                         return;
@@ -2009,6 +2031,7 @@ impl App {
                                     let secs = snapped_x as f64 / PIXELS_PER_SECOND as f64;
                                     engine.seek_to_seconds(secs);
                                 }
+                                self.broadcast_playback_if_connected();
                             }
 
                             // TODO: refactor velocity lane rendering before re-enabling
@@ -3129,11 +3152,14 @@ impl App {
                         self.selected.clear();
                         let snapped_x = snap_to_grid(current[0], &self.settings, self.camera.zoom, self.bpm);
                         #[cfg(feature = "native")]
-                        if let Some(engine) = &self.audio_engine {
-                            if !engine.is_playing() {
-                                let secs = snapped_x as f64 / PIXELS_PER_SECOND as f64;
-                                engine.seek_to_seconds(secs);
+                        {
+                            if let Some(engine) = &self.audio_engine {
+                                if !engine.is_playing() {
+                                    let secs = snapped_x as f64 / PIXELS_PER_SECOND as f64;
+                                    engine.seek_to_seconds(secs);
+                                }
                             }
+                            self.broadcast_playback_if_connected();
                         }
                         let h = self.clip_height();
                         let line_y = grid::snap_to_clip_row(current[1], self.bpm);

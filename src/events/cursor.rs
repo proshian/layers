@@ -816,6 +816,7 @@ impl App {
 
         match action {
             Action::Pan(sm, sc) => {
+                self.following_user = None;
                 self.camera.position[0] =
                     sc[0] - (self.mouse_pos[0] - sm[0]) / self.camera.zoom;
                 self.camera.position[1] =

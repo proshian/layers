@@ -15,13 +15,14 @@ pub struct RemoteStorage {
 }
 
 impl RemoteStorage {
-    pub fn connect(url: &str, rt: Arc<tokio::runtime::Runtime>) -> Option<Self> {
+    pub fn connect(url: &str, password: Option<&str>, rt: Arc<tokio::runtime::Runtime>) -> Option<Self> {
         let addr = url
             .trim_start_matches("ws://")
             .trim_start_matches("wss://");
         println!("[RemoteStorage] Connecting to SurrealDB at {addr}...");
         let db = run_on_rt(&rt, {
             let addr = addr.to_string();
+            let password = password.map(|s| s.to_string());
             async move {
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
@@ -38,6 +39,14 @@ impl RemoteStorage {
                         return None;
                     }
                 };
+                if let Some(ref pass) = password {
+                    use surrealdb::opt::auth::Root;
+                    if let Err(e) = db.signin(Root { username: "root".to_string(), password: pass.clone() }).await {
+                        eprintln!("[RemoteStorage] Authentication failed: {e}");
+                        return None;
+                    }
+                    println!("[RemoteStorage] Authenticated as root");
+                }
                 db.use_ns("layers").use_db("meta").await.ok()?;
                 Some(db)
             }

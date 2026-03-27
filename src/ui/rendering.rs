@@ -53,6 +53,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) network_mode: crate::network::NetworkMode,
     pub(crate) hidden_take_children: &'a HashSet<EntityId>,
     pub(crate) solo_ids: &'a std::collections::HashSet<EntityId>,
+    pub(crate) following_user: Option<crate::entity_id::EntityId>,
 }
 
 /// Returns true if an entity should appear dimmed on canvas due to solo/mute/disabled state.
@@ -728,24 +729,79 @@ pub(crate) fn build_instances(out: &mut Vec<InstanceRaw>, ctx: &RenderContext) {
         }
     }
 
-    // --- connection status dot (top-right corner) ---
+    // --- remote user avatar circles (top-right corner) ---
     {
+        let s = 1.0 / camera.zoom;
+        let r = 14.0 * s;
+        let margin = 12.0 * s;
+        let gap = 6.0 * s;
+        let titlebar_offset = 28.0 * s;
+        let mut x = world_right - margin - r;
+        let y = world_top + margin + r + titlebar_offset;
+
+        // Sort by user ID for stable ordering
+        let mut sorted_users: Vec<_> = ctx.remote_users.iter()
+            .filter(|(_, state)| state.online)
+            .collect();
+        sorted_users.sort_by_key(|(uid, _)| **uid);
+
+        for (uid, remote) in &sorted_users {
+            // Follow ring (slightly larger circle behind)
+            if ctx.following_user == Some(**uid) {
+                let ring_r = r + 3.0 * s;
+                out.push(InstanceRaw {
+                    position: [x - ring_r, y - ring_r],
+                    size: [ring_r * 2.0, ring_r * 2.0],
+                    color: [remote.user.color[0], remote.user.color[1], remote.user.color[2], 0.4],
+                    border_radius: ring_r,
+                });
+            }
+            // Avatar circle
+            out.push(InstanceRaw {
+                position: [x - r, y - r],
+                size: [r * 2.0, r * 2.0],
+                color: remote.user.color,
+                border_radius: r,
+            });
+            x -= r * 2.0 + gap;
+        }
+
+        // Connection status dot (to the left of avatars)
         use crate::network::NetworkMode;
         let dot_color = match ctx.network_mode {
-            NetworkMode::Connected => Some([0.30, 0.85, 0.39, 0.90]),    // green
-            NetworkMode::Connecting => Some([1.00, 0.84, 0.00, 0.90]),   // yellow
-            NetworkMode::Disconnected => Some([1.00, 0.24, 0.19, 0.90]), // red
+            NetworkMode::Connected => Some([0.30, 0.85, 0.39, 0.90]),
+            NetworkMode::Connecting => Some([1.00, 0.84, 0.00, 0.90]),
+            NetworkMode::Disconnected => Some([1.00, 0.24, 0.19, 0.90]),
             NetworkMode::Offline => None,
         };
         if let Some(color) = dot_color {
-            let dot_sz = 8.0 / camera.zoom;
-            let margin = 12.0 / camera.zoom;
+            let dot_sz = 8.0 * s;
             out.push(InstanceRaw {
-                position: [world_right - dot_sz - margin, world_top + margin],
+                position: [x - dot_sz, world_top + margin + titlebar_offset + r - dot_sz * 0.5],
                 size: [dot_sz, dot_sz],
                 color,
                 border_radius: dot_sz / 2.0,
             });
+        }
+    }
+
+    // --- follow mode viewport border ---
+    if let Some(followed_id) = ctx.following_user {
+        if let Some(remote) = ctx.remote_users.get(&followed_id) {
+            let bw = 3.0 / camera.zoom;
+            let border_color = [
+                remote.user.color[0],
+                remote.user.color[1],
+                remote.user.color[2],
+                0.6,
+            ];
+            push_border(
+                out,
+                [world_left, world_top],
+                [world_right - world_left, world_bottom - world_top],
+                bw,
+                border_color,
+            );
         }
     }
 
