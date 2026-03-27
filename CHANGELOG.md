@@ -1,3 +1,5 @@
+- 2026-03-27: fix: code review — move peak helpers to shared module, tighten StoredAudioData visibility, rename save_project_state_local, restore comments (47.0k loc)
+- 2026-03-27: refactor: unify local and remote storage with ProjectStore trait, shared StoredAudioData/run_on_rt, remote now supports full project state + peaks (46.9k loc)
 - 2026-03-27: perf: store original encoded audio files (Bytes) instead of decoded PCM, quantize peaks to u8 — much faster save/load, smaller project files (46.9k loc)
 - 2026-03-27: perf: fix slow browser search — 150ms debounce, pre-lowered fuzzy match, background file indexing, skip 1-char queries (46.8k loc)
 - 2026-03-27: feat: per-channel RMS meter inside right window volume fader with peak hold (46.8k loc)

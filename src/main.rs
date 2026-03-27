@@ -91,7 +91,7 @@ use settings::Settings;
 #[cfg(feature = "native")]
 use ui::settings_window::{SettingsWindow, CATEGORIES};
 #[cfg(feature = "native")]
-use storage::{default_base_path, Storage};
+use storage::{default_base_path, ProjectStore, Storage};
 use winit::{
     event_loop::EventLoop,
     keyboard::{KeyCode, ModifiersState},

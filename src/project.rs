@@ -5,7 +5,7 @@
 use super::*;
 
 use muda::{MenuId, Submenu as MudaSubmenu};
-use storage::{ProjectState, Storage};
+use storage::{ProjectState, ProjectStore, Storage};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,7 +155,7 @@ impl App {
                     .map(|id| id.to_string())
                     .unwrap_or_default(),
             };
-            storage.save_project_state(state);
+            storage.save_and_index_project(state);
 
             // Update project name in index
             if let Some(path) = storage.current_project_path() {

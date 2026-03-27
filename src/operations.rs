@@ -1,6 +1,8 @@
 use crate::ui::waveform::AudioClipData;
 use crate::component::{ComponentDef, ComponentInstance};
 use crate::entity_id::EntityId;
+#[cfg(feature = "native")]
+use crate::storage::ProjectStore;
 use crate::instruments::InstrumentSnapshot;
 use crate::midi::{MidiClip, MidiNote};
 use crate::regions::{ExportRegion, LoopRegion};
