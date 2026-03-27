@@ -152,6 +152,10 @@ pub struct EffectChainSlotSnapshot {
     pub plugin_name: String,
     pub plugin_path: PathBuf,
     pub bypass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_b64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<Vec<f64>>,
 }
 
 impl EffectChainSlot {
@@ -175,6 +179,27 @@ impl EffectChainSlot {
             plugin_name: self.plugin_name.clone(),
             plugin_path: self.plugin_path.clone(),
             bypass: self.bypass,
+            state_b64: None,
+            params: None,
+        }
+    }
+
+    pub fn snapshot_with_state(&self) -> EffectChainSlotSnapshot {
+        use base64::Engine;
+        let state_b64 = self.gui.lock().ok()
+            .and_then(|g| g.as_ref().and_then(|gui| gui.get_state()))
+            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(&bytes));
+        let params = self.gui.lock().ok()
+            .and_then(|g| g.as_ref().map(|gui| gui.get_all_parameters()))
+            .filter(|p| !p.is_empty());
+        EffectChainSlotSnapshot {
+            id: self.id,
+            plugin_id: self.plugin_id.clone(),
+            plugin_name: self.plugin_name.clone(),
+            plugin_path: self.plugin_path.clone(),
+            bypass: self.bypass,
+            state_b64,
+            params,
         }
     }
 }

@@ -1,5 +1,6 @@
 use crate::ui::waveform::AudioClipData;
 use crate::component::{ComponentDef, ComponentInstance};
+use crate::effects::EffectChainSlotSnapshot;
 use crate::entity_id::EntityId;
 #[cfg(feature = "native")]
 use crate::storage::ProjectStore;
@@ -80,6 +81,22 @@ pub enum Operation {
     DeleteGroup { id: EntityId, data: Group },
     UpdateGroup { id: EntityId, before: Group, after: Group },
 
+    // --- EffectChain ---
+    CreateEffectChain { id: EntityId },
+    DeleteEffectChain { id: EntityId },
+
+    // --- EffectChainSlot ---
+    AddEffectSlot { chain_id: EntityId, slot_idx: usize, data: EffectChainSlotSnapshot },
+    RemoveEffectSlot { chain_id: EntityId, slot_idx: usize, data: EffectChainSlotSnapshot },
+    ReorderEffectSlot { chain_id: EntityId, from_idx: usize, to_idx: usize },
+    UpdateEffectSlot { chain_id: EntityId, slot_idx: usize, before: EffectChainSlotSnapshot, after: EffectChainSlotSnapshot },
+
+    // --- Plugin State (non-undoable, network-only) ---
+    UpdatePluginState { chain_id: EntityId, slot_idx: usize, state_b64: String },
+    UpdatePluginParams { chain_id: EntityId, slot_idx: usize, params: Vec<f64> },
+    UpdateInstrumentPluginState { instrument_id: EntityId, state_b64: String },
+    UpdateInstrumentPluginParams { instrument_id: EntityId, params: Vec<f64> },
+
     // --- Global state ---
     SetBpm { before: f32, after: f32 },
 
@@ -124,6 +141,16 @@ impl Operation {
             Operation::CreateGroup { .. } => "CreateGroup",
             Operation::DeleteGroup { .. } => "DeleteGroup",
             Operation::UpdateGroup { .. } => "UpdateGroup",
+            Operation::CreateEffectChain { .. } => "CreateEffectChain",
+            Operation::DeleteEffectChain { .. } => "DeleteEffectChain",
+            Operation::AddEffectSlot { .. } => "AddEffectSlot",
+            Operation::RemoveEffectSlot { .. } => "RemoveEffectSlot",
+            Operation::ReorderEffectSlot { .. } => "ReorderEffectSlot",
+            Operation::UpdateEffectSlot { .. } => "UpdateEffectSlot",
+            Operation::UpdatePluginState { .. } => "UpdatePluginState",
+            Operation::UpdatePluginParams { .. } => "UpdatePluginParams",
+            Operation::UpdateInstrumentPluginState { .. } => "UpdateInstrumentPluginState",
+            Operation::UpdateInstrumentPluginParams { .. } => "UpdateInstrumentPluginParams",
             Operation::SetBpm { .. } => "SetBpm",
             Operation::Batch(_) => "Batch",
         }
@@ -186,6 +213,30 @@ impl Operation {
             Operation::CreateGroup { id, data } => Operation::DeleteGroup { id: *id, data: data.clone() },
             Operation::DeleteGroup { id, data } => Operation::CreateGroup { id: *id, data: data.clone() },
             Operation::UpdateGroup { id, before, after } => Operation::UpdateGroup { id: *id, before: after.clone(), after: before.clone() },
+
+            // EffectChains
+            Operation::CreateEffectChain { id } => Operation::DeleteEffectChain { id: *id },
+            Operation::DeleteEffectChain { id } => Operation::CreateEffectChain { id: *id },
+
+            // EffectChainSlots
+            Operation::AddEffectSlot { chain_id, slot_idx, data } =>
+                Operation::RemoveEffectSlot { chain_id: *chain_id, slot_idx: *slot_idx, data: data.clone() },
+            Operation::RemoveEffectSlot { chain_id, slot_idx, data } =>
+                Operation::AddEffectSlot { chain_id: *chain_id, slot_idx: *slot_idx, data: data.clone() },
+            Operation::ReorderEffectSlot { chain_id, from_idx, to_idx } =>
+                Operation::ReorderEffectSlot { chain_id: *chain_id, from_idx: *to_idx, to_idx: *from_idx },
+            Operation::UpdateEffectSlot { chain_id, slot_idx, before, after } =>
+                Operation::UpdateEffectSlot { chain_id: *chain_id, slot_idx: *slot_idx, before: after.clone(), after: before.clone() },
+
+            // Plugin State (non-undoable — invert to self)
+            Operation::UpdatePluginState { chain_id, slot_idx, state_b64 } =>
+                Operation::UpdatePluginState { chain_id: *chain_id, slot_idx: *slot_idx, state_b64: state_b64.clone() },
+            Operation::UpdatePluginParams { chain_id, slot_idx, params } =>
+                Operation::UpdatePluginParams { chain_id: *chain_id, slot_idx: *slot_idx, params: params.clone() },
+            Operation::UpdateInstrumentPluginState { instrument_id, state_b64 } =>
+                Operation::UpdateInstrumentPluginState { instrument_id: *instrument_id, state_b64: state_b64.clone() },
+            Operation::UpdateInstrumentPluginParams { instrument_id, params } =>
+                Operation::UpdateInstrumentPluginParams { instrument_id: *instrument_id, params: params.clone() },
 
             // BPM
             Operation::SetBpm { before, after } => Operation::SetBpm { before: *after, after: *before },
@@ -456,6 +507,132 @@ impl Operation {
             Operation::UpdateGroup { id, after, .. } => {
                 if let Some(g) = app.groups.get_mut(id) {
                     *g = after.clone();
+                }
+            }
+
+            // --- EffectChain ---
+            Operation::CreateEffectChain { id } => {
+                app.effect_chains.insert(*id, crate::effects::EffectChain::new());
+            }
+            Operation::DeleteEffectChain { id } => {
+                app.effect_chains.shift_remove(id);
+                for wf in app.waveforms.values_mut() {
+                    if wf.effect_chain_id == Some(*id) { wf.effect_chain_id = None; }
+                }
+                for inst in app.instruments.values_mut() {
+                    if inst.effect_chain_id == Some(*id) { inst.effect_chain_id = None; }
+                }
+                for g in app.groups.values_mut() {
+                    if g.effect_chain_id == Some(*id) { g.effect_chain_id = None; }
+                }
+                if app.master.effect_chain_id == Some(*id) {
+                    app.master.effect_chain_id = None;
+                }
+            }
+
+            // --- EffectChainSlot ---
+            Operation::AddEffectSlot { chain_id, slot_idx, data } => {
+                if let Some(chain) = app.effect_chains.get_mut(chain_id) {
+                    let mut slot = crate::effects::EffectChainSlot::new(
+                        data.plugin_id.clone(),
+                        data.plugin_name.clone(),
+                        data.plugin_path.clone(),
+                    );
+                    slot.id = data.id;
+                    slot.bypass = data.bypass;
+                    if let Some(ref b64) = data.state_b64 {
+                        use base64::Engine;
+                        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                            slot.pending_state = Some(bytes);
+                        }
+                    }
+                    if let Some(ref params) = data.params {
+                        slot.pending_params = Some(params.clone());
+                    }
+                    let idx = (*slot_idx).min(chain.slots.len());
+                    chain.slots.insert(idx, slot);
+                }
+            }
+            Operation::RemoveEffectSlot { chain_id, slot_idx, .. } => {
+                if let Some(chain) = app.effect_chains.get_mut(chain_id) {
+                    if *slot_idx < chain.slots.len() {
+                        chain.slots.remove(*slot_idx);
+                    }
+                }
+            }
+            Operation::ReorderEffectSlot { chain_id, from_idx, to_idx } => {
+                if let Some(chain) = app.effect_chains.get_mut(chain_id) {
+                    if *from_idx < chain.slots.len() {
+                        let slot = chain.slots.remove(*from_idx);
+                        let target = (*to_idx).min(chain.slots.len());
+                        chain.slots.insert(target, slot);
+                    }
+                }
+            }
+            Operation::UpdateEffectSlot { chain_id, slot_idx, after, .. } => {
+                if let Some(chain) = app.effect_chains.get_mut(chain_id) {
+                    if let Some(slot) = chain.slots.get_mut(*slot_idx) {
+                        slot.bypass = after.bypass;
+                        if let Some(ref b64) = after.state_b64 {
+                            use base64::Engine;
+                            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                                let set = slot.gui.lock().ok()
+                                    .and_then(|g| g.as_ref().map(|gui| gui.set_state(&bytes)))
+                                    .unwrap_or(false);
+                                if !set { slot.pending_state = Some(bytes); }
+                            }
+                        }
+                        if let Some(ref params) = after.params {
+                            let set = slot.gui.lock().ok()
+                                .map(|g| if let Some(gui) = g.as_ref() { gui.set_all_parameters(params); true } else { false })
+                                .unwrap_or(false);
+                            if !set { slot.pending_params = Some(params.clone()); }
+                        }
+                    }
+                }
+            }
+
+            // --- Plugin State (non-undoable, network-only) ---
+            Operation::UpdatePluginState { chain_id, slot_idx, state_b64 } => {
+                if let Some(chain) = app.effect_chains.get_mut(chain_id) {
+                    if let Some(slot) = chain.slots.get_mut(*slot_idx) {
+                        use base64::Engine;
+                        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(state_b64) {
+                            let set = slot.gui.lock().ok()
+                                .and_then(|g| g.as_ref().map(|gui| gui.set_state(&bytes)))
+                                .unwrap_or(false);
+                            if !set { slot.pending_state = Some(bytes); }
+                        }
+                    }
+                }
+            }
+            Operation::UpdatePluginParams { chain_id, slot_idx, params } => {
+                if let Some(chain) = app.effect_chains.get_mut(chain_id) {
+                    if let Some(slot) = chain.slots.get_mut(*slot_idx) {
+                        let set = slot.gui.lock().ok()
+                            .map(|g| if let Some(gui) = g.as_ref() { gui.set_all_parameters(params); true } else { false })
+                            .unwrap_or(false);
+                        if !set { slot.pending_params = Some(params.clone()); }
+                    }
+                }
+            }
+            Operation::UpdateInstrumentPluginState { instrument_id, state_b64 } => {
+                if let Some(inst) = app.instruments.get_mut(instrument_id) {
+                    use base64::Engine;
+                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(state_b64) {
+                        let set = inst.gui.lock().ok()
+                            .and_then(|g| g.as_ref().map(|gui| gui.set_state(&bytes)))
+                            .unwrap_or(false);
+                        if !set { inst.pending_state = Some(bytes); }
+                    }
+                }
+            }
+            Operation::UpdateInstrumentPluginParams { instrument_id, params } => {
+                if let Some(inst) = app.instruments.get_mut(instrument_id) {
+                    let set = inst.gui.lock().ok()
+                        .map(|g| if let Some(gui) = g.as_ref() { gui.set_all_parameters(params); true } else { false })
+                        .unwrap_or(false);
+                    if !set { inst.pending_params = Some(params.clone()); }
                 }
             }
 

@@ -44,6 +44,9 @@ pub struct RemoteUserState {
     pub online: bool,
     pub viewport: Option<RemoteViewport>,
     pub playback: Option<RemotePlaybackState>,
+    /// Which plugin GUI (chain_id, slot_idx) this remote user has open, if any.
+    #[serde(default)]
+    pub editing_plugin: Option<(crate::entity_id::EntityId, usize)>,
 }
 
 /// Pre-defined colors for remote user cursors.
@@ -92,5 +95,36 @@ pub enum EphemeralMessage {
         is_playing: bool,
         position_seconds: f64,
         timestamp_ms: u64,
+    },
+    PluginParamChange {
+        user_id: UserId,
+        chain_id: crate::entity_id::EntityId,
+        slot_idx: usize,
+        param_idx: usize,
+        value: f64,
+    },
+    InstrumentParamChange {
+        user_id: UserId,
+        instrument_id: crate::entity_id::EntityId,
+        param_idx: usize,
+        value: f64,
+    },
+    PluginGuiOpened {
+        user_id: UserId,
+        chain_id: crate::entity_id::EntityId,
+        slot_idx: usize,
+    },
+    PluginGuiClosed {
+        user_id: UserId,
+        chain_id: crate::entity_id::EntityId,
+        slot_idx: usize,
+    },
+    InstrumentGuiOpened {
+        user_id: UserId,
+        instrument_id: crate::entity_id::EntityId,
+    },
+    InstrumentGuiClosed {
+        user_id: UserId,
+        instrument_id: crate::entity_id::EntityId,
     },
 }

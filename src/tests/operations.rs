@@ -442,6 +442,7 @@ fn test_remote_user_cursor_update_via_ephemeral() {
         online: true,
         viewport: None,
         playback: None,
+        editing_plugin: None,
     });
 
     // Simulate receiving a cursor move
@@ -797,6 +798,7 @@ fn test_user_left_removes_from_map() {
         online: true,
         viewport: None,
         playback: None,
+        editing_plugin: None,
     });
     assert_eq!(app.remote_users.len(), 1);
 

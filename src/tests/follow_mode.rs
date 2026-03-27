@@ -18,6 +18,7 @@ fn add_remote_user(app: &mut App, name: &str) -> crate::user::UserId {
             zoom: 2.0,
         }),
         playback: None,
+        editing_plugin: None,
     });
     uid
 }

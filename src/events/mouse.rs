@@ -1008,7 +1008,12 @@ impl App {
                                     if let Some(cid) = chain_id {
                                         if let Some(chain) = self.effect_chains.get_mut(&cid) {
                                             if let Some(slot) = chain.slots.get_mut(slot_idx) {
+                                                let before = slot.snapshot();
                                                 slot.bypass = !slot.bypass;
+                                                let after = slot.snapshot();
+                                                self.push_op(crate::operations::Operation::UpdateEffectSlot {
+                                                    chain_id: cid, slot_idx, before, after,
+                                                });
                                             }
                                         }
                                     }
@@ -1019,24 +1024,41 @@ impl App {
                                 // Delete button
                                 if rw.hit_test_effect_delete(self.mouse_pos, slot_idx, sw, sh, scale) {
                                     if let Some(cid) = chain_id {
-                                        if let Some(chain) = self.effect_chains.get_mut(&cid) {
+                                        if let Some(chain) = self.effect_chains.get(&cid) {
                                             if slot_idx < chain.slots.len() {
-                                                chain.slots.remove(slot_idx);
-                                            }
-                                            // If chain is now empty, remove it
-                                            if chain.slots.is_empty() {
-                                                self.effect_chains.shift_remove(&cid);
-                                                // Clear chain reference from all waveforms and instruments that used it
-                                                for wf in self.waveforms.values_mut() {
-                                                    if wf.effect_chain_id == Some(cid) {
-                                                        wf.effect_chain_id = None;
+                                                let slot_snapshot = chain.slots[slot_idx].snapshot_with_state();
+                                                self.effect_chains.get_mut(&cid).unwrap().slots.remove(slot_idx);
+
+                                                let mut ops = vec![crate::operations::Operation::RemoveEffectSlot {
+                                                    chain_id: cid, slot_idx, data: slot_snapshot,
+                                                }];
+
+                                                // If chain is now empty, remove it and clear references
+                                                if self.effect_chains.get(&cid).map_or(true, |c| c.slots.is_empty()) {
+                                                    self.effect_chains.shift_remove(&cid);
+                                                    ops.push(crate::operations::Operation::DeleteEffectChain { id: cid });
+                                                    for wf in self.waveforms.values_mut() {
+                                                        if wf.effect_chain_id == Some(cid) {
+                                                            wf.effect_chain_id = None;
+                                                        }
+                                                    }
+                                                    for inst in self.instruments.values_mut() {
+                                                        if inst.effect_chain_id == Some(cid) {
+                                                            inst.effect_chain_id = None;
+                                                        }
+                                                    }
+                                                    for g in self.groups.values_mut() {
+                                                        if g.effect_chain_id == Some(cid) {
+                                                            g.effect_chain_id = None;
+                                                        }
+                                                    }
+                                                    if self.master.effect_chain_id == Some(cid) {
+                                                        self.master.effect_chain_id = None;
                                                     }
                                                 }
-                                                for inst in self.instruments.values_mut() {
-                                                    if inst.effect_chain_id == Some(cid) {
-                                                        inst.effect_chain_id = None;
-                                                    }
-                                                }
+
+                                                let op = if ops.len() == 1 { ops.remove(0) } else { crate::operations::Operation::Batch(ops) };
+                                                self.push_op(op);
                                             }
                                         }
                                     }
@@ -2436,10 +2458,23 @@ impl App {
                     }
                 }
 
-                // Finish plugin editor slider drag
+                // Finish plugin editor slider drag — commit parameter values
                 if let Some(pe) = &mut self.plugin_editor {
                     if pe.dragging_slider.is_some() {
                         pe.dragging_slider = None;
+                        let chain_id = pe.region_id;
+                        let slot_idx = pe.slot_idx;
+                        // Collect all current parameter values
+                        let params = self.effect_chains.get(&chain_id)
+                            .and_then(|chain| chain.slots.get(slot_idx))
+                            .and_then(|slot| slot.gui.lock().ok())
+                            .and_then(|g| g.as_ref().map(|gui| gui.get_all_parameters()))
+                            .unwrap_or_default();
+                        if !params.is_empty() {
+                            self.push_op(crate::operations::Operation::UpdatePluginParams {
+                                chain_id, slot_idx, params,
+                            });
+                        }
                         self.request_redraw();
                         return;
                     }
@@ -2845,7 +2880,11 @@ impl App {
                                     if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
                                         let slot = chain.slots.remove(slot_idx);
                                         let insert_at = if target_idx > slot_idx { target_idx } else { target_idx };
-                                        chain.slots.insert(insert_at.min(chain.slots.len()), slot);
+                                        let insert_at = insert_at.min(chain.slots.len());
+                                        chain.slots.insert(insert_at, slot);
+                                        self.push_op(crate::operations::Operation::ReorderEffectSlot {
+                                            chain_id, from_idx: slot_idx, to_idx: insert_at,
+                                        });
                                     }
                                 }
                             }

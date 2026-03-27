@@ -16,7 +16,28 @@ impl App {
                 let mx = self.mouse_pos[0];
                 if let Some(pe) = &mut self.plugin_editor {
                     let idx = pe.dragging_slider.unwrap();
-                    let _new_val = pe.slider_drag(idx, mx, scr_w, scr_h, scale);
+                    let new_val = pe.slider_drag(idx, mx, scr_w, scr_h, scale);
+                    let chain_id = pe.region_id;
+                    let slot_idx = pe.slot_idx;
+
+                    // Apply parameter to actual VST3 plugin
+                    if let Some(chain) = self.effect_chains.get(&chain_id) {
+                        if let Some(slot) = chain.slots.get(slot_idx) {
+                            if let Ok(g) = slot.gui.lock() {
+                                if let Some(gui) = g.as_ref() {
+                                    gui.set_parameter(idx, new_val as f64);
+                                }
+                            }
+                        }
+                    }
+                    // Send ephemeral parameter change for real-time sync
+                    self.network.send_ephemeral(crate::user::EphemeralMessage::PluginParamChange {
+                        user_id: self.local_user.id,
+                        chain_id,
+                        slot_idx,
+                        param_idx: idx,
+                        value: new_val as f64,
+                    });
                 }
                 self.request_redraw();
                 return;

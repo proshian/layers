@@ -1,3 +1,4 @@
+- 2026-03-27: feat: realtime VST plugin sync — effect chain ops (add/remove/reorder/bypass), parameter sync (ephemeral + committed), GUI open/close sync, state blob sync on GUI close (48.8k loc)
 - 2026-03-27: perf: fix slow realtime cursor sync — DROP table, fire-and-forget upserts, drain+coalesce queued messages (48.0k loc)
 - 2026-03-27: feat: show error toast with reconnect attempt counter (N/10) on connection failure (47.4k loc)
 - 2026-03-27: feat: --db-password CLI arg for authenticated remote SurrealDB connections (47.4k loc)

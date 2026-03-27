@@ -234,6 +234,9 @@ impl ApplicationHandler for App {
             }
         }
 
+        // --- Detect plugin GUI close → sync state blob ---
+        self.poll_plugin_gui_close();
+
         // --- Poll network for remote operations ---
         let remote_ops = self.network.poll_ops();
         if !remote_ops.is_empty() {
@@ -264,6 +267,7 @@ impl ApplicationHandler for App {
                             online: true,
                             viewport: None,
                             playback: None,
+                            editing_plugin: None,
                         });
                     }
                 }
@@ -285,6 +289,7 @@ impl ApplicationHandler for App {
                         online: true,
                         viewport: None,
                         playback: None,
+                        editing_plugin: None,
                     });
                 }
                 crate::user::EphemeralMessage::UserLeft { user_id } => {
@@ -316,6 +321,51 @@ impl ApplicationHandler for App {
                             is_playing, position_seconds, timestamp_ms,
                         });
                     }
+                }
+                crate::user::EphemeralMessage::PluginParamChange { user_id, chain_id, slot_idx, param_idx, value } => {
+                    if user_id != self.local_user.id {
+                        if let Some(chain) = self.effect_chains.get(&chain_id) {
+                            if let Some(slot) = chain.slots.get(slot_idx) {
+                                if let Ok(g) = slot.gui.lock() {
+                                    if let Some(gui) = g.as_ref() {
+                                        gui.set_parameter(param_idx, value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::user::EphemeralMessage::InstrumentParamChange { user_id, instrument_id, param_idx, value } => {
+                    if user_id != self.local_user.id {
+                        if let Some(inst) = self.instruments.get(&instrument_id) {
+                            if let Ok(g) = inst.gui.lock() {
+                                if let Some(gui) = g.as_ref() {
+                                    gui.set_parameter(param_idx, value);
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::user::EphemeralMessage::PluginGuiOpened { user_id, chain_id, slot_idx } => {
+                    if let Some(state) = self.remote_users.get_mut(&user_id) {
+                        state.editing_plugin = Some((chain_id, slot_idx));
+                    }
+                    if user_id != self.local_user.id {
+                        self.open_effect_chain_slot_gui(chain_id, slot_idx);
+                    }
+                }
+                crate::user::EphemeralMessage::PluginGuiClosed { user_id, chain_id: _, slot_idx: _ } => {
+                    if let Some(state) = self.remote_users.get_mut(&user_id) {
+                        state.editing_plugin = None;
+                    }
+                }
+                crate::user::EphemeralMessage::InstrumentGuiOpened { user_id, instrument_id } => {
+                    if user_id != self.local_user.id {
+                        self.open_instrument_gui(instrument_id);
+                    }
+                }
+                crate::user::EphemeralMessage::InstrumentGuiClosed { user_id: _, instrument_id: _ } => {
+                    // No special handling needed — GUI close is local
                 }
             }
             self.request_redraw();

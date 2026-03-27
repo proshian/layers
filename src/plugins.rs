@@ -149,28 +149,39 @@ impl App {
             }
         }
 
-        // Get or create effect chain for this waveform
-        let chain_id = if let Some(wf) = self.waveforms.get(&wf_id) {
-            wf.effect_chain_id
-        } else {
-            return;
-        };
+        let slot_snapshot = slot.snapshot();
 
-        let chain_id = match chain_id {
+        // Get or create effect chain for this waveform
+        let wf = match self.waveforms.get(&wf_id) {
+            Some(wf) => wf,
+            None => return,
+        };
+        let existing_chain_id = wf.effect_chain_id;
+
+        let mut ops = Vec::new();
+
+        let chain_id = match existing_chain_id {
             Some(id) => id,
             None => {
                 let id = new_id();
+                let before = self.waveforms[&wf_id].clone();
                 self.effect_chains.insert(id, effects::EffectChain::new());
-                if let Some(wf) = self.waveforms.get_mut(&wf_id) {
-                    wf.effect_chain_id = Some(id);
-                }
+                self.waveforms.get_mut(&wf_id).unwrap().effect_chain_id = Some(id);
+                let after = self.waveforms[&wf_id].clone();
+                ops.push(operations::Operation::CreateEffectChain { id });
+                ops.push(operations::Operation::UpdateWaveform { id: wf_id, before, after });
                 id
             }
         };
 
+        let slot_idx = self.effect_chains.get(&chain_id).map_or(0, |c| c.slots.len());
         if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
             chain.slots.push(slot);
         }
+        ops.push(operations::Operation::AddEffectSlot { chain_id, slot_idx, data: slot_snapshot });
+
+        let op = if ops.len() == 1 { ops.remove(0) } else { operations::Operation::Batch(ops) };
+        self.push_op(op);
 
         // Open the right window for this waveform
         self.open_right_window_for(wf_id);
@@ -212,28 +223,47 @@ impl App {
             }
         }
 
-        // Get or create effect chain for this instrument
-        let chain_id = if let Some(inst) = self.instruments.get(&inst_id) {
-            inst.effect_chain_id
-        } else {
-            return;
-        };
+        let slot_snapshot = slot.snapshot();
 
-        let chain_id = match chain_id {
+        let inst = match self.instruments.get(&inst_id) {
+            Some(inst) => inst,
+            None => return,
+        };
+        let existing_chain_id = inst.effect_chain_id;
+
+        let mut ops = Vec::new();
+
+        let chain_id = match existing_chain_id {
             Some(id) => id,
             None => {
                 let id = new_id();
+                let before = instruments::InstrumentSnapshot {
+                    name: self.instruments[&inst_id].name.clone(),
+                    plugin_id: self.instruments[&inst_id].plugin_id.clone(),
+                    plugin_name: self.instruments[&inst_id].plugin_name.clone(),
+                    plugin_path: self.instruments[&inst_id].plugin_path.clone(),
+                    volume: self.instruments[&inst_id].volume,
+                    pan: self.instruments[&inst_id].pan,
+                    effect_chain_id: self.instruments[&inst_id].effect_chain_id,
+                    disabled: self.instruments[&inst_id].disabled,
+                };
                 self.effect_chains.insert(id, effects::EffectChain::new());
-                if let Some(inst) = self.instruments.get_mut(&inst_id) {
-                    inst.effect_chain_id = Some(id);
-                }
+                self.instruments.get_mut(&inst_id).unwrap().effect_chain_id = Some(id);
+                let after = instruments::InstrumentSnapshot { effect_chain_id: Some(id), ..before.clone() };
+                ops.push(operations::Operation::CreateEffectChain { id });
+                ops.push(operations::Operation::UpdateInstrument { id: inst_id, before, after });
                 id
             }
         };
 
+        let slot_idx = self.effect_chains.get(&chain_id).map_or(0, |c| c.slots.len());
         if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
             chain.slots.push(slot);
         }
+        ops.push(operations::Operation::AddEffectSlot { chain_id, slot_idx, data: slot_snapshot });
+
+        let op = if ops.len() == 1 { ops.remove(0) } else { operations::Operation::Batch(ops) };
+        self.push_op(op);
 
         self.update_right_window_for_instrument(inst_id);
         self.sync_audio_clips();
@@ -271,28 +301,38 @@ impl App {
             }
         }
 
-        // Get or create effect chain for this group
-        let chain_id = if let Some(g) = self.groups.get(&group_id) {
-            g.effect_chain_id
-        } else {
-            return;
-        };
+        let slot_snapshot = slot.snapshot();
 
-        let chain_id = match chain_id {
+        let g = match self.groups.get(&group_id) {
+            Some(g) => g,
+            None => return,
+        };
+        let existing_chain_id = g.effect_chain_id;
+
+        let mut ops = Vec::new();
+
+        let chain_id = match existing_chain_id {
             Some(id) => id,
             None => {
                 let id = new_id();
+                let before = self.groups[&group_id].clone();
                 self.effect_chains.insert(id, effects::EffectChain::new());
-                if let Some(g) = self.groups.get_mut(&group_id) {
-                    g.effect_chain_id = Some(id);
-                }
+                self.groups.get_mut(&group_id).unwrap().effect_chain_id = Some(id);
+                let after = self.groups[&group_id].clone();
+                ops.push(operations::Operation::CreateEffectChain { id });
+                ops.push(operations::Operation::UpdateGroup { id: group_id, before, after });
                 id
             }
         };
 
+        let slot_idx = self.effect_chains.get(&chain_id).map_or(0, |c| c.slots.len());
         if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
             chain.slots.push(slot);
         }
+        ops.push(operations::Operation::AddEffectSlot { chain_id, slot_idx, data: slot_snapshot });
+
+        let op = if ops.len() == 1 { ops.remove(0) } else { operations::Operation::Batch(ops) };
+        self.push_op(op);
 
         self.sync_audio_clips();
         self.request_redraw();
@@ -330,19 +370,28 @@ impl App {
             }
         }
 
+        let slot_snapshot = slot.snapshot();
+        let mut ops = Vec::new();
+
         let chain_id = match self.master.effect_chain_id {
             Some(id) => id,
             None => {
                 let id = new_id();
                 self.effect_chains.insert(id, effects::EffectChain::new());
                 self.master.effect_chain_id = Some(id);
+                ops.push(operations::Operation::CreateEffectChain { id });
                 id
             }
         };
 
+        let slot_idx = self.effect_chains.get(&chain_id).map_or(0, |c| c.slots.len());
         if let Some(chain) = self.effect_chains.get_mut(&chain_id) {
             chain.slots.push(slot);
         }
+        ops.push(operations::Operation::AddEffectSlot { chain_id, slot_idx, data: slot_snapshot });
+
+        let op = if ops.len() == 1 { ops.remove(0) } else { operations::Operation::Batch(ops) };
+        self.push_op(op);
 
         self.sync_audio_clips();
         self.request_redraw();
@@ -362,6 +411,13 @@ impl App {
                 gui.show();
             }
         };
+
+        // Notify remote users that we opened this plugin GUI
+        self.network.send_ephemeral(crate::user::EphemeralMessage::PluginGuiOpened {
+            user_id: self.local_user.id,
+            chain_id,
+            slot_idx,
+        });
     }
 
     pub(crate) fn add_instrument(&mut self, plugin_id: &str, plugin_name: &str) {
@@ -481,10 +537,110 @@ impl App {
                 }
             }
         }
+
+        // Notify remote users that we opened this instrument GUI
+        self.network.send_ephemeral(crate::user::EphemeralMessage::InstrumentGuiOpened {
+            user_id: self.local_user.id,
+            instrument_id: id,
+        });
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     pub(crate) fn open_instrument_gui(&mut self, _id: EntityId) {
         // VST3 instrument GUIs are not available on this platform
+    }
+
+    /// Poll all plugin GUIs for close transitions. When a GUI closes,
+    /// capture and broadcast its state blob and send a close ephemeral.
+    pub(crate) fn poll_plugin_gui_close(&mut self) {
+        use base64::Engine;
+
+        let mut currently_open = std::collections::HashSet::new();
+
+        // Check effect chain slot GUIs
+        let chain_ids: Vec<EntityId> = self.effect_chains.keys().copied().collect();
+        for chain_id in chain_ids {
+            let slot_count = self.effect_chains.get(&chain_id).map_or(0, |c| c.slots.len());
+            for slot_idx in 0..slot_count {
+                let is_open = self.effect_chains.get(&chain_id)
+                    .and_then(|c| c.slots.get(slot_idx))
+                    .and_then(|slot| slot.gui.lock().ok())
+                    .map_or(false, |g| g.as_ref().map_or(false, |gui| gui.is_open()));
+
+                if is_open {
+                    currently_open.insert((chain_id, slot_idx));
+                }
+            }
+        }
+
+        // Detect close transitions
+        for key in &self.open_plugin_guis {
+            if !currently_open.contains(key) {
+                let (chain_id, slot_idx) = *key;
+                // GUI was open, now closed — capture state and broadcast
+                if let Some(chain) = self.effect_chains.get(&chain_id) {
+                    if let Some(slot) = chain.slots.get(slot_idx) {
+                        if let Ok(g) = slot.gui.lock() {
+                            if let Some(gui) = g.as_ref() {
+                                if let Some(state_bytes) = gui.get_state() {
+                                    let state_b64 = base64::engine::general_purpose::STANDARD.encode(&state_bytes);
+                                    self.network.send_op(operations::commit_op_as(
+                                        operations::Operation::UpdatePluginState { chain_id, slot_idx, state_b64 },
+                                        self.local_user.id,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                self.network.send_ephemeral(crate::user::EphemeralMessage::PluginGuiClosed {
+                    user_id: self.local_user.id,
+                    chain_id,
+                    slot_idx,
+                });
+            }
+        }
+
+        self.open_plugin_guis = currently_open;
+
+        // Check instrument GUIs
+        let mut currently_open_inst = std::collections::HashSet::new();
+        let inst_ids: Vec<EntityId> = self.instruments.keys().copied().collect();
+        for inst_id in inst_ids {
+            let is_open = self.instruments.get(&inst_id)
+                .and_then(|inst| inst.gui.lock().ok())
+                .map_or(false, |g| g.as_ref().map_or(false, |gui| gui.is_open()));
+
+            if is_open {
+                currently_open_inst.insert(inst_id);
+            }
+        }
+
+        for inst_id in &self.open_instrument_guis {
+            if !currently_open_inst.contains(inst_id) {
+                // Instrument GUI was open, now closed — capture state
+                if let Some(inst) = self.instruments.get(inst_id) {
+                    if let Ok(g) = inst.gui.lock() {
+                        if let Some(gui) = g.as_ref() {
+                            if let Some(state_bytes) = gui.get_state() {
+                                let state_b64 = base64::engine::general_purpose::STANDARD.encode(&state_bytes);
+                                self.network.send_op(operations::commit_op_as(
+                                    operations::Operation::UpdateInstrumentPluginState {
+                                        instrument_id: *inst_id, state_b64,
+                                    },
+                                    self.local_user.id,
+                                ));
+                            }
+                        }
+                    }
+                }
+                self.network.send_ephemeral(crate::user::EphemeralMessage::InstrumentGuiClosed {
+                    user_id: self.local_user.id,
+                    instrument_id: *inst_id,
+                });
+            }
+        }
+
+        self.open_instrument_guis = currently_open_inst;
     }
 }

@@ -377,6 +377,10 @@ struct App {
     pub(crate) solo_ids: std::collections::HashSet<EntityId>,
     /// Follow mode: when set, camera and playback sync to this remote user.
     following_user: Option<user::UserId>,
+    /// Track which plugin GUIs were open last frame for close detection.
+    open_plugin_guis: std::collections::HashSet<(entity_id::EntityId, usize)>,
+    /// Track which instrument GUIs were open last frame for close detection.
+    open_instrument_guis: std::collections::HashSet<entity_id::EntityId>,
 }
 
 /// Whether an entity should be audible, considering solo/mute and group membership.
@@ -549,6 +553,8 @@ impl App {
             midi_keyboard_held: HashMap::new(),
             solo_ids: std::collections::HashSet::new(),
             following_user: None,
+            open_plugin_guis: std::collections::HashSet::new(),
+            open_instrument_guis: std::collections::HashSet::new(),
         }
     }
 
@@ -1276,6 +1282,8 @@ impl App {
             midi_keyboard_held: HashMap::new(),
             solo_ids: std::collections::HashSet::new(),
             following_user: None,
+            open_plugin_guis: std::collections::HashSet::new(),
+            open_instrument_guis: std::collections::HashSet::new(),
         }
     }
 

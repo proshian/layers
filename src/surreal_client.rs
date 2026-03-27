@@ -98,6 +98,12 @@ fn eph_kind(msg: &EphemeralMessage) -> &'static str {
         EphemeralMessage::PlaybackUpdate { .. } => "PlaybackUpdate",
         EphemeralMessage::UserJoined { .. } => "UserJoined",
         EphemeralMessage::UserLeft { .. } => "UserLeft",
+        EphemeralMessage::PluginParamChange { .. } => "PluginParamChange",
+        EphemeralMessage::InstrumentParamChange { .. } => "InstrumentParamChange",
+        EphemeralMessage::PluginGuiOpened { .. } => "PluginGuiOpened",
+        EphemeralMessage::PluginGuiClosed { .. } => "PluginGuiClosed",
+        EphemeralMessage::InstrumentGuiOpened { .. } => "InstrumentGuiOpened",
+        EphemeralMessage::InstrumentGuiClosed { .. } => "InstrumentGuiClosed",
     }
 }
 
