@@ -1148,7 +1148,13 @@ impl App {
             println!("  Warning: no audio output device found");
         }
 
-        let mut recorder = AudioRecorder::new();
+        let mut recorder = AudioRecorder::new_with_device(
+            if settings.audio_input_device == "No Device" {
+                None
+            } else {
+                Some(settings.audio_input_device.as_str())
+            },
+        );
         if recorder.is_none() {
             println!("  Warning: no audio input device found");
         }

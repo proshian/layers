@@ -1885,6 +1885,8 @@ pub struct AudioRecorder {
     monitor_ring: Option<Arc<MonitorRingBuffer>>,
     monitor_input_channels: Option<Arc<AtomicUsize>>,
     monitor_input_sample_rate: Option<Arc<AtomicU64>>,
+    /// Preferred device name; `None` means use the system default.
+    device_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2065,8 +2067,35 @@ fn windows_check_microphone_permission() -> Result<(), String> {
 
 impl AudioRecorder {
     pub fn new() -> Option<Self> {
+        Self::new_with_device(None)
+    }
+
+    /// Create a recorder targeting `device_name` (falls back to system default
+    /// when `device_name` is `None` or `"No Device"`).
+    pub fn new_with_device(device_name: Option<&str>) -> Option<Self> {
         let host = cpal::default_host();
-        let device = host.default_input_device()?;
+        let device = match device_name {
+            Some(name) if name != "No Device" => {
+                let found = host
+                    .input_devices()
+                    .ok()?
+                    .find(|d| d.name().ok().as_deref() == Some(name))
+                    .or_else(|| {
+                        host.devices().ok()?.find(|d| {
+                            d.name().ok().as_deref() == Some(name)
+                                && d.default_input_config().is_ok()
+                        })
+                    });
+                if found.is_none() {
+                    println!(
+                        "  Audio input device '{}' not available, falling back to default",
+                        name
+                    );
+                }
+                found.or_else(|| host.default_input_device())
+            }
+            _ => host.default_input_device(),
+        }?;
         let supported = device.default_input_config().ok()?;
         let config: cpal::StreamConfig = supported.into();
 
@@ -2087,6 +2116,7 @@ impl AudioRecorder {
             monitor_ring: None,
             monitor_input_channels: None,
             monitor_input_sample_rate: None,
+            device_name: device_name.map(|s| s.to_string()),
         })
     }
 
@@ -2121,8 +2151,17 @@ impl AudioRecorder {
         windows_check_microphone_permission()?;
 
         let host = cpal::default_host();
-        let device = host.default_input_device()
-            .ok_or_else(|| "No microphone found. Connect a mic and try again.".to_string())?;
+        let device = match self.device_name.as_deref() {
+            Some(name) if name != "No Device" => {
+                host.input_devices()
+                    .ok()
+                    .and_then(|mut it| it.find(|d| d.name().ok().as_deref() == Some(name)))
+                    .or_else(|| host.default_input_device())
+                    .ok_or_else(|| "No microphone found. Connect a mic and try again.".to_string())?
+            }
+            _ => host.default_input_device()
+                .ok_or_else(|| "No microphone found. Connect a mic and try again.".to_string())?,
+        };
         let supported = device.default_input_config()
             .map_err(|e| format!("Could not read microphone config: {e}"))?;
         let config: cpal::StreamConfig = supported.into();

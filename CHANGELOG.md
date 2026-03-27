@@ -1,3 +1,4 @@
+- fix: audio input device dropdown selection actually applied — AudioRecorder::new_with_device, reconnect on settings change (53.5k loc)
 - 2026-03-27: fix: Windows microphone permission check via registry consent store + toast errors (53.2k loc)
 - 2026-03-27: fix: segfault in macOS mic permission check — non-variadic objc_msgSend, remove nil block arg (53.2k loc)
 - 2026-03-27: fix: audio recording silence on macOS — AVFoundation permission check/request before stream, peak logging (53.2k loc)

@@ -631,39 +631,51 @@ impl SettingsWindow {
             return false;
         }
 
-        // Auto Clip Fades (row 3)
-        if let Some(idx) = self.handle_dropdown_click(mouse, 3, screen_w, screen_h, scale) {
-            settings.auto_clip_fades = idx == 0;
+        // Always check popup item clicks first so that a tall popup (e.g. many
+        // input devices) isn't blocked by the button hit-tests for rows below it.
+        if let Some(item_idx) = self.dropdown_item_hit_test(mouse, screen_w, screen_h, scale) {
+            let dd_idx = self.open_dropdown.unwrap();
+            match dd_idx {
+                3 => { settings.auto_clip_fades = item_idx == 0; }
+                4 => {
+                    let options = self.dropdown_options(4);
+                    if item_idx < options.len() {
+                        Self::set_dropdown_value(settings, 4, options[item_idx].clone());
+                    }
+                }
+                _ => {
+                    let options = self.dropdown_options(dd_idx);
+                    if item_idx < options.len() {
+                        let value = options[item_idx].clone();
+                        Self::set_dropdown_value(settings, dd_idx, value);
+                    }
+                }
+            }
+            self.open_dropdown = None;
             return true;
         }
+
+        // Auto Clip Fades (row 3)
         if self.dropdown_button_hit_test(mouse, 3, screen_w, screen_h, scale) {
+            if self.open_dropdown == Some(3) {
+                self.open_dropdown = None;
+            } else {
+                self.open_dropdown = Some(3);
+            }
             return true;
         }
 
         // Buffer Size (row 4)
-        if let Some(idx) = self.handle_dropdown_click(mouse, 4, screen_w, screen_h, scale) {
-            let options = self.dropdown_options(4);
-            if idx < options.len() {
-                Self::set_dropdown_value(settings, 4, options[idx].clone());
-            }
-            return true;
-        }
         if self.dropdown_button_hit_test(mouse, 4, screen_w, screen_h, scale) {
+            if self.open_dropdown == Some(4) {
+                self.open_dropdown = None;
+            } else {
+                self.open_dropdown = Some(4);
+            }
             return true;
         }
 
-        // Generic audio dropdowns (rows 0-2)
-        if self.open_dropdown.is_some() {
-            if let Some(item_idx) = self.dropdown_item_hit_test(mouse, screen_w, screen_h, scale) {
-                let dd_idx = self.open_dropdown.unwrap();
-                let options = self.dropdown_options(dd_idx);
-                let value = options[item_idx].clone();
-                Self::set_dropdown_value(settings, dd_idx, value);
-                self.open_dropdown = None;
-                return true;
-            }
-        }
-
+        // Driver / Input / Output dropdowns (rows 0-2)
         if let Some(dd_idx) = self.dropdown_hit_test(mouse, screen_w, screen_h, scale) {
             if self.open_dropdown == Some(dd_idx) {
                 self.open_dropdown = None;

@@ -480,6 +480,7 @@ impl App {
                     if inside {
                         // Try audio dropdown interaction first
                         let prev_output_device = self.settings.audio_output_device.clone();
+                        let prev_input_device = self.settings.audio_input_device.clone();
                         let prev_buffer_size = self.settings.buffer_size;
                         let audio_consumed =
                             self.settings_window.as_mut().map_or(false, |sw| {
@@ -578,6 +579,32 @@ impl App {
                                         engine.toggle_playback();
                                     }
                                 }
+                            }
+
+                            #[cfg(feature = "native")]
+                            if self.settings.audio_input_device != prev_input_device {
+                                println!(
+                                    "[audio] Input device changed: '{}' -> '{}'",
+                                    prev_input_device, self.settings.audio_input_device
+                                );
+                                let device_name =
+                                    if self.settings.audio_input_device == "No Device" {
+                                        None
+                                    } else {
+                                        Some(self.settings.audio_input_device.as_str())
+                                    };
+                                let mut new_rec = AudioRecorder::new_with_device(device_name);
+                                if let (Some(ref mut rec), Some(ref eng)) =
+                                    (&mut new_rec, &self.audio_engine)
+                                {
+                                    rec.set_monitor_ring(
+                                        eng.monitor_ring(),
+                                        eng.monitoring_enabled_flag(),
+                                        eng.monitor_input_channels_flag(),
+                                        eng.monitor_input_sample_rate_flag(),
+                                    );
+                                }
+                                self.recorder = new_rec;
                             }
 
                             self.request_redraw();
